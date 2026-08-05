@@ -7,6 +7,8 @@
         "review": "tsx --env-file-if-exists=.env src/cli/cli.ts",
         "history": "tsx src/cli/history.ts",
         "merge": "tsx --env-file-if-exists=.env src/cli/merge.ts",
+        "eval:freeze": "tsx eval/freeze.ts",
+        "eval:judge": "tsx --env-file-if-exists=.env eval/judge.eval.ts",
         "test": "vitest run",
         "typecheck": "tsc --noEmit",
         "lint": "eslint ."

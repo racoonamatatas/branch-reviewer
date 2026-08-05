@@ -10,5 +10,5 @@
         "types": ["node"],
         "noEmit": true
     },
-    "include": ["src", "test", "eslint.config.js"]
+    "include": ["src", "test", "eval", "eslint.config.js"]
 }
