@@ -1,15 +1,13 @@
-// Thin shell: arg parsing, wiring, rendering, exit codes. Ported from
-// branch-reviewer-api with --max-iterations renamed to --max-turns (the
-// SDK's unit) and a cost line added to the stats output.
+// Thin shell: arg parsing, wiring, persistence, exit codes. Rendering lives
+// in render.ts, shared with the history entry point.
 
 import { GitHubClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
-import type { ReviewRunStats } from '../review/review.js';
-import type { Review, Severity } from '../schema/schema.js';
-import { diffUsage, isZeroUsage } from '../usage/usage.js';
-import type { TokenUsage } from '../usage/usage.js';
+import type { ReviewResult } from '../review/review.js';
+import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
+import { printReview, printStats } from './render.js';
 
-const USAGE = 'Usage: npm run review -- <owner>/<repo> <branch> [--base main] [--max-turns N] [--verbose]';
+const USAGE = 'Usage: npm run review -- <owner>/<repo> <branch> [--base main] [--max-turns N] [--verbose] [--no-save]';
 
 interface CliArgs
 {
@@ -19,6 +17,7 @@ interface CliArgs
     base: string;
     maxTurns?: number;
     verbose: boolean;
+    save: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs
@@ -27,6 +26,7 @@ function parseArgs(argv: string[]): CliArgs
     let base = 'main';
     let maxTurns: number | undefined;
     let verbose = false;
+    let save = true;
 
     for (let i = 0; i < argv.length; i++)
     {
@@ -43,6 +43,10 @@ function parseArgs(argv: string[]): CliArgs
         {
             verbose = true;
         }
+        else if (arg === '--no-save')
+        {
+            save = false;
+        }
         else
         {
             positional.push(arg);
@@ -55,7 +59,7 @@ function parseArgs(argv: string[]): CliArgs
     {
         throw new Error(USAGE);
     }
-    return { owner, repo, head, base, maxTurns, verbose };
+    return { owner, repo, head, base, maxTurns, verbose, save };
 }
 
 function requireValue(value: string | undefined, flag: string): string
@@ -67,70 +71,32 @@ function requireValue(value: string | undefined, flag: string): string
     return value;
 }
 
-function n(value: number): string
+// Persistence is observational, like the accounting: a failed save warns
+// and moves on, it never changes the review's outcome or exit code.
+function saveRun(args: CliArgs, model: string, result: ReviewResult): void
 {
-    return value.toLocaleString('en-US');
-}
-
-function usageLine(usage: TokenUsage): string
-{
-    return `${n(usage.inputTokens)} fresh + ${n(usage.cacheReadInputTokens)} cache-read`
-        + ` + ${n(usage.cacheCreationInputTokens)} cache-write in / ${n(usage.outputTokens)} out`;
-}
-
-function printStats(stats: ReviewRunStats, verbose: boolean): void
-{
-    console.log(`\ntokens: ${usageLine(stats.usage)}, ${stats.turns} turn(s), `
-        + `$${stats.costUsd.toFixed(4)} (reported; subscription runs are not billed per-token)`);
-
-    for (const [model, m] of Object.entries(stats.perModel))
+    try
     {
-        console.log(`  ${model}: ${n(m.inputTokens)} fresh + ${n(m.cacheReadInputTokens)} cache-read`
-            + ` + ${n(m.cacheCreationInputTokens)} cache-write in / ${n(m.outputTokens)} out,`
-            + ` $${m.costUSD.toFixed(4)}, context window ${n(m.contextWindow)}`);
+        const store = new ReviewStore(DEFAULT_DB_PATH);
+        const id = store.saveRun({
+            createdAt: new Date().toISOString(),
+            owner: args.owner,
+            repo: args.repo,
+            head: args.head,
+            base: args.base,
+            model,
+            status: result.status,
+            ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
+            turns: result.stats.turns,
+            costUsd: result.stats.costUsd,
+            usage: result.stats.usage,
+        });
+        store.close();
+        console.log(`saved as run #${id}`);
     }
-
-    // Observational reconciliation: our streamed sum vs the SDK's totals.
-    // A delta is information about what the SDK counts that the stream does
-    // not show — it never affects the review or the exit code.
-    const delta = diffUsage(stats.usage, stats.streamed);
-    if (!isZeroUsage(delta))
+    catch (error)
     {
-        console.log(`  warning: SDK totals differ from streamed sum by ${usageLine(delta)}`);
-    }
-
-    if (verbose)
-    {
-        console.log('\nper-turn usage (streamed, deduped by message id):');
-        for (const turn of stats.turnUsage)
-        {
-            console.log(`  ${turn.messageId}  ${usageLine(turn.usage)}`);
-        }
-    }
-}
-
-function printReview(review: Review): void
-{
-    console.log(`\n${review.summary}\n`);
-    if (review.findings.length === 0)
-    {
-        console.log('No findings.');
-        return;
-    }
-    const order: Severity[] = ['critical', 'warning', 'nit'];
-    for (const severity of order)
-    {
-        for (const f of review.findings.filter(x => x.severity === severity))
-        {
-            const line = f.line !== undefined ? `:${f.line}` : '';
-            console.log(`[${f.severity}] ${f.file}${line} — ${f.title}`);
-            console.log(`    ${f.detail}`);
-            if (f.suggestion !== undefined)
-            {
-                console.log(`    suggestion: ${f.suggestion}`);
-            }
-            console.log('');
-        }
+        console.error(`warning: could not save run: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
@@ -152,6 +118,11 @@ async function main(): Promise<number>
     });
 
     printStats(result.stats, args.verbose);
+
+    if (args.save)
+    {
+        saveRun(args, model, result);
+    }
 
     if (result.status === 'aborted')
     {
