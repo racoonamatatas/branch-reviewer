@@ -41,6 +41,59 @@ export interface RunSummary
     costUsd: number;
 }
 
+export interface StoredFinding extends Finding
+{
+    id: number;
+    runId: number;
+}
+
+export interface MergeRecord
+{
+    createdAt: string;
+    owner: string;
+    repo: string;
+    head: string;
+    base: string;
+    runIds: number[];
+    clusters: Array<{
+        memberIds: number[];
+        representativeId: number;
+        severity: Severity;
+        occurrence: number;
+    }>;
+}
+
+export interface StoredCluster
+{
+    id: number;
+    severity: Severity;
+    occurrence: number;
+    verificationStatus: 'pending' | 'confirmed' | 'refuted';
+    representative: StoredFinding;
+    members: StoredFinding[];
+}
+
+export interface StoredMerge
+{
+    id: number;
+    createdAt: string;
+    owner: string;
+    repo: string;
+    head: string;
+    base: string;
+    runIds: number[];
+    clusters: StoredCluster[];
+}
+
+export interface MergeSummary
+{
+    id: number;
+    createdAt: string;
+    target: string;
+    runIds: number[];
+    clusterCount: number;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +122,27 @@ CREATE TABLE IF NOT EXISTS findings (
     title TEXT NOT NULL,
     detail TEXT NOT NULL,
     suggestion TEXT
+);
+CREATE TABLE IF NOT EXISTS merges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    head TEXT NOT NULL,
+    base TEXT NOT NULL,
+    run_ids TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS clusters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merge_id INTEGER NOT NULL REFERENCES merges(id),
+    representative_finding_id INTEGER NOT NULL REFERENCES findings(id),
+    severity TEXT NOT NULL,
+    occurrence INTEGER NOT NULL,
+    verification_status TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE TABLE IF NOT EXISTS cluster_members (
+    cluster_id INTEGER NOT NULL REFERENCES clusters(id),
+    finding_id INTEGER NOT NULL REFERENCES findings(id)
 );
 `;
 
@@ -184,14 +258,7 @@ export class ReviewStore
             'SELECT file, line, severity, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
         ).all(id) as unknown as FindingRow[];
 
-        const findings: Finding[] = findingRows.map(f => ({
-            file: f.file,
-            ...(f.line !== null ? { line: f.line } : {}),
-            severity: f.severity as Severity,
-            title: f.title,
-            detail: f.detail,
-            ...(f.suggestion !== null ? { suggestion: f.suggestion } : {}),
-        }));
+        const findings: Finding[] = findingRows.map(toFinding);
 
         return {
             id: row.id,
@@ -215,8 +282,144 @@ export class ReviewStore
         };
     }
 
+    // Findings with their DB identity and run provenance — the merge input.
+    getFindings(runId: number): StoredFinding[]
+    {
+        const rows = this.db.prepare(
+            'SELECT id, run_id, file, line, severity, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
+        ).all(runId) as unknown as Array<FindingRow & { id: number; run_id: number }>;
+        return rows.map(row => ({ id: row.id, runId: row.run_id, ...toFinding(row) }));
+    }
+
+    saveMerge(record: MergeRecord): number
+    {
+        this.db.exec('BEGIN');
+        try
+        {
+            const result = this.db.prepare(
+                'INSERT INTO merges (created_at, owner, repo, head, base, run_ids) VALUES (?, ?, ?, ?, ?, ?)',
+            ).run(
+                record.createdAt, record.owner, record.repo, record.head, record.base,
+                JSON.stringify(record.runIds),
+            );
+            const mergeId = Number(result.lastInsertRowid);
+
+            const insertCluster = this.db.prepare(
+                'INSERT INTO clusters (merge_id, representative_finding_id, severity, occurrence) VALUES (?, ?, ?, ?)',
+            );
+            const insertMember = this.db.prepare(
+                'INSERT INTO cluster_members (cluster_id, finding_id) VALUES (?, ?)',
+            );
+            for (const cluster of record.clusters)
+            {
+                const clusterId = Number(insertCluster.run(
+                    mergeId, cluster.representativeId, cluster.severity, cluster.occurrence,
+                ).lastInsertRowid);
+                for (const findingId of cluster.memberIds)
+                {
+                    insertMember.run(clusterId, findingId);
+                }
+            }
+
+            this.db.exec('COMMIT');
+            return mergeId;
+        }
+        catch (error)
+        {
+            this.db.exec('ROLLBACK');
+            throw error;
+        }
+    }
+
+    listMerges(): MergeSummary[]
+    {
+        const rows = this.db.prepare(
+            `SELECT m.id, m.created_at, m.owner, m.repo, m.head, m.base, m.run_ids,
+                    COUNT(c.id) AS cluster_count
+             FROM merges m LEFT JOIN clusters c ON c.merge_id = m.id
+             GROUP BY m.id
+             ORDER BY m.id DESC`,
+        ).all() as unknown as Array<{
+            id: number; created_at: string; owner: string; repo: string; head: string; base: string;
+            run_ids: string; cluster_count: number;
+        }>;
+
+        return rows.map(row => ({
+            id: row.id,
+            createdAt: row.created_at,
+            target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
+            runIds: JSON.parse(row.run_ids) as number[],
+            clusterCount: row.cluster_count,
+        }));
+    }
+
+    getMerge(id: number): StoredMerge | undefined
+    {
+        const row = this.db.prepare('SELECT * FROM merges WHERE id = ?').get(id) as unknown as {
+            id: number; created_at: string; owner: string; repo: string; head: string; base: string; run_ids: string;
+        } | undefined;
+        if (row === undefined)
+        {
+            return undefined;
+        }
+
+        const clusterRows = this.db.prepare(
+            'SELECT id, representative_finding_id, severity, occurrence, verification_status FROM clusters WHERE merge_id = ? ORDER BY id',
+        ).all(id) as unknown as Array<{
+            id: number; representative_finding_id: number; severity: string; occurrence: number; verification_status: string;
+        }>;
+
+        const memberQuery = this.db.prepare(
+            `SELECT f.id, f.run_id, f.file, f.line, f.severity, f.title, f.detail, f.suggestion
+             FROM cluster_members cm JOIN findings f ON f.id = cm.finding_id
+             WHERE cm.cluster_id = ? ORDER BY f.id`,
+        );
+
+        const clusters: StoredCluster[] = clusterRows.map(c =>
+        {
+            const members = (memberQuery.all(c.id) as unknown as Array<FindingRow & { id: number; run_id: number }>)
+                .map(m => ({ id: m.id, runId: m.run_id, ...toFinding(m) }));
+            const representative = members.find(m => m.id === c.representative_finding_id);
+            if (representative === undefined)
+            {
+                throw new Error(`Cluster #${c.id}: representative finding ${c.representative_finding_id} is not among its members.`);
+            }
+            return {
+                id: c.id,
+                severity: c.severity as Severity,
+                occurrence: c.occurrence,
+                verificationStatus: c.verification_status as StoredCluster['verificationStatus'],
+                representative,
+                members,
+            };
+        });
+
+        return {
+            id: row.id,
+            createdAt: row.created_at,
+            owner: row.owner,
+            repo: row.repo,
+            head: row.head,
+            base: row.base,
+            runIds: JSON.parse(row.run_ids) as number[],
+            clusters,
+        };
+    }
+
     close(): void
     {
         this.db.close();
     }
+}
+
+function toFinding(row: FindingRow): Finding
+{
+    return {
+        file: row.file,
+        ...(row.line !== null ? { line: row.line } : {}),
+        severity: row.severity as Severity,
+        title: row.title,
+        detail: row.detail,
+        ...(row.suggestion !== null ? { suggestion: row.suggestion } : {}),
+    };
 }

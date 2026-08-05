@@ -4,8 +4,11 @@
 
 import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
+import type { StoredMerge } from '../store/store.js';
 import { diffUsage, isZeroUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
+
+const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'nit'];
 
 export function n(value: number): string
 {
@@ -49,6 +52,39 @@ export function printStats(stats: ReviewRunStats, verbose: boolean): void
     }
 }
 
+export function printMerge(merge: StoredMerge): void
+{
+    const totalRuns = merge.runIds.length;
+    console.log(`\nmerge #${merge.id}  ${merge.createdAt}  ${merge.owner}/${merge.repo} "${merge.head}" against "${merge.base}"`);
+    console.log(`merged runs: [${merge.runIds.join(', ')}] — ${merge.clusters.length} distinct finding(s)\n`);
+
+    const sorted = [...merge.clusters].sort((a, b) =>
+        SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
+        || b.occurrence - a.occurrence);
+
+    for (const cluster of sorted)
+    {
+        const f = cluster.representative;
+        const line = f.line !== undefined ? `:${f.line}` : '';
+        const unverified = cluster.occurrence === 1 && cluster.verificationStatus === 'pending'
+            ? ', unverified'
+            : '';
+        const status = cluster.verificationStatus !== 'pending' ? `, ${cluster.verificationStatus}` : '';
+        console.log(`[${cluster.severity}] ${f.file}${line} — ${f.title} (seen in ${cluster.occurrence}/${totalRuns} runs${unverified}${status})`);
+        console.log(`    ${f.detail}`);
+        if (f.suggestion !== undefined)
+        {
+            console.log(`    suggestion: ${f.suggestion}`);
+        }
+        if (cluster.members.length > 1)
+        {
+            const others = cluster.members.filter(m => m.id !== f.id);
+            console.log(`    also reported as: ${others.map(m => `"${m.title}" (run ${m.runId})`).join('; ')}`);
+        }
+        console.log('');
+    }
+}
+
 export function printReview(review: Review): void
 {
     console.log(`\n${review.summary}\n`);
@@ -57,8 +93,7 @@ export function printReview(review: Review): void
         console.log('No findings.');
         return;
     }
-    const order: Severity[] = ['critical', 'warning', 'nit'];
-    for (const severity of order)
+    for (const severity of SEVERITY_ORDER)
     {
         for (const f of review.findings.filter(x => x.severity === severity))
         {

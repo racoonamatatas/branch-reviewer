@@ -102,4 +102,77 @@ describe('ReviewStore', () =>
     {
         expect(store.getRun(999)).toBeUndefined();
     });
+
+    it('should expose findings with ids and run provenance', () =>
+    {
+        const runId = store.saveRun(submittedRun);
+
+        const findings = store.getFindings(runId);
+
+        expect(findings).toHaveLength(2);
+        expect(findings[0]).toMatchObject({ runId, title: 'Unbounded query' });
+        expect(typeof findings[0]!.id).toBe('number');
+    });
+
+    describe('merges', () =>
+    {
+        function savedMerge()
+        {
+            const runA = store.saveRun(submittedRun);
+            const runB = store.saveRun({ ...submittedRun, head: 'feature-x' });
+            const [a1, a2] = store.getFindings(runA);
+            const [b1] = store.getFindings(runB);
+            const mergeId = store.saveMerge({
+                createdAt: '2026-08-05T17:00:00.000Z',
+                owner: 'acme',
+                repo: 'widgets',
+                head: 'feature-x',
+                base: 'main',
+                runIds: [runA, runB],
+                clusters: [
+                    { memberIds: [a1!.id, b1!.id], representativeId: b1!.id, severity: 'warning', occurrence: 2 },
+                    { memberIds: [a2!.id], representativeId: a2!.id, severity: 'nit', occurrence: 1 },
+                ],
+            });
+            return { mergeId, runA, runB, a1: a1!, a2: a2!, b1: b1! };
+        }
+
+        it('should round-trip a merge with clusters and members', () =>
+        {
+            const { mergeId, runA, runB, a2, b1 } = savedMerge();
+
+            const merge = store.getMerge(mergeId);
+
+            expect(merge?.runIds).toEqual([runA, runB]);
+            expect(merge?.clusters).toHaveLength(2);
+            expect(merge?.clusters[0]?.representative.id).toBe(b1.id);
+            expect(merge?.clusters[0]?.members.map(m => m.id)).toContain(b1.id);
+            expect(merge?.clusters[0]?.occurrence).toBe(2);
+            expect(merge?.clusters[1]?.representative.id).toBe(a2.id);
+        });
+
+        it('should default every cluster to pending verification', () =>
+        {
+            const { mergeId } = savedMerge();
+
+            const merge = store.getMerge(mergeId);
+
+            expect(merge?.clusters.every(c => c.verificationStatus === 'pending')).toBe(true);
+        });
+
+        it('should list merges with run ids and cluster counts', () =>
+        {
+            const { mergeId, runA, runB } = savedMerge();
+
+            const summaries = store.listMerges();
+
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0]).toMatchObject({ id: mergeId, runIds: [runA, runB], clusterCount: 2 });
+        });
+
+        it('should return undefined for an unknown merge id', () =>
+        {
+            expect(store.getMerge(999)).toBeUndefined();
+        });
+    });
 });
