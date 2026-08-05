@@ -3,12 +3,14 @@
 // termination; what remains here is wiring, policy, and progress reporting.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ModelUsage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { RepoClient } from '../github/github.js';
 import { reviewJsonSchema, reviewSchema } from '../schema/schema.js';
 import type { Review } from '../schema/schema.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
+import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
+import type { TokenUsage, TurnUsage } from '../usage/usage.js';
 
 const DEFAULT_MAX_TURNS = 20;
 
@@ -34,17 +36,18 @@ export interface ReviewRunOptions
     onProgress?: (event: string) => void;
 }
 
-export interface ReviewUsage
-{
-    inputTokens: number;
-    outputTokens: number;
-}
-
 export interface ReviewRunStats
 {
     turns: number;
     costUsd: number;
-    usage: ReviewUsage;
+    // The SDK's own totals from the result message — the authoritative view.
+    usage: TokenUsage;
+    perModel: Record<string, ModelUsage>;
+    // Our observational sum over the streamed assistant messages, plus the
+    // per-turn detail behind it. May legitimately differ from `usage`;
+    // callers report the delta, never act on it.
+    streamed: TokenUsage;
+    turnUsage: TurnUsage[];
 }
 
 export type ReviewResult =
@@ -77,22 +80,38 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
         },
     });
 
+    const accumulator = new UsageAccumulator();
     let result: SDKResultMessage | undefined;
-    for await (const message of stream)
+    try
     {
-        if (message.type === 'assistant')
+        for await (const message of stream)
         {
-            for (const block of message.message.content)
+            if (message.type === 'assistant')
             {
-                if (block.type === 'tool_use')
+                accumulator.record(message.message.id, message.message.usage);
+                for (const block of message.message.content)
                 {
-                    opts.onProgress?.(`${block.name}(${previewArgs(block.input)})`);
+                    if (block.type === 'tool_use')
+                    {
+                        opts.onProgress?.(`${block.name}(${previewArgs(block.input)})`);
+                    }
                 }
             }
+            else if (message.type === 'result')
+            {
+                result = message;
+            }
         }
-        else if (message.type === 'result')
+    }
+    catch (error)
+    {
+        // After an error result (e.g. max turns) the CLI exits non-zero and
+        // the SDK errors the stream — but only after yielding the result
+        // message, which carries the abort reason and the run's stats. Keep
+        // it; rethrow only if we never saw one.
+        if (result === undefined || result.subtype === 'success')
         {
-            result = message;
+            throw error;
         }
     }
 
@@ -104,10 +123,10 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     const stats: ReviewRunStats = {
         turns: result.num_turns,
         costUsd: result.total_cost_usd,
-        usage: {
-            inputTokens: result.usage.input_tokens,
-            outputTokens: result.usage.output_tokens,
-        },
+        usage: fromWireUsage(result.usage),
+        perModel: result.modelUsage,
+        streamed: accumulator.total(),
+        turnUsage: accumulator.turns(),
     };
 
     if (result.subtype !== 'success')

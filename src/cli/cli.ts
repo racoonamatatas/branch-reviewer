@@ -4,9 +4,12 @@
 
 import { GitHubClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
+import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
+import { diffUsage, isZeroUsage } from '../usage/usage.js';
+import type { TokenUsage } from '../usage/usage.js';
 
-const USAGE = 'Usage: npm run review -- <owner>/<repo> <branch> [--base main] [--max-turns N]';
+const USAGE = 'Usage: npm run review -- <owner>/<repo> <branch> [--base main] [--max-turns N] [--verbose]';
 
 interface CliArgs
 {
@@ -15,6 +18,7 @@ interface CliArgs
     head: string;
     base: string;
     maxTurns?: number;
+    verbose: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs
@@ -22,6 +26,7 @@ function parseArgs(argv: string[]): CliArgs
     const positional: string[] = [];
     let base = 'main';
     let maxTurns: number | undefined;
+    let verbose = false;
 
     for (let i = 0; i < argv.length; i++)
     {
@@ -33,6 +38,10 @@ function parseArgs(argv: string[]): CliArgs
         else if (arg === '--max-turns')
         {
             maxTurns = Number(requireValue(argv[++i], arg));
+        }
+        else if (arg === '--verbose')
+        {
+            verbose = true;
         }
         else
         {
@@ -46,7 +55,7 @@ function parseArgs(argv: string[]): CliArgs
     {
         throw new Error(USAGE);
     }
-    return { owner, repo, head, base, maxTurns };
+    return { owner, repo, head, base, maxTurns, verbose };
 }
 
 function requireValue(value: string | undefined, flag: string): string
@@ -56,6 +65,48 @@ function requireValue(value: string | undefined, flag: string): string
         throw new Error(`${flag} needs a value.\n${USAGE}`);
     }
     return value;
+}
+
+function n(value: number): string
+{
+    return value.toLocaleString('en-US');
+}
+
+function usageLine(usage: TokenUsage): string
+{
+    return `${n(usage.inputTokens)} fresh + ${n(usage.cacheReadInputTokens)} cache-read`
+        + ` + ${n(usage.cacheCreationInputTokens)} cache-write in / ${n(usage.outputTokens)} out`;
+}
+
+function printStats(stats: ReviewRunStats, verbose: boolean): void
+{
+    console.log(`\ntokens: ${usageLine(stats.usage)}, ${stats.turns} turn(s), `
+        + `$${stats.costUsd.toFixed(4)} (reported; subscription runs are not billed per-token)`);
+
+    for (const [model, m] of Object.entries(stats.perModel))
+    {
+        console.log(`  ${model}: ${n(m.inputTokens)} fresh + ${n(m.cacheReadInputTokens)} cache-read`
+            + ` + ${n(m.cacheCreationInputTokens)} cache-write in / ${n(m.outputTokens)} out,`
+            + ` $${m.costUSD.toFixed(4)}, context window ${n(m.contextWindow)}`);
+    }
+
+    // Observational reconciliation: our streamed sum vs the SDK's totals.
+    // A delta is information about what the SDK counts that the stream does
+    // not show — it never affects the review or the exit code.
+    const delta = diffUsage(stats.usage, stats.streamed);
+    if (!isZeroUsage(delta))
+    {
+        console.log(`  warning: SDK totals differ from streamed sum by ${usageLine(delta)}`);
+    }
+
+    if (verbose)
+    {
+        console.log('\nper-turn usage (streamed, deduped by message id):');
+        for (const turn of stats.turnUsage)
+        {
+            console.log(`  ${turn.messageId}  ${usageLine(turn.usage)}`);
+        }
+    }
 }
 
 function printReview(review: Review): void
@@ -100,9 +151,7 @@ async function main(): Promise<number>
         },
     });
 
-    const { stats } = result;
-    console.log(`\ntokens: ${stats.usage.inputTokens} in / ${stats.usage.outputTokens} out, `
-        + `${stats.turns} turn(s), $${stats.costUsd.toFixed(4)} (reported; subscription runs are not billed per-token)`);
+    printStats(result.stats, args.verbose);
 
     if (result.status === 'aborted')
     {
