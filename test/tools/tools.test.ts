@@ -60,28 +60,37 @@ describe('createReviewTools', () =>
 {
     it('should register exactly the three read tools', () =>
     {
+        // Arrange
         const { tools } = setup();
 
-        expect(tools.defs.map(d => d.name).sort())
-            .toEqual(['get_diff', 'list_changed_files', 'read_file']);
+        // Act
+        const names = tools.defs.map(d => d.name).sort();
+
+        // Assert
+        expect(names).toEqual(['get_diff', 'list_changed_files', 'read_file']);
     });
 
     it('should mark every tool read-only', () =>
     {
+        // Arrange
         const { tools } = setup();
 
-        for (const def of tools.defs)
-        {
-            expect(def.annotations?.readOnlyHint).toBe(true);
-        }
+        // Act
+        const hints = tools.defs.map(d => d.annotations?.readOnlyHint);
+
+        // Assert
+        expect(hints).toEqual([true, true, true]);
     });
 
     it('should list changed files with status and line counts', async () =>
     {
+        // Arrange
         const { tools } = setup();
 
+        // Act
         const result = await execute(tools, 'list_changed_files');
 
+        // Assert
         expect(result).toContain('modified');
         expect(result).toContain('+10 -2');
         expect(result).toContain('src/auth.ts');
@@ -90,58 +99,77 @@ describe('createReviewTools', () =>
 
     it('should return a single file diff when file is passed', async () =>
     {
+        // Arrange
         const { tools } = setup();
 
+        // Act
         const result = await execute(tools, 'get_diff', { file: 'src/auth.ts' });
 
+        // Assert
         expect(result).toContain('const timeout = 60;');
         expect(result).not.toContain('logo.png');
     });
 
     it('should mark files that have no textual diff', async () =>
     {
+        // Arrange
         const { tools } = setup();
 
+        // Act
         const result = await execute(tools, 'get_diff', { file: 'assets/logo.png' });
 
+        // Assert
         expect(result).toContain('no textual diff');
     });
 
     it('should reject a diff request for a file the branch did not change', async () =>
     {
+        // Arrange
         const { tools } = setup();
 
-        await expect(execute(tools, 'get_diff', { file: 'src/other.ts' }))
-            .rejects.toThrow('not in the changed-file list');
+        // Act
+        const result = execute(tools, 'get_diff', { file: 'src/other.ts' });
+
+        // Assert
+        await expect(result).rejects.toThrow('not in the changed-file list');
     });
 
     it('should read a file at the branch head', async () =>
     {
+        // Arrange
         const { tools } = setup();
 
+        // Act
         const result = await execute(tools, 'read_file', { path: 'src/session.ts' });
 
+        // Assert
         expect(result).toBe('export const refresh = () => {};');
     });
 
     it('should fetch the comparison only once across tool calls', async () =>
     {
+        // Arrange
         const { client, tools } = setup();
 
+        // Act
         await execute(tools, 'list_changed_files');
         await execute(tools, 'get_diff');
         await execute(tools, 'get_diff', { file: 'src/auth.ts' });
 
+        // Assert
         expect(client.compareCalls).toBe(1);
     });
 
     it('should truncate oversized results with an explicit marker', async () =>
     {
+        // Arrange
         const { client, tools } = setup();
         client.fileContents['src/huge.ts'] = 'x'.repeat(100_000);
 
+        // Act
         const result = await execute(tools, 'read_file', { path: 'src/huge.ts' });
 
+        // Assert
         expect(result.length).toBeLessThan(100_000);
         expect(result).toContain('[truncated');
     });

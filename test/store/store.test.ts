@@ -52,40 +52,52 @@ describe('ReviewStore', () =>
 
     it('should round-trip a submitted run with findings', () =>
     {
+        // Arrange
         const id = store.saveRun(submittedRun);
 
+        // Act
         const stored = store.getRun(id);
 
+        // Assert
         expect(stored).toEqual({ id, ...submittedRun });
     });
 
     it('should round-trip an aborted run without a review', () =>
     {
+        // Arrange
         const id = store.saveRun(abortedRun);
 
+        // Act
         const stored = store.getRun(id);
 
+        // Assert
         expect(stored).toEqual({ id, ...abortedRun });
         expect(stored?.review).toBeUndefined();
     });
 
     it('should keep optional finding fields absent, not null', () =>
     {
+        // Arrange
         const id = store.saveRun(submittedRun);
 
+        // Act
         const finding = store.getRun(id)?.review?.findings[1];
 
+        // Assert
         expect(finding).not.toHaveProperty('line');
         expect(finding).not.toHaveProperty('suggestion');
     });
 
     it('should list runs newest-first with findings counts', () =>
     {
+        // Arrange
         const first = store.saveRun(submittedRun);
         const second = store.saveRun(abortedRun);
 
+        // Act
         const summaries = store.listRuns();
 
+        // Assert
         expect(summaries.map(s => s.id)).toEqual([second, first]);
         expect(summaries[1]).toEqual({
             id: first,
@@ -100,15 +112,22 @@ describe('ReviewStore', () =>
 
     it('should return undefined for an unknown run id', () =>
     {
-        expect(store.getRun(999)).toBeUndefined();
+        // Act
+        const stored = store.getRun(999);
+
+        // Assert
+        expect(stored).toBeUndefined();
     });
 
     it('should expose findings with ids and run provenance', () =>
     {
+        // Arrange
         const runId = store.saveRun(submittedRun);
 
+        // Act
         const findings = store.getFindings(runId);
 
+        // Assert
         expect(findings).toHaveLength(2);
         expect(findings[0]).toMatchObject({ runId, title: 'Unbounded query' });
         expect(typeof findings[0]!.id).toBe('number');
@@ -139,10 +158,13 @@ describe('ReviewStore', () =>
 
         it('should round-trip a consolidation with clusters and members', () =>
         {
+            // Arrange
             const { consolidationId, runA, runB, a2, b1 } = savedConsolidation();
 
+            // Act
             const consolidation = store.getConsolidation(consolidationId);
 
+            // Assert
             expect(consolidation?.runIds).toEqual([runA, runB]);
             expect(consolidation?.clusters).toHaveLength(2);
             expect(consolidation?.clusters[0]?.representative.id).toBe(b1.id);
@@ -153,26 +175,36 @@ describe('ReviewStore', () =>
 
         it('should default every cluster to pending verification', () =>
         {
+            // Arrange
             const { consolidationId } = savedConsolidation();
 
+            // Act
             const consolidation = store.getConsolidation(consolidationId);
 
+            // Assert
             expect(consolidation?.clusters.every(c => c.verificationStatus === 'pending')).toBe(true);
         });
 
         it('should list consolidations with run ids and cluster counts', () =>
         {
+            // Arrange
             const { consolidationId, runA, runB } = savedConsolidation();
 
+            // Act
             const summaries = store.listConsolidations();
 
+            // Assert
             expect(summaries).toHaveLength(1);
             expect(summaries[0]).toMatchObject({ id: consolidationId, runIds: [runA, runB], clusterCount: 2 });
         });
 
         it('should return undefined for an unknown consolidation id', () =>
         {
-            expect(store.getConsolidation(999)).toBeUndefined();
+            // Act
+            const consolidation = store.getConsolidation(999);
+
+            // Assert
+            expect(consolidation).toBeUndefined();
         });
     });
 });
