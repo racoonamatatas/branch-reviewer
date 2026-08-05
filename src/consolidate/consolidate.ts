@@ -1,4 +1,4 @@
-// Cross-run merge: semantic clustering of findings from multiple reviews of
+// Cross-run consolidation: semantic clustering of findings from multiple reviews of
 // the same target. Key-based identity is dead on arrival — the same defect
 // recurs with different wording, angle, and line anchors — so identity is
 // judged by a tool-less query(): no MCP servers, no built-ins, one turn,
@@ -10,9 +10,9 @@ import { z } from 'zod';
 import { assertSubscriptionCredit } from '../review/review.js';
 import type { Finding, Severity } from '../schema/schema.js';
 
-// A finding as the merge sees it: the immutable fact plus its DB identity
+// A finding as consolidation sees it: the immutable fact plus its DB identity
 // and which run produced it.
-export interface MergeableFinding extends Finding
+export interface ConsolidatableFinding extends Finding
 {
     id: number;
     runId: number;
@@ -42,10 +42,10 @@ Group findings that describe the same underlying defect into one cluster. Judge 
 Rules:
 - Every finding id appears in exactly one cluster.
 - A finding with no counterpart stays in a cluster of its own.
-- Never merge findings merely because they touch the same file or method.
+- Never group findings merely because they touch the same file or method.
 - As representative, pick the member whose formulation is the sharpest and most complete.`;
 
-export function buildJudgePrompt(findings: MergeableFinding[]): string
+export function buildJudgePrompt(findings: ConsolidatableFinding[]): string
 {
     const lines = findings.map(f =>
         `id ${f.id} (run ${f.runId}) [${f.severity}] ${f.file}${f.line !== undefined ? `:${f.line}` : ''} — ${f.title}\n${f.detail}`);
@@ -53,7 +53,7 @@ export function buildJudgePrompt(findings: MergeableFinding[]): string
 }
 
 // Returns a violation description, or undefined when the partition is valid.
-export function validatePartition(findings: MergeableFinding[], clusters: Cluster[]): string | undefined
+export function validatePartition(findings: ConsolidatableFinding[], clusters: Cluster[]): string | undefined
 {
     const expected = new Set(findings.map(f => f.id));
     const seen = new Set<number>();
@@ -100,7 +100,7 @@ export function maxSeverity(severities: Severity[]): Severity
     return 'nit';
 }
 
-export function distinctRuns(findings: MergeableFinding[]): number
+export function distinctRuns(findings: ConsolidatableFinding[]): number
 {
     return new Set(findings.map(f => f.runId)).size;
 }
@@ -110,7 +110,7 @@ export interface ClusteringOptions
     model?: string;
 }
 
-export async function runClustering(findings: MergeableFinding[], opts: ClusteringOptions = {}): Promise<Cluster[]>
+export async function runClustering(findings: ConsolidatableFinding[], opts: ClusteringOptions = {}): Promise<Cluster[]>
 {
     assertSubscriptionCredit();
 

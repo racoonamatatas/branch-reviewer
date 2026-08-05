@@ -114,15 +114,15 @@ describe('ReviewStore', () =>
         expect(typeof findings[0]!.id).toBe('number');
     });
 
-    describe('merges', () =>
+    describe('consolidations', () =>
     {
-        function savedMerge()
+        function savedConsolidation()
         {
             const runA = store.saveRun(submittedRun);
             const runB = store.saveRun({ ...submittedRun, head: 'feature-x' });
             const [a1, a2] = store.getFindings(runA);
             const [b1] = store.getFindings(runB);
-            const mergeId = store.saveMerge({
+            const consolidationId = store.saveConsolidation({
                 createdAt: '2026-08-05T17:00:00.000Z',
                 owner: 'acme',
                 repo: 'widgets',
@@ -134,45 +134,45 @@ describe('ReviewStore', () =>
                     { memberIds: [a2!.id], representativeId: a2!.id, severity: 'nit', occurrence: 1 },
                 ],
             });
-            return { mergeId, runA, runB, a1: a1!, a2: a2!, b1: b1! };
+            return { consolidationId, runA, runB, a1: a1!, a2: a2!, b1: b1! };
         }
 
-        it('should round-trip a merge with clusters and members', () =>
+        it('should round-trip a consolidation with clusters and members', () =>
         {
-            const { mergeId, runA, runB, a2, b1 } = savedMerge();
+            const { consolidationId, runA, runB, a2, b1 } = savedConsolidation();
 
-            const merge = store.getMerge(mergeId);
+            const consolidation = store.getConsolidation(consolidationId);
 
-            expect(merge?.runIds).toEqual([runA, runB]);
-            expect(merge?.clusters).toHaveLength(2);
-            expect(merge?.clusters[0]?.representative.id).toBe(b1.id);
-            expect(merge?.clusters[0]?.members.map(m => m.id)).toContain(b1.id);
-            expect(merge?.clusters[0]?.occurrence).toBe(2);
-            expect(merge?.clusters[1]?.representative.id).toBe(a2.id);
+            expect(consolidation?.runIds).toEqual([runA, runB]);
+            expect(consolidation?.clusters).toHaveLength(2);
+            expect(consolidation?.clusters[0]?.representative.id).toBe(b1.id);
+            expect(consolidation?.clusters[0]?.members.map(m => m.id)).toContain(b1.id);
+            expect(consolidation?.clusters[0]?.occurrence).toBe(2);
+            expect(consolidation?.clusters[1]?.representative.id).toBe(a2.id);
         });
 
         it('should default every cluster to pending verification', () =>
         {
-            const { mergeId } = savedMerge();
+            const { consolidationId } = savedConsolidation();
 
-            const merge = store.getMerge(mergeId);
+            const consolidation = store.getConsolidation(consolidationId);
 
-            expect(merge?.clusters.every(c => c.verificationStatus === 'pending')).toBe(true);
+            expect(consolidation?.clusters.every(c => c.verificationStatus === 'pending')).toBe(true);
         });
 
-        it('should list merges with run ids and cluster counts', () =>
+        it('should list consolidations with run ids and cluster counts', () =>
         {
-            const { mergeId, runA, runB } = savedMerge();
+            const { consolidationId, runA, runB } = savedConsolidation();
 
-            const summaries = store.listMerges();
+            const summaries = store.listConsolidations();
 
             expect(summaries).toHaveLength(1);
-            expect(summaries[0]).toMatchObject({ id: mergeId, runIds: [runA, runB], clusterCount: 2 });
+            expect(summaries[0]).toMatchObject({ id: consolidationId, runIds: [runA, runB], clusterCount: 2 });
         });
 
-        it('should return undefined for an unknown merge id', () =>
+        it('should return undefined for an unknown consolidation id', () =>
         {
-            expect(store.getMerge(999)).toBeUndefined();
+            expect(store.getConsolidation(999)).toBeUndefined();
         });
     });
 });

@@ -6,14 +6,14 @@
 // prompt" and "we think we improved the prompt".
 
 import { readFileSync } from 'node:fs';
-import { runClustering } from '../src/merge/merge.js';
-import type { MergeableFinding } from '../src/merge/merge.js';
+import { runClustering } from '../src/consolidate/consolidate.js';
+import type { ConsolidatableFinding } from '../src/consolidate/consolidate.js';
 import { FIXTURE_PATH } from './fixture.js';
 
 interface Fixture
 {
     description: string;
-    findings: MergeableFinding[];
+    findings: ConsolidatableFinding[];
     expectedClusters: number[][];
 }
 
@@ -60,14 +60,14 @@ async function main(): Promise<number>
     const expectedPairs = pairs(fixture.expectedClusters);
     const actualPairs = pairs(actual);
     const missed = [...expectedPairs].filter(p => !actualPairs.has(p));
-    const falseMerges = [...actualPairs].filter(p => !expectedPairs.has(p));
+    const falselyLumped = [...actualPairs].filter(p => !expectedPairs.has(p));
 
     console.error(`FAIL — partition differs from the golden set (${actual.length} clusters vs ${fixture.expectedClusters.length} expected).`);
     for (const pair of missed)
     {
         console.error(`  split apart (should be together): findings ${pair}`);
     }
-    for (const pair of falseMerges)
+    for (const pair of falselyLumped)
     {
         console.error(`  lumped together (should be apart): findings ${pair}`);
     }

@@ -4,7 +4,7 @@
 
 import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
-import type { StoredMerge } from '../store/store.js';
+import type { StoredConsolidation } from '../store/store.js';
 import { diffUsage, isZeroUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 
@@ -52,13 +52,13 @@ export function printStats(stats: ReviewRunStats, verbose: boolean): void
     }
 }
 
-export function printMerge(merge: StoredMerge): void
+export function printConsolidation(consolidation: StoredConsolidation): void
 {
-    const totalRuns = merge.runIds.length;
-    console.log(`\nmerge #${merge.id}  ${merge.createdAt}  ${merge.owner}/${merge.repo} "${merge.head}" against "${merge.base}"`);
-    console.log(`merged runs: [${merge.runIds.join(', ')}] — ${merge.clusters.length} distinct finding(s)\n`);
+    const totalRuns = consolidation.runIds.length;
+    console.log(`\nconsolidation #${consolidation.id}  ${consolidation.createdAt}  ${consolidation.owner}/${consolidation.repo} "${consolidation.head}" against "${consolidation.base}"`);
+    console.log(`consolidated runs: [${consolidation.runIds.join(', ')}] — ${consolidation.clusters.length} distinct finding(s)\n`);
 
-    const sorted = [...merge.clusters].sort((a, b) =>
+    const sorted = [...consolidation.clusters].sort((a, b) =>
         SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
         || b.occurrence - a.occurrence);
 

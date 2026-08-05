@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildJudgePrompt, distinctRuns, maxSeverity, validatePartition } from '../../src/merge/merge.js';
-import type { Cluster, MergeableFinding } from '../../src/merge/merge.js';
+import { buildJudgePrompt, distinctRuns, maxSeverity, validatePartition } from '../../src/consolidate/consolidate.js';
+import type { Cluster, ConsolidatableFinding } from '../../src/consolidate/consolidate.js';
 
-function finding(id: number, runId: number, overrides: Partial<MergeableFinding> = {}): MergeableFinding
+function finding(id: number, runId: number, overrides: Partial<ConsolidatableFinding> = {}): ConsolidatableFinding
 {
     return {
         id,

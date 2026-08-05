@@ -1,14 +1,14 @@
-// Cross-run merge entry point: cluster the findings of stored runs into one
-// merged report. Saves first, renders by reading back — the output is the
+// Cross-run consolidation entry point: cluster the findings of stored runs into one
+// consolidated report. Saves first, renders by reading back — the output is the
 // round-trip, never a parallel code path.
 
-import { distinctRuns, maxSeverity, runClustering } from '../merge/merge.js';
-import type { MergeableFinding } from '../merge/merge.js';
+import { distinctRuns, maxSeverity, runClustering } from '../consolidate/consolidate.js';
+import type { ConsolidatableFinding } from '../consolidate/consolidate.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import type { StoredRun } from '../store/store.js';
-import { printMerge } from './render.js';
+import { printConsolidation } from './render.js';
 
-const USAGE = 'Usage: npm run merge -- <run-id> <run-id> [...] | npm run merge | npm run merge -- --show <merge-id>';
+const USAGE = 'Usage: npm run consolidate -- <run-id> <run-id> [...] | npm run consolidate | npm run consolidate -- --show <consolidation-id>';
 
 async function main(): Promise<number>
 {
@@ -29,7 +29,7 @@ async function main(): Promise<number>
         {
             throw new Error(USAGE);
         }
-        return await merge(store, runIds);
+        return await consolidate(store, runIds);
     }
     finally
     {
@@ -39,13 +39,13 @@ async function main(): Promise<number>
 
 function list(store: ReviewStore): number
 {
-    const merges = store.listMerges();
-    if (merges.length === 0)
+    const consolidations = store.listConsolidations();
+    if (consolidations.length === 0)
     {
-        console.log('No stored merges.');
+        console.log('No stored consolidations.');
         return 0;
     }
-    for (const m of merges)
+    for (const m of consolidations)
     {
         console.log(`#${m.id}  ${m.createdAt}  ${m.target}  runs [${m.runIds.join(', ')}]  ${m.clusterCount} cluster(s)`);
     }
@@ -58,17 +58,17 @@ function show(store: ReviewStore, id: number): number
     {
         throw new Error(USAGE);
     }
-    const merge = store.getMerge(id);
-    if (merge === undefined)
+    const consolidation = store.getConsolidation(id);
+    if (consolidation === undefined)
     {
-        console.error(`No merge #${id}.`);
+        console.error(`No consolidation #${id}.`);
         return 1;
     }
-    printMerge(merge);
+    printConsolidation(consolidation);
     return 0;
 }
 
-async function merge(store: ReviewStore, runIds: number[]): Promise<number>
+async function consolidate(store: ReviewStore, runIds: number[]): Promise<number>
 {
     const runs: StoredRun[] = [];
     for (const id of runIds)
@@ -80,7 +80,7 @@ async function merge(store: ReviewStore, runIds: number[]): Promise<number>
         }
         if (run.review === undefined)
         {
-            throw new Error(`Run #${id} has no review (status: ${run.status}) — merge submitted runs only.`);
+            throw new Error(`Run #${id} has no review (status: ${run.status}) — consolidate submitted runs only.`);
         }
         runs.push(run);
     }
@@ -90,21 +90,21 @@ async function merge(store: ReviewStore, runIds: number[]): Promise<number>
     {
         if (run.owner !== first.owner || run.repo !== first.repo || run.head !== first.head || run.base !== first.base)
         {
-            throw new Error(`Run #${run.id} targets a different branch than run #${first.id} — merge runs of one target only.`);
+            throw new Error(`Run #${run.id} targets a different branch than run #${first.id} — consolidate runs of one target only.`);
         }
     }
 
-    const findings: MergeableFinding[] = runIds.flatMap(id => store.getFindings(id));
+    const findings: ConsolidatableFinding[] = runIds.flatMap(id => store.getFindings(id));
     if (findings.length === 0)
     {
-        throw new Error('The selected runs have no findings to merge.');
+        throw new Error('The selected runs have no findings to consolidate.');
     }
 
     console.log(`Clustering ${findings.length} findings from ${runs.length} runs...`);
     const clusters = await runClustering(findings, { model: process.env.REVIEW_MODEL });
 
     const byId = new Map(findings.map(f => [f.id, f]));
-    const mergeId = store.saveMerge({
+    const consolidationId = store.saveConsolidation({
         createdAt: new Date().toISOString(),
         owner: first.owner,
         repo: first.repo,
@@ -122,9 +122,9 @@ async function merge(store: ReviewStore, runIds: number[]): Promise<number>
             };
         }),
     });
-    console.log(`saved as merge #${mergeId}`);
+    console.log(`saved as consolidation #${consolidationId}`);
 
-    printMerge(store.getMerge(mergeId)!);
+    printConsolidation(store.getConsolidation(consolidationId)!);
     return 0;
 }
 

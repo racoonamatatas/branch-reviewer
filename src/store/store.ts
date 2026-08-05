@@ -47,7 +47,7 @@ export interface StoredFinding extends Finding
     runId: number;
 }
 
-export interface MergeRecord
+export interface ConsolidationRecord
 {
     createdAt: string;
     owner: string;
@@ -73,7 +73,7 @@ export interface StoredCluster
     members: StoredFinding[];
 }
 
-export interface StoredMerge
+export interface StoredConsolidation
 {
     id: number;
     createdAt: string;
@@ -85,7 +85,7 @@ export interface StoredMerge
     clusters: StoredCluster[];
 }
 
-export interface MergeSummary
+export interface ConsolidationSummary
 {
     id: number;
     createdAt: string;
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS findings (
     detail TEXT NOT NULL,
     suggestion TEXT
 );
-CREATE TABLE IF NOT EXISTS merges (
+CREATE TABLE IF NOT EXISTS consolidations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
     owner TEXT NOT NULL,
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS merges (
 );
 CREATE TABLE IF NOT EXISTS clusters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    merge_id INTEGER NOT NULL REFERENCES merges(id),
+    consolidation_id INTEGER NOT NULL REFERENCES consolidations(id),
     representative_finding_id INTEGER NOT NULL REFERENCES findings(id),
     severity TEXT NOT NULL,
     occurrence INTEGER NOT NULL,
@@ -187,7 +187,23 @@ export class ReviewStore
             mkdirSync(dirname(path), { recursive: true });
         }
         this.db = new DatabaseSync(path);
+        this.migrateLegacyMergeTables();
         this.db.exec(SCHEMA);
+    }
+
+    // Databases from before the terminology sweep carry a `merges` table and
+    // a clusters.merge_id column. Rename in place — the stored runs and
+    // consolidations are the eval seed data and must survive.
+    private migrateLegacyMergeTables(): void
+    {
+        const legacy = this.db.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'merges'",
+        ).get();
+        if (legacy !== undefined)
+        {
+            this.db.exec('ALTER TABLE merges RENAME TO consolidations');
+            this.db.exec('ALTER TABLE clusters RENAME COLUMN merge_id TO consolidation_id');
+        }
     }
 
     saveRun(record: RunRecord): number
@@ -282,7 +298,7 @@ export class ReviewStore
         };
     }
 
-    // Findings with their DB identity and run provenance — the merge input.
+    // Findings with their DB identity and run provenance — the consolidation input.
     getFindings(runId: number): StoredFinding[]
     {
         const rows = this.db.prepare(
@@ -291,21 +307,21 @@ export class ReviewStore
         return rows.map(row => ({ id: row.id, runId: row.run_id, ...toFinding(row) }));
     }
 
-    saveMerge(record: MergeRecord): number
+    saveConsolidation(record: ConsolidationRecord): number
     {
         this.db.exec('BEGIN');
         try
         {
             const result = this.db.prepare(
-                'INSERT INTO merges (created_at, owner, repo, head, base, run_ids) VALUES (?, ?, ?, ?, ?, ?)',
+                'INSERT INTO consolidations (created_at, owner, repo, head, base, run_ids) VALUES (?, ?, ?, ?, ?, ?)',
             ).run(
                 record.createdAt, record.owner, record.repo, record.head, record.base,
                 JSON.stringify(record.runIds),
             );
-            const mergeId = Number(result.lastInsertRowid);
+            const consolidationId = Number(result.lastInsertRowid);
 
             const insertCluster = this.db.prepare(
-                'INSERT INTO clusters (merge_id, representative_finding_id, severity, occurrence) VALUES (?, ?, ?, ?)',
+                'INSERT INTO clusters (consolidation_id, representative_finding_id, severity, occurrence) VALUES (?, ?, ?, ?)',
             );
             const insertMember = this.db.prepare(
                 'INSERT INTO cluster_members (cluster_id, finding_id) VALUES (?, ?)',
@@ -313,7 +329,7 @@ export class ReviewStore
             for (const cluster of record.clusters)
             {
                 const clusterId = Number(insertCluster.run(
-                    mergeId, cluster.representativeId, cluster.severity, cluster.occurrence,
+                    consolidationId, cluster.representativeId, cluster.severity, cluster.occurrence,
                 ).lastInsertRowid);
                 for (const findingId of cluster.memberIds)
                 {
@@ -322,7 +338,7 @@ export class ReviewStore
             }
 
             this.db.exec('COMMIT');
-            return mergeId;
+            return consolidationId;
         }
         catch (error)
         {
@@ -331,12 +347,12 @@ export class ReviewStore
         }
     }
 
-    listMerges(): MergeSummary[]
+    listConsolidations(): ConsolidationSummary[]
     {
         const rows = this.db.prepare(
             `SELECT m.id, m.created_at, m.owner, m.repo, m.head, m.base, m.run_ids,
                     COUNT(c.id) AS cluster_count
-             FROM merges m LEFT JOIN clusters c ON c.merge_id = m.id
+             FROM consolidations m LEFT JOIN clusters c ON c.consolidation_id = m.id
              GROUP BY m.id
              ORDER BY m.id DESC`,
         ).all() as unknown as Array<{
@@ -353,9 +369,9 @@ export class ReviewStore
         }));
     }
 
-    getMerge(id: number): StoredMerge | undefined
+    getConsolidation(id: number): StoredConsolidation | undefined
     {
-        const row = this.db.prepare('SELECT * FROM merges WHERE id = ?').get(id) as unknown as {
+        const row = this.db.prepare('SELECT * FROM consolidations WHERE id = ?').get(id) as unknown as {
             id: number; created_at: string; owner: string; repo: string; head: string; base: string; run_ids: string;
         } | undefined;
         if (row === undefined)
@@ -364,7 +380,7 @@ export class ReviewStore
         }
 
         const clusterRows = this.db.prepare(
-            'SELECT id, representative_finding_id, severity, occurrence, verification_status FROM clusters WHERE merge_id = ? ORDER BY id',
+            'SELECT id, representative_finding_id, severity, occurrence, verification_status FROM clusters WHERE consolidation_id = ? ORDER BY id',
         ).all(id) as unknown as Array<{
             id: number; representative_finding_id: number; severity: string; occurrence: number; verification_status: string;
         }>;
