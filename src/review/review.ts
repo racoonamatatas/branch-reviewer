@@ -54,15 +54,20 @@ export type ReviewResult =
     | { status: 'submitted'; review: Review; stats: ReviewRunStats }
     | { status: 'aborted'; reason: string; stats: ReviewRunStats };
 
-export async function runReview(client: RepoClient, target: ReviewTarget, opts: ReviewRunOptions = {}): Promise<ReviewResult>
+// Which credential wins when both an API key and a subscription login are
+// present is undocumented; refuse the ambiguous state so a run can never
+// silently bill pay-as-you-go. Shared by every query()-calling module.
+export function assertSubscriptionCredit(): void
 {
-    // Which credential wins when both an API key and a subscription login are
-    // present is undocumented; refuse the ambiguous state so a run can never
-    // silently bill pay-as-you-go.
     if (process.env.ANTHROPIC_API_KEY !== undefined && process.env.ANTHROPIC_API_KEY !== '')
     {
         throw new Error('ANTHROPIC_API_KEY is set. This reviewer runs on subscription credit only — unset it to continue.');
     }
+}
+
+export async function runReview(client: RepoClient, target: ReviewTarget, opts: ReviewRunOptions = {}): Promise<ReviewResult>
+{
+    assertSubscriptionCredit();
 
     const tools = createReviewTools(client, target);
 
