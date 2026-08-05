@@ -1,0 +1,26 @@
+{
+    "name": "branch-reviewer-sdk",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "review": "tsx --env-file-if-exists=.env src/cli/cli.ts",
+        "test": "vitest run",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint ."
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@stylistic/eslint-plugin": "^5.10.0",
+        "@types/node": "^26.1.2",
+        "eslint": "^10.8.0",
+        "tsx": "^4.23.7",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.66.0",
+        "vitest": "^4.1.10"
+    },
+    "dependencies": {
+        "@anthropic-ai/claude-agent-sdk": "^0.3.222",
+        "zod": "^4.4.3"
+    }
+}
