@@ -11,12 +11,33 @@ import { consolidationId } from '../types/ids.js';
 import { pendingOccurrenceOne, verifyCluster } from '../verify/verify.js';
 import { printConsolidation } from './render.js';
 
-const USAGE = 'Usage: npm run verify -- <consolidation-id>';
+const USAGE = 'Usage: npm run verify -- <consolidation-id> [--max-turns N]';
 
 async function main(): Promise<number>
 {
-    const raw = Number(process.argv[2]);
-    if (!Number.isInteger(raw))
+    const args = process.argv.slice(2);
+    const positional: string[] = [];
+    let maxTurns: number | undefined;
+    for (let i = 0; i < args.length; i++)
+    {
+        const arg = args[i]!;
+        if (arg === '--max-turns')
+        {
+            const value = args[++i];
+            if (value === undefined)
+            {
+                throw new Error(`--max-turns needs a value.\n${USAGE}`);
+            }
+            maxTurns = Number(value);
+        }
+        else
+        {
+            positional.push(arg);
+        }
+    }
+
+    const raw = Number(positional[0]);
+    if (positional.length !== 1 || !Number.isInteger(raw))
     {
         throw new Error(USAGE);
     }
@@ -40,7 +61,7 @@ async function main(): Promise<number>
             return 0;
         }
 
-        const failures = await verifyAll(store, consolidation, pending);
+        const failures = await verifyAll(store, consolidation, pending, maxTurns);
 
         printConsolidation(store.getConsolidation(id)!);
         return failures > 0 ? 2 : 0;
@@ -51,7 +72,7 @@ async function main(): Promise<number>
     }
 }
 
-async function verifyAll(store: ReviewStore, consolidation: Consolidation, pending: Cluster[]): Promise<number>
+async function verifyAll(store: ReviewStore, consolidation: Consolidation, pending: Cluster[], maxTurns?: number): Promise<number>
 {
     const model = process.env.REVIEW_MODEL ?? 'claude-opus-5';
     const github = new GitHubClient(consolidation.owner, consolidation.repo, process.env.GITHUB_TOKEN);
@@ -71,6 +92,7 @@ async function verifyAll(store: ReviewStore, consolidation: Consolidation, pendi
         {
             const result = await verifyCluster(github, target, cluster, totalRuns, {
                 model,
+                ...(maxTurns !== undefined ? { maxTurns } : {}),
                 onProgress: (event) =>
                 {
                     console.log(`  ${event}`);
