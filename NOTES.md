@@ -9,9 +9,7 @@ finding *labels* used below are fine.
 
 ## Status (2026-08-06)
 
-Slices 1–6 shipped. **Next: slice 7 — headless auth** (`claude setup-token` →
-`CLAUDE_CODE_OAUTH_TOKEN`), deliberately sequenced before the server, which
-presumes it.
+Slices 1–7 shipped. **Next: slice 8 — Node server + job model.**
 
 Remaining roadmap (sequencing user-confirmed): Node server + job model →
 trigger automation (webhook/CI, its own slice — auth = *can* run anywhere,
@@ -30,6 +28,8 @@ Shipped so far:
    for git semantics).
 5. Verification agent — adversarial, three-valued verdict (2026-08-06).
 6. Campaign — adaptive rounds + coverage estimate + chained verify (2026-08-06).
+7. Headless auth — `CLAUDE_CODE_OAUTH_TOKEN`, unauthenticated-result
+   translation, `ANTHROPIC_AUTH_TOKEN` refused (2026-08-06).
 
 ## Standing design decisions (don't re-derive)
 
@@ -60,7 +60,10 @@ Shipped so far:
   runner's stream-error-with-captured-result split already provides the
   mechanics: with result = capped, without = retry candidate.
 - **Subscription credit only.** `assertSubscriptionCredit()` refuses to run if
-  `ANTHROPIC_API_KEY` is set (API-key-vs-login precedence is undocumented).
+  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set (credential precedence
+  is undocumented; both are non-subscription billing paths).
+  `CLAUDE_CODE_OAUTH_TOKEN` is the deliberate exception — subscription credit
+  by construction, and the headless-auth path.
 - **Claude-native on purpose.** Cross-provider abstraction stays in
   branch-reviewer-api; this rebuild surfaces model choice per run instead
   (`REVIEW_MODEL`, per-query model string).
@@ -151,9 +154,26 @@ novel-cluster counts are measured *inside* one partition (comparing cluster
 counts between rounds would measure the judge, not the branch). Two consecutive
 aborts stop the campaign — structural, not worth burning the run cap on.
 
-**Slice 7 (next, headless auth).** The path is `claude setup-token` →
-`CLAUDE_CODE_OAUTH_TOKEN`, confirmed permitted for subscription use. Acceptance
-test is a review completing in a genuinely logged-out environment.
+**Slice 7 (headless auth).** `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`
+in `.env`; the SDK reads it straight from env (v0.3.222), so the existing
+`--env-file-if-exists` wiring was already enough. **The unauthenticated
+failure shape is a wart worth knowing:** the result message arrives with
+`subtype: 'success'` but `is_error: true` (zero cost, `result: "Not logged in
+· Please run /login"`), then the stream throws — the success/error split in
+`subtype` does not cover it, and consolidate's judge would have died on a Zod
+parse of the absent `structured_output`. `throwIfErrorResult()` (shared from
+review.ts, called by all three query() consumers) translates it and points
+headless machines at `claude setup-token` instead of the SDK's `/login`
+advice. `assertSubscriptionCredit()` now also refuses `ANTHROPIC_AUTH_TOKEN`
+(same SDK credential list as the API key; a gateway/proxy billing path) —
+`CLAUDE_CODE_OAUTH_TOKEN` is the one deliberate exception, minted against the
+subscription itself. `claude setup-token` is interactive (browser OAuth
+flow) — it cannot run inside a harness session; use a real terminal.
+Acceptance passed 2026-08-06: full review completed and saved with `HOME`
+pointed at an empty temp dir (no login visible) and only `.env` credentials —
+run #9, a public fastify PR, $1.28, 10 findings. A fine-grained GitHub PAT
+authenticates while org approval is still pending (approval gates the org
+repo, not the token), so public-repo targets work immediately.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked
@@ -168,8 +188,6 @@ here.
 
 ## Open items
 
-- Slice 7 (headless auth): verify `CLAUDE_CODE_OAUTH_TOKEN` works logged-out;
-  decide whether `assertSubscriptionCredit()` needs to reason about it.
 - "Needs human eyes" has no answer path — a human-verdict row on top of agent
   verdicts (append-only makes overrule natural).
 - README documents only the reviewer; history/consolidate/verify/campaign/eval

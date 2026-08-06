@@ -7,7 +7,7 @@
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { assertSubscriptionCredit } from '../review/review.js';
+import { assertSubscriptionCredit, throwIfErrorResult } from '../review/review.js';
 import type { Severity } from '../schema/schema.js';
 import type { Finding } from '../store/store.js';
 import { findingId, toTypedId } from '../types/ids.js';
@@ -155,6 +155,10 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Clust
     {
         if (message.type === 'result')
         {
+            // Catches the unauthenticated is_error 'success' result, which
+            // otherwise dies below as a Zod parse of an absent
+            // structured_output.
+            throwIfErrorResult(message);
             if (message.subtype !== 'success')
             {
                 throw new Error(`Clustering judge failed: ${message.subtype}`);

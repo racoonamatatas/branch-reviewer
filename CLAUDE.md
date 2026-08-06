@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Branch review agent built on the Claude Agent SDK, running on **subscription credit only** — `assertSubscriptionCredit()` in `src/review/review.ts` refuses to run if `ANTHROPIC_API_KEY` is set, so a run can never silently bill pay-as-you-go. Read-and-report only: reviews a GitHub branch against its merge base and reports structured findings; no editing, no fixing.
+Branch review agent built on the Claude Agent SDK, running on **subscription credit only** — `assertSubscriptionCredit()` in `src/review/review.ts` refuses to run if `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set, so a run can never silently bill pay-as-you-go. Headless machines authenticate with `CLAUDE_CODE_OAUTH_TOKEN` (minted by `claude setup-token`, subscription credit by construction) in `.env`. Read-and-report only: reviews a GitHub branch against its merge base and reports structured findings; no editing, no fixing.
 
 Fresh-start successor to [branch-reviewer-api](https://github.com/racoonamatatas/branch-reviewer-api), which hand-rolls the same agent loop against the raw Messages API. The two reviewers deliberately differ only in harness — `src/github/github.ts` is ported verbatim, the tools keep the same names and behavior.
 

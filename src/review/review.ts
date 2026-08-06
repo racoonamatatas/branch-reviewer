@@ -69,13 +69,39 @@ export type ReviewResult =
 
 // Which credential wins when both an API key and a subscription login are
 // present is undocumented; refuse the ambiguous state so a run can never
-// silently bill pay-as-you-go. Shared by every query()-calling module.
+// silently bill pay-as-you-go. ANTHROPIC_AUTH_TOKEN sits in the same SDK
+// credential list (a gateway/proxy billing path — another way to silently
+// not run on subscription) and is refused for the same reason.
+// CLAUDE_CODE_OAUTH_TOKEN is the one deliberate exception: it is minted by
+// `claude setup-token` against the subscription itself, so headless runs
+// stay on subscription credit. Shared by every query()-calling module.
 export function assertSubscriptionCredit(): void
 {
-    if (process.env.ANTHROPIC_API_KEY !== undefined && process.env.ANTHROPIC_API_KEY !== '')
+    for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
     {
-        throw new Error('ANTHROPIC_API_KEY is set. This reviewer runs on subscription credit only — unset it to continue.');
+        if (process.env[name] !== undefined && process.env[name] !== '')
+        {
+            throw new Error(`${name} is set. This reviewer runs on subscription credit only — unset it to continue.`);
+        }
     }
+}
+
+// An unauthenticated run surfaces as a zero-cost result with subtype
+// 'success' but is_error set (observed on SDK 0.3.222: "Not logged in ·
+// Please run /login") — the success/error split in `subtype` does not cover
+// it, and left alone it dies later as an opaque Zod parse of an absent
+// structured_output. Translate it here; the SDK's own advice (/login)
+// presumes an interactive terminal, so point headless machines at the token.
+export function throwIfErrorResult(result: SDKResultMessage): void
+{
+    if (result.subtype !== 'success' || !result.is_error)
+    {
+        return;
+    }
+    const headless = result.result.includes('Not logged in') && !process.env.CLAUDE_CODE_OAUTH_TOKEN
+        ? ' On a headless machine: mint a token with `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN.'
+        : '';
+    throw new Error(`The run failed without completing: ${result.result}.${headless}`);
 }
 
 export async function runReview(client: RepoClient, target: ReviewTarget, opts: ReviewRunOptions = {}): Promise<ReviewResult>
@@ -133,7 +159,13 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
         // After an error result (e.g. max turns) the CLI exits non-zero and
         // the SDK errors the stream — but only after yielding the result
         // message, which carries the abort reason and the run's stats. Keep
-        // it; rethrow only if we never saw one.
+        // it; rethrow only if we never saw one. An is_error 'success' result
+        // (unauthenticated) also errors the stream — prefer our translation
+        // of the result over the raw stream error.
+        if (result !== undefined)
+        {
+            throwIfErrorResult(result);
+        }
         if (result === undefined || result.subtype === 'success')
         {
             throw error;
@@ -144,6 +176,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     {
         throw new Error('The SDK stream ended without a result message.');
     }
+    throwIfErrorResult(result);
 
     const stats: ReviewRunStats = {
         turns: result.num_turns,

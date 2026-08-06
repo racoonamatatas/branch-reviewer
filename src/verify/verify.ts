@@ -10,7 +10,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { RepoClient } from '../github/github.js';
-import { assertSubscriptionCredit, previewArgs } from '../review/review.js';
+import { assertSubscriptionCredit, previewArgs, throwIfErrorResult } from '../review/review.js';
 import { ReviewStore } from '../store/store.js';
 import type { Cluster, Consolidation } from '../store/store.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
@@ -149,7 +149,13 @@ export async function verifyCluster(
     {
         // After an error result (e.g. max turns) the SDK errors the stream —
         // but only after yielding the result message, which carries the abort
-        // reason and stats. Keep it; rethrow only if we never saw one.
+        // reason and stats. Keep it; rethrow only if we never saw one. An
+        // is_error 'success' result (unauthenticated) also errors the stream
+        // — prefer our translation of the result over the raw stream error.
+        if (result !== undefined)
+        {
+            throwIfErrorResult(result);
+        }
         if (result === undefined || result.subtype === 'success')
         {
             throw error;
@@ -160,6 +166,7 @@ export async function verifyCluster(
     {
         throw new Error('The SDK stream ended without a result message.');
     }
+    throwIfErrorResult(result);
 
     const stats: VerificationStats = {
         turns: result.num_turns,
