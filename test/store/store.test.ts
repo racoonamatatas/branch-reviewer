@@ -305,6 +305,91 @@ describe('ReviewStore', () =>
                 expect(store.getConsolidation(id)!.clusters[1]?.verificationStatus).toBe('undetermined');
             });
 
+            it('should carry a verdict forward to a re-clustering of the same findings', () =>
+            {
+                // Arrange: verify one cluster, then re-consolidate the same runs
+                const first = savedClusters();
+                const verified = first.clusters[1]!;
+                store.saveVerification({
+                    clusterId: verified.id, verdict: 'confirmed',
+                    rationale: 'Earned once.', confidence: 'High.', costUsd: 0.5,
+                });
+
+                // Act
+                const again = store.saveConsolidation({
+                    owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+                    runIds: store.getConsolidation(first.consolidationId)!.runIds,
+                    clusters: first.clusters.map(c => ({
+                        memberIds: c.members.map(m => m.id),
+                        representativeId: c.representative.id,
+                        severity: c.severity,
+                        occurrence: c.occurrence,
+                    })),
+                });
+
+                // Assert
+                const reread = store.getConsolidation(again)!;
+                expect(reread.clusters[1]?.verificationStatus).toBe('confirmed');
+                expect(reread.clusters[0]?.verificationStatus).toBe('pending');
+                expect(store.getVerifications(reread.clusters[1]!.id)).toEqual([]);
+            });
+
+            it('should not carry a verdict forward when the judge regrouped the findings', () =>
+            {
+                // Arrange
+                const first = savedClusters();
+                const verified = first.clusters[1]!;
+                store.saveVerification({
+                    clusterId: verified.id, verdict: 'refuted',
+                    rationale: 'Contrary evidence.', confidence: 'High.', costUsd: 0.5,
+                });
+
+                // Act: the same finding, now grouped with another member
+                const merged = store.saveConsolidation({
+                    owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+                    runIds: store.getConsolidation(first.consolidationId)!.runIds,
+                    clusters: [{
+                        memberIds: [verified.representative.id, first.clusters[0]!.representative.id],
+                        representativeId: verified.representative.id,
+                        severity: 'warning',
+                        occurrence: 2,
+                    }],
+                });
+
+                // Assert
+                expect(store.getConsolidation(merged)!.clusters[0]?.verificationStatus).toBe('pending');
+            });
+
+            it('should carry forward the latest verdict when a member set was adjudicated twice', () =>
+            {
+                // Arrange
+                const first = savedClusters();
+                const verified = first.clusters[1]!;
+                const memberIds = verified.members.map(m => m.id);
+                for (const verdict of ['confirmed', 'undetermined'] as const)
+                {
+                    store.saveVerification({
+                        clusterId: verified.id, verdict,
+                        rationale: `Pass for ${verdict}.`, confidence: 'Medium.', costUsd: 0.1,
+                    });
+                }
+
+                // Act
+                const again = store.saveConsolidation({
+                    owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+                    runIds: store.getConsolidation(first.consolidationId)!.runIds,
+                    clusters: [{
+                        memberIds,
+                        representativeId: verified.representative.id,
+                        severity: verified.severity,
+                        occurrence: verified.occurrence,
+                    }],
+                });
+
+                // Assert
+                expect(store.getConsolidation(again)!.clusters[0]?.verificationStatus).toBe('undetermined');
+            });
+
             it('should reject a verification for an unknown cluster and roll back the row', () =>
             {
                 // Arrange

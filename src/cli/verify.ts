@@ -10,13 +10,14 @@ import { consolidationId } from '../types/ids.js';
 import { verifyPending } from '../verify/verify.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
-const USAGE = 'Usage: npm run verify -- <consolidation-id> [--max-turns N]';
+const USAGE = 'Usage: npm run verify -- <consolidation-id> [--max-turns N] [--reverify]';
 
 async function main(): Promise<number>
 {
     const args = process.argv.slice(2);
     const positional: string[] = [];
     let maxTurns: number | undefined;
+    let reverify = false;
     for (let i = 0; i < args.length; i++)
     {
         const arg = args[i]!;
@@ -28,6 +29,10 @@ async function main(): Promise<number>
                 throw new Error(`--max-turns needs a value.\n${USAGE}`);
             }
             maxTurns = Number(value);
+        }
+        else if (arg === '--reverify')
+        {
+            reverify = true;
         }
         else
         {
@@ -57,13 +62,15 @@ async function main(): Promise<number>
 
         const summary = await verifyPending(store, github, consolidation, {
             model,
+            reverify,
             ...(maxTurns !== undefined ? { maxTurns } : {}),
             ...printVerdictProgress(),
         });
 
         if (summary.attempted === 0)
         {
-            console.log(`No pending occurrence-1 clusters in consolidation #${id}.`);
+            console.log(`No occurrence-1 clusters awaiting a verdict in consolidation #${id}`
+                + `${reverify ? '' : ' (--reverify re-tests settled ones)'}.`);
         }
         else
         {

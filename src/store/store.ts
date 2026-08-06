@@ -84,6 +84,15 @@ export interface Verification extends Identified<'Verification'>, Created
 
 export type NewVerification = New<Verification>;
 
+// A defect's stable identity across consolidations. Cluster rows are one
+// judge call's opinion and get new ids every time the same runs are
+// re-clustered; the set of findings they group does not. Sorted so two
+// judges listing the same members in different orders still match.
+export function memberSetKey(findingIds: FindingId[]): string
+{
+    return [...findingIds].sort((a, b) => a - b).join(',');
+}
+
 // A cluster at create time references its findings by id; the entity carries
 // them materialized. That difference is real shape, not server assignment,
 // so NewCluster is declared rather than derived.
@@ -338,6 +347,13 @@ export class ReviewStore
 
     saveConsolidation(consolidation: NewConsolidation): ConsolidationId
     {
+        // Verdicts are earned by a defect, not by the cluster row that
+        // happened to represent it, so a re-clustering of the same findings
+        // starts from what is already known instead of re-buying it. Exact
+        // member-set matches only: a group the judge split or merged is a
+        // different claim, and pending is the honest answer there.
+        const inherited = this.verdictsByMemberSet();
+
         this.db.exec('BEGIN');
         try
         {
@@ -350,7 +366,8 @@ export class ReviewStore
             const id = consolidationId(Number(result.lastInsertRowid));
 
             const insertCluster = this.db.prepare(
-                'INSERT INTO clusters (consolidation_id, representative_finding_id, severity, occurrence) VALUES (?, ?, ?, ?)',
+                `INSERT INTO clusters (consolidation_id, representative_finding_id, severity, occurrence, verification_status)
+                 VALUES (?, ?, ?, ?, ?)`,
             );
             const insertMember = this.db.prepare(
                 'INSERT INTO cluster_members (cluster_id, finding_id) VALUES (?, ?)',
@@ -359,6 +376,7 @@ export class ReviewStore
             {
                 const newClusterId = clusterId(Number(insertCluster.run(
                     id, cluster.representativeId, cluster.severity, cluster.occurrence,
+                    inherited.get(memberSetKey(cluster.memberIds)) ?? 'pending',
                 ).lastInsertRowid));
                 for (const memberId of cluster.memberIds)
                 {
@@ -485,6 +503,27 @@ export class ReviewStore
             this.db.exec('ROLLBACK');
             throw error;
         }
+    }
+
+    // The latest verdict for every member set that has ever been adjudicated.
+    // Ordered by verification id so the most recently earned verdict wins when
+    // two cluster rows over the same findings disagree — the same latest-wins
+    // rule the per-cluster status follows.
+    private verdictsByMemberSet(): Map<string, Verdict>
+    {
+        const adjudicated = this.db.prepare(
+            'SELECT cluster_id, verdict FROM verifications ORDER BY id',
+        ).all() as unknown as Array<{ cluster_id: number; verdict: string }>;
+        const members = this.db.prepare('SELECT finding_id FROM cluster_members WHERE cluster_id = ?');
+
+        const verdicts = new Map<string, Verdict>();
+        for (const row of adjudicated)
+        {
+            const findingIds = (members.all(row.cluster_id) as unknown as Array<{ finding_id: number }>)
+                .map(m => findingId(m.finding_id));
+            verdicts.set(memberSetKey(findingIds), row.verdict as Verdict);
+        }
+        return verdicts;
     }
 
     getVerifications(cluster: ClusterId): Verification[]

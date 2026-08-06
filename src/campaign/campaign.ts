@@ -38,6 +38,7 @@ export interface CampaignOptions
     maxTurns?: number;
     patience?: number;
     verify: boolean;
+    reverify?: boolean;
     onRoundStart?: (round: number, of: number) => void;
     onReviewProgress?: (event: string) => void;
     onRun?: (outcome: RoundOutcome) => void;
@@ -186,6 +187,7 @@ export async function runCampaign(
         const consolidation = store.getConsolidation(latest.id)!;
         campaign.verification = await verifyPending(store, client, consolidation, {
             model: opts.model,
+            ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
             ...opts.verifyReporting,
         });
     }

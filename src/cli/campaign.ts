@@ -10,7 +10,7 @@ import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
-    + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify]';
+    + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]';
 
 const DEFAULT_MAX_RUNS = 3;
 
@@ -20,6 +20,7 @@ interface CampaignArgs extends CampaignTarget
     patience?: number;
     maxTurns?: number;
     verify: boolean;
+    reverify: boolean;
 }
 
 function parseArgs(argv: string[]): CampaignArgs
@@ -30,6 +31,7 @@ function parseArgs(argv: string[]): CampaignArgs
     let patience: number | undefined;
     let maxTurns: number | undefined;
     let verify = true;
+    let reverify = false;
 
     for (let i = 0; i < argv.length; i++)
     {
@@ -54,6 +56,10 @@ function parseArgs(argv: string[]): CampaignArgs
         {
             verify = false;
         }
+        else if (arg === '--reverify')
+        {
+            reverify = true;
+        }
         else
         {
             positional.push(arg);
@@ -76,7 +82,7 @@ function parseArgs(argv: string[]): CampaignArgs
     }
 
     return {
-        owner, repo, head, base, maxRuns, verify,
+        owner, repo, head, base, maxRuns, verify, reverify,
         ...(patience !== undefined ? { patience } : {}),
         ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
@@ -137,6 +143,7 @@ async function main(): Promise<number>
             model,
             maxRuns: args.maxRuns,
             verify: args.verify,
+            reverify: args.reverify,
             ...(args.patience !== undefined ? { patience: args.patience } : {}),
             ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
             onBaseline: (id, coverage) =>

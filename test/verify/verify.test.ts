@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Cluster, Finding, VerificationStatus } from '../../src/store/store.js';
 import { clusterId, findingId, runId } from '../../src/types/ids.js';
-import { buildVerificationPrompt, pendingOccurrenceOne, verificationResponseSchema } from '../../src/verify/verify.js';
+import { buildVerificationPrompt, verificationQueue, verificationResponseSchema } from '../../src/verify/verify.js';
 
 function finding(id: number, run: number, overrides: Partial<Finding> = {}): Finding
 {
@@ -84,7 +84,7 @@ describe('buildVerificationPrompt', () =>
     });
 });
 
-describe('pendingOccurrenceOne', () =>
+describe('verificationQueue', () =>
 {
     it('should keep only pending occurrence-1 clusters', () =>
     {
@@ -92,7 +92,7 @@ describe('pendingOccurrenceOne', () =>
         const clusters = [cluster(1, 1), cluster(2, 3), cluster(3, 1)];
 
         // Act
-        const selected = pendingOccurrenceOne(clusters);
+        const selected = verificationQueue(clusters);
 
         // Assert
         expect(selected.map(c => c.id)).toEqual([clusterId(1), clusterId(3)]);
@@ -106,10 +106,26 @@ describe('pendingOccurrenceOne', () =>
             cluster(i + 1, 1, { verificationStatus: status }));
 
         // Act
-        const selected = pendingOccurrenceOne(clusters);
+        const selected = verificationQueue(clusters);
 
         // Assert
         expect(selected).toEqual([]);
+    });
+
+    it('should re-test settled clusters when reverify is asked for', () =>
+    {
+        // Arrange
+        const clusters = [
+            cluster(1, 1, { verificationStatus: 'confirmed' }),
+            cluster(2, 1, { verificationStatus: 'pending' }),
+            cluster(3, 2, { verificationStatus: 'pending' }),
+        ];
+
+        // Act
+        const selected = verificationQueue(clusters, true);
+
+        // Assert
+        expect(selected.map(c => c.id)).toEqual([clusterId(1), clusterId(2)]);
     });
 });
 

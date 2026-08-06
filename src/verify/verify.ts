@@ -52,10 +52,13 @@ export const verificationResponseSchema = z.object({
 export const verificationResponseJsonSchema = z.toJSONSchema(verificationResponseSchema, { target: 'draft-7' });
 export type VerificationResponse = z.infer<typeof verificationResponseSchema>;
 
-// The verify entry point's cluster selection: the unverified singletons.
-export function pendingOccurrenceOne(clusters: Cluster[]): Cluster[]
+// What to adjudicate: findings only one run reported. Already-verified
+// clusters are skipped unless reverify is asked for — re-testing a settled
+// finding is a calibration act (verdicts have been seen to flip when the
+// second run searched different files), so it should be deliberate.
+export function verificationQueue(clusters: Cluster[], reverify = false): Cluster[]
 {
-    return clusters.filter(c => c.occurrence === 1 && c.verificationStatus === 'pending');
+    return clusters.filter(c => c.occurrence === 1 && (reverify || c.verificationStatus === 'pending'));
 }
 
 export function buildVerificationPrompt(cluster: Cluster, totalRuns: number): string
@@ -179,6 +182,7 @@ export async function verifyCluster(
 // callback, not console: stdout belongs to the CLI layer.
 export interface VerifyPendingOptions extends VerifyRunOptions
 {
+    reverify?: boolean;
     onCluster?: (cluster: Cluster) => void;
     onVerdict?: (cluster: Cluster, response: VerificationResponse, stats: VerificationStats) => void;
     onFailure?: (cluster: Cluster, reason: string) => void;
@@ -202,7 +206,7 @@ export async function verifyPending(
     opts: VerifyPendingOptions = {},
 ): Promise<VerifyPendingSummary>
 {
-    const pending = pendingOccurrenceOne(consolidation.clusters);
+    const pending = verificationQueue(consolidation.clusters, opts.reverify);
     const target = { base: consolidation.base, head: consolidation.head };
     const totalRuns = consolidation.runIds.length;
 
