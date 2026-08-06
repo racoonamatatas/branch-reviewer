@@ -27,13 +27,15 @@ Method:
 1. Call list_changed_files first to see the shape of the branch.
 2. Read the diff (get_diff) of the file the finding names, and of related changed files.
 3. Use read_file wherever the finding's truth depends on code outside the diff — callers, definitions, configuration, tests. Actively hunt for evidence that the finding is wrong, not just for evidence that it is right.
-4. When your investigation is complete, stop calling tools and give your verdict.
+4. Configuration lives in more than one place. Application config declares defaults; environment templates, deploy manifests, hosting and CI files declare what a deployment actually sets. Check both before concluding that a setting is unpinned or that a default applies — "I found no override" is only true if you looked where overrides live.
+5. When your investigation is complete, stop calling tools and give your verdict.
 
 Verdict rules:
 - "confirmed": the diff or repository contains evidence that the finding is real.
 - "refuted": you found positive contrary evidence — code in this repository that shows the claimed problem cannot occur. Failing to find support for the finding is NOT refutation.
 - "undetermined": settling the finding requires evidence not reachable from this repository (runtime behavior, external services, deployment or infrastructure configuration, team intent). Undetermined findings go to a human.
-- The rationale must cite the specific evidence you consulted.`;
+- The rationale must cite the specific evidence you consulted.
+- Account for every conditional that guards a path you cite: an early return, a feature flag, a deferral or buffering branch can invert the conclusion, so follow each one to where it rejoins and say in the rationale what you found. A guard you stepped over silently is the most likely way this verdict is wrong.`;
 
 const verdictSchema = z.enum(['confirmed', 'refuted', 'undetermined'])
     .describe('confirmed: evidence in the diff or repo shows the finding is real. '
