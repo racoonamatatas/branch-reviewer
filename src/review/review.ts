@@ -144,7 +144,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     return { status: 'submitted', review: reviewSchema.parse(result.structured_output), stats };
 }
 
-function previewArgs(input: unknown): string
+export function previewArgs(input: unknown): string
 {
     const json = JSON.stringify(input) ?? '';
     return json.length <= 80 ? json : json.slice(0, 77) + '...';

@@ -7,6 +7,7 @@
         "review": "tsx --env-file-if-exists=.env src/cli/cli.ts",
         "history": "tsx src/cli/history.ts",
         "consolidate": "tsx --env-file-if-exists=.env src/cli/consolidate.ts",
+        "verify": "tsx --env-file-if-exists=.env src/cli/verify.ts",
         "eval:freeze": "tsx eval/freeze.ts",
         "eval:judge": "tsx --env-file-if-exists=.env eval/judge.eval.ts",
         "test": "vitest run",
