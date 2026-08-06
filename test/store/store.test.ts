@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
+import type { NewFinding } from '../../src/schema/schema.js';
 import { ReviewStore } from '../../src/store/store.js';
-import type { RunRecord } from '../../src/store/store.js';
+import type { Finding, NewRun } from '../../src/store/store.js';
+import type { New } from '../../src/types/common.js';
 import { consolidationId, runId } from '../../src/types/ids.js';
 
-const submittedRun: RunRecord = {
-    createdAt: '2026-08-05T15:00:00.000Z',
+const submittedRun: NewRun = {
     owner: 'acme',
     repo: 'widgets',
     head: 'feature-x',
@@ -23,8 +24,7 @@ const submittedRun: RunRecord = {
     usage: { inputTokens: 100, outputTokens: 200, cacheReadInputTokens: 3000, cacheCreationInputTokens: 400 },
 };
 
-const abortedRun: RunRecord = {
-    createdAt: '2026-08-05T16:00:00.000Z',
+const abortedRun: NewRun = {
     owner: 'acme',
     repo: 'widgets',
     head: 'feature-y',
@@ -36,6 +36,14 @@ const abortedRun: RunRecord = {
     costUsd: 1.25,
     usage: { inputTokens: 50, outputTokens: 60, cacheReadInputTokens: 700, cacheCreationInputTokens: 80 },
 };
+
+// Compile-time contract: the wire finding (Zod-sourced in schema.ts) must be
+// exactly the Finding entity minus what saveRun assigns. Drift fails typecheck.
+it('should keep the wire finding equal to the entity minus server-assigned fields', () =>
+{
+    // Assert
+    expectTypeOf<NewFinding>().toEqualTypeOf<Omit<New<Finding>, 'runId'>>();
+});
 
 describe('ReviewStore', () =>
 {
@@ -60,7 +68,19 @@ describe('ReviewStore', () =>
         const stored = store.getRun(id);
 
         // Assert
-        expect(stored).toEqual({ id, ...submittedRun });
+        expect(stored).toEqual({ id, createdAt: expect.any(String) as unknown, ...submittedRun });
+    });
+
+    it('should stamp createdAt at save time, never take it from the caller', () =>
+    {
+        // Arrange
+        const id = store.saveRun(submittedRun);
+
+        // Act
+        const stored = store.getRun(id);
+
+        // Assert
+        expect(stored?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     });
 
     it('should round-trip an aborted run without a review', () =>
@@ -72,7 +92,7 @@ describe('ReviewStore', () =>
         const stored = store.getRun(id);
 
         // Assert
-        expect(stored).toEqual({ id, ...abortedRun });
+        expect(stored).toEqual({ id, createdAt: expect.any(String) as unknown, ...abortedRun });
         expect(stored?.review).toBeUndefined();
     });
 
@@ -102,7 +122,7 @@ describe('ReviewStore', () =>
         expect(summaries.map(s => s.id)).toEqual([second, first]);
         expect(summaries[1]).toEqual({
             id: first,
-            createdAt: submittedRun.createdAt,
+            createdAt: expect.any(String) as unknown,
             target: 'acme/widgets feature-x → main',
             status: 'submitted',
             findingsCount: 2,
@@ -143,7 +163,6 @@ describe('ReviewStore', () =>
             const [a1, a2] = store.getFindings(runA);
             const [b1] = store.getFindings(runB);
             const consolidationId = store.saveConsolidation({
-                createdAt: '2026-08-05T17:00:00.000Z',
                 owner: 'acme',
                 repo: 'widgets',
                 head: 'feature-x',

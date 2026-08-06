@@ -79,7 +79,6 @@ function saveRun(args: CliArgs, model: string, result: ReviewResult): void
     {
         const store = new ReviewStore(DEFAULT_DB_PATH);
         const id = store.saveRun({
-            createdAt: new Date().toISOString(),
             owner: args.owner,
             repo: args.repo,
             head: args.head,

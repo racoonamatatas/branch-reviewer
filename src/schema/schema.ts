@@ -22,7 +22,13 @@ export const reviewSchema = z.object({
 });
 
 export type Severity = z.infer<typeof severitySchema>;
-export type Finding = z.infer<typeof findingSchema>;
+
+// The wire finding: what the reviewer emits and what saveRun is handed — the
+// Finding entity minus everything assigned at save (id, runId). Zod is its
+// runtime source of truth; the store's type test proves it stays exactly
+// that subtraction.
+export type NewFinding = z.infer<typeof findingSchema>;
+
 export type Review = z.infer<typeof reviewSchema>;
 
 export const reviewJsonSchema = z.toJSONSchema(reviewSchema, { target: 'draft-7' });

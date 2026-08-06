@@ -8,19 +8,15 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { assertSubscriptionCredit } from '../review/review.js';
-import type { Finding, Severity } from '../schema/schema.js';
+import type { Severity } from '../schema/schema.js';
+import type { Finding } from '../store/store.js';
 import { findingId, toTypedId } from '../types/ids.js';
-import type { FindingId, RunId } from '../types/ids.js';
+import type { FindingId } from '../types/ids.js';
 
-// A finding as consolidation sees it: the immutable fact plus its DB identity
-// and which run produced it.
-export interface ConsolidatableFinding extends Finding
-{
-    id: FindingId;
-    runId: RunId;
-}
-
-export interface Cluster
+// What the judge proposes, not what the store holds: a partition of finding
+// ids. It becomes a Cluster entity only after validation, enrichment
+// (severity, occurrence) and a save.
+export interface ClusterProposal
 {
     memberIds: FindingId[];
     representativeId: FindingId;
@@ -53,7 +49,7 @@ Rules:
 - Never group findings merely because they touch the same file or method.
 - As representative, pick the member whose formulation is the sharpest and most complete.`;
 
-export function buildJudgePrompt(findings: ConsolidatableFinding[]): string
+export function buildJudgePrompt(findings: Finding[]): string
 {
     const lines = findings.map(f =>
         `id ${f.id} (run ${f.runId}) [${f.severity}] ${f.file}${f.line !== undefined ? `:${f.line}` : ''} — ${f.title}\n${f.detail}`);
@@ -61,7 +57,7 @@ export function buildJudgePrompt(findings: ConsolidatableFinding[]): string
 }
 
 // Returns a violation description, or undefined when the partition is valid.
-export function validatePartition(findings: ConsolidatableFinding[], clusters: Cluster[]): string | undefined
+export function validatePartition(findings: Finding[], clusters: ClusterProposal[]): string | undefined
 {
     const expected = new Set<FindingId>(findings.map(f => f.id));
     const seen = new Set<FindingId>();
@@ -108,7 +104,7 @@ export function maxSeverity(severities: Severity[]): Severity
     return 'nit';
 }
 
-export function distinctRuns(findings: ConsolidatableFinding[]): number
+export function distinctRuns(findings: Finding[]): number
 {
     return new Set(findings.map(f => f.runId)).size;
 }
@@ -118,7 +114,7 @@ export interface ClusteringOptions
     model?: string;
 }
 
-export async function runClustering(findings: ConsolidatableFinding[], opts: ClusteringOptions = {}): Promise<Cluster[]>
+export async function runClustering(findings: Finding[], opts: ClusteringOptions = {}): Promise<ClusterProposal[]>
 {
     assertSubscriptionCredit();
 
@@ -142,7 +138,7 @@ export async function runClustering(findings: ConsolidatableFinding[], opts: Clu
     throw new Error(`Clustering failed: the judge produced an invalid partition twice (last violation: ${violation}).`);
 }
 
-async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Cluster[]>
+async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<ClusterProposal[]>
 {
     const stream = query({
         prompt,

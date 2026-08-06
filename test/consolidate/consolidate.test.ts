@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildJudgePrompt, distinctRuns, maxSeverity, validatePartition } from '../../src/consolidate/consolidate.js';
-import type { Cluster, ConsolidatableFinding } from '../../src/consolidate/consolidate.js';
+import type { ClusterProposal } from '../../src/consolidate/consolidate.js';
+import type { Finding } from '../../src/store/store.js';
 import { findingId, runId } from '../../src/types/ids.js';
 
-function finding(id: number, run: number, overrides: Partial<ConsolidatableFinding> = {}): ConsolidatableFinding
+function finding(id: number, run: number, overrides: Partial<Finding> = {}): Finding
 {
     return {
         id: findingId(id),
@@ -17,7 +18,7 @@ function finding(id: number, run: number, overrides: Partial<ConsolidatableFindi
     };
 }
 
-function cluster(memberIds: number[], representativeId: number): Cluster
+function cluster(memberIds: number[], representativeId: number): ClusterProposal
 {
     return { memberIds: memberIds.map(findingId), representativeId: findingId(representativeId) };
 }
@@ -55,7 +56,7 @@ describe('validatePartition', () =>
     it('should accept a complete one-to-one partition', () =>
     {
         // Arrange
-        const clusters: Cluster[] = [cluster([1, 3], 3), cluster([2], 2)];
+        const clusters: ClusterProposal[] = [cluster([1, 3], 3), cluster([2], 2)];
 
         // Act
         const violation = validatePartition(findings, clusters);
@@ -67,7 +68,7 @@ describe('validatePartition', () =>
     it('should reject an unknown finding id', () =>
     {
         // Arrange
-        const clusters: Cluster[] = [cluster([1, 2, 3, 4], 1)];
+        const clusters: ClusterProposal[] = [cluster([1, 2, 3, 4], 1)];
 
         // Act
         const violation = validatePartition(findings, clusters);
@@ -79,7 +80,7 @@ describe('validatePartition', () =>
     it('should reject a finding placed in two clusters', () =>
     {
         // Arrange
-        const clusters: Cluster[] = [cluster([1, 2], 1), cluster([2, 3], 3)];
+        const clusters: ClusterProposal[] = [cluster([1, 2], 1), cluster([2, 3], 3)];
 
         // Act
         const violation = validatePartition(findings, clusters);
@@ -91,7 +92,7 @@ describe('validatePartition', () =>
     it('should reject a missing finding', () =>
     {
         // Arrange
-        const clusters: Cluster[] = [cluster([1, 2], 1)];
+        const clusters: ClusterProposal[] = [cluster([1, 2], 1)];
 
         // Act
         const violation = validatePartition(findings, clusters);
@@ -103,7 +104,7 @@ describe('validatePartition', () =>
     it('should reject a representative that is not a member', () =>
     {
         // Arrange
-        const clusters: Cluster[] = [cluster([1, 2], 3), cluster([3], 3)];
+        const clusters: ClusterProposal[] = [cluster([1, 2], 3), cluster([3], 3)];
 
         // Act
         const violation = validatePartition(findings, clusters);

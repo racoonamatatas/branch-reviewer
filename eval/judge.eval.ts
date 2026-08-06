@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { runClustering } from '../src/consolidate/consolidate.js';
-import type { ConsolidatableFinding } from '../src/consolidate/consolidate.js';
+import type { Finding } from '../src/store/store.js';
 import { findingId, runId } from '../src/types/ids.js';
 import { FIXTURE_PATH } from './fixture.js';
 
@@ -15,7 +15,7 @@ import { FIXTURE_PATH } from './fixture.js';
 interface Fixture
 {
     description: string;
-    findings: Array<Omit<ConsolidatableFinding, 'id' | 'runId'> & { id: number; runId: number }>;
+    findings: Array<Omit<Finding, 'id' | 'runId'> & { id: number; runId: number }>;
     expectedClusters: number[][];
 }
 
@@ -50,7 +50,7 @@ async function main(): Promise<number>
     console.log(fixture.description);
     console.log(`Clustering ${fixture.findings.length} findings...`);
 
-    const findings: ConsolidatableFinding[] = fixture.findings.map(f =>
+    const findings: Finding[] = fixture.findings.map(f =>
         ({ ...f, id: findingId(f.id), runId: runId(f.runId) }));
     const clusters = await runClustering(findings, { model: process.env.REVIEW_MODEL });
     const actual = clusters.map(c => c.memberIds);

@@ -5,16 +5,20 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Finding, Review, Severity } from '../schema/schema.js';
+import type { NewFinding, Review, Severity } from '../schema/schema.js';
+import type { Created, Identified, New } from '../types/common.js';
 import { clusterId, consolidationId, findingId, runId } from '../types/ids.js';
-import type { ClusterId, ConsolidationId, FindingId, RunId } from '../types/ids.js';
+import type { ConsolidationId, FindingId, RunId } from '../types/ids.js';
 import type { TokenUsage } from '../usage/usage.js';
 
 export const DEFAULT_DB_PATH = 'data/reviews.db';
 
-export interface RunRecord
+// Entities carry the bare noun; New* shapes for the create calls derive down
+// from them by subtraction. createdAt is store-assigned, exactly like id —
+// saveRun and saveConsolidation stamp it, callers never pass it.
+
+export interface Run extends Identified<'Run'>, Created
 {
-    createdAt: string;  // ISO 8601
     owner: string;
     repo: string;
     head: string;
@@ -28,71 +32,60 @@ export interface RunRecord
     usage: TokenUsage;
 }
 
-export interface StoredRun extends RunRecord
-{
-    id: RunId;
-}
+export type NewRun = New<Run>;
 
-export interface RunSummary
+export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 'costUsd'>
 {
-    id: RunId;
-    createdAt: string;
     target: string;  // "owner/repo head → base"
-    status: 'submitted' | 'aborted';
     findingsCount: number;
-    costUsd: number;
 }
 
-export interface StoredFinding extends Finding
+export interface Finding extends Identified<'Finding'>
 {
-    id: FindingId;
     runId: RunId;
+    file: string;
+    line?: number;
+    severity: Severity;
+    title: string;
+    detail: string;
+    suggestion?: string;
 }
 
-export interface ConsolidationRecord
+export interface Consolidation extends Identified<'Consolidation'>, Created
 {
-    createdAt: string;
     owner: string;
     repo: string;
     head: string;
     base: string;
     runIds: RunId[];
-    clusters: Array<{
-        memberIds: FindingId[];
-        representativeId: FindingId;
-        severity: Severity;
-        occurrence: number;
-    }>;
+    clusters: Cluster[];
 }
 
-export interface StoredCluster
+export interface Cluster extends Identified<'Cluster'>
 {
-    id: ClusterId;
     severity: Severity;
     occurrence: number;
     verificationStatus: 'pending' | 'confirmed' | 'refuted';
-    representative: StoredFinding;
-    members: StoredFinding[];
+    representative: Finding;
+    members: Finding[];
 }
 
-export interface StoredConsolidation
+// A cluster at create time references its findings by id; the entity carries
+// them materialized. That difference is real shape, not server assignment,
+// so NewCluster is declared rather than derived.
+export interface NewCluster
 {
-    id: ConsolidationId;
-    createdAt: string;
-    owner: string;
-    repo: string;
-    head: string;
-    base: string;
-    runIds: RunId[];
-    clusters: StoredCluster[];
+    memberIds: FindingId[];
+    representativeId: FindingId;
+    severity: Severity;
+    occurrence: number;
 }
 
-export interface ConsolidationSummary
+export type NewConsolidation = Omit<New<Consolidation>, 'clusters'> & { clusters: NewCluster[] };
+
+export interface ConsolidationSummary extends Pick<Consolidation, 'id' | 'createdAt' | 'runIds'>
 {
-    id: ConsolidationId;
-    createdAt: string;
     target: string;
-    runIds: RunId[];
     clusterCount: number;
 }
 
@@ -208,7 +201,7 @@ export class ReviewStore
         }
     }
 
-    saveRun(record: RunRecord): RunId
+    saveRun(run: NewRun): RunId
     {
         this.db.exec('BEGIN');
         try
@@ -218,18 +211,18 @@ export class ReviewStore
                                    turns, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ).run(
-                record.createdAt, record.owner, record.repo, record.head, record.base,
-                record.model, record.status, record.reason ?? null, record.review?.summary ?? null,
-                record.turns, record.costUsd,
-                record.usage.inputTokens, record.usage.outputTokens,
-                record.usage.cacheReadInputTokens, record.usage.cacheCreationInputTokens,
+                new Date().toISOString(), run.owner, run.repo, run.head, run.base,
+                run.model, run.status, run.reason ?? null, run.review?.summary ?? null,
+                run.turns, run.costUsd,
+                run.usage.inputTokens, run.usage.outputTokens,
+                run.usage.cacheReadInputTokens, run.usage.cacheCreationInputTokens,
             );
             const id = runId(Number(result.lastInsertRowid));
 
             const insertFinding = this.db.prepare(
                 'INSERT INTO findings (run_id, file, line, severity, title, detail, suggestion) VALUES (?, ?, ?, ?, ?, ?, ?)',
             );
-            for (const f of record.review?.findings ?? [])
+            for (const f of run.review?.findings ?? [])
             {
                 insertFinding.run(id, f.file, f.line ?? null, f.severity, f.title, f.detail, f.suggestion ?? null);
             }
@@ -264,7 +257,7 @@ export class ReviewStore
         }));
     }
 
-    getRun(id: RunId): StoredRun | undefined
+    getRun(id: RunId): Run | undefined
     {
         const row = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as unknown as RunRow | undefined;
         if (row === undefined)
@@ -276,7 +269,7 @@ export class ReviewStore
             'SELECT file, line, severity, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
         ).all(id) as unknown as FindingRow[];
 
-        const findings: Finding[] = findingRows.map(toFinding);
+        const findings: NewFinding[] = findingRows.map(toFinding);
 
         return {
             id: runId(row.id),
@@ -286,7 +279,7 @@ export class ReviewStore
             head: row.head,
             base: row.base,
             model: row.model,
-            status: row.status as StoredRun['status'],
+            status: row.status as Run['status'],
             ...(row.reason !== null ? { reason: row.reason } : {}),
             ...(row.summary !== null ? { review: { summary: row.summary, findings } } : {}),
             turns: row.turns,
@@ -301,7 +294,7 @@ export class ReviewStore
     }
 
     // Findings with their DB identity and run provenance — the consolidation input.
-    getFindings(run: RunId): StoredFinding[]
+    getFindings(run: RunId): Finding[]
     {
         const rows = this.db.prepare(
             'SELECT id, run_id, file, line, severity, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
@@ -309,7 +302,7 @@ export class ReviewStore
         return rows.map(row => ({ id: findingId(row.id), runId: runId(row.run_id), ...toFinding(row) }));
     }
 
-    saveConsolidation(record: ConsolidationRecord): ConsolidationId
+    saveConsolidation(consolidation: NewConsolidation): ConsolidationId
     {
         this.db.exec('BEGIN');
         try
@@ -317,8 +310,8 @@ export class ReviewStore
             const result = this.db.prepare(
                 'INSERT INTO consolidations (created_at, owner, repo, head, base, run_ids) VALUES (?, ?, ?, ?, ?, ?)',
             ).run(
-                record.createdAt, record.owner, record.repo, record.head, record.base,
-                JSON.stringify(record.runIds),
+                new Date().toISOString(), consolidation.owner, consolidation.repo, consolidation.head, consolidation.base,
+                JSON.stringify(consolidation.runIds),
             );
             const id = consolidationId(Number(result.lastInsertRowid));
 
@@ -328,7 +321,7 @@ export class ReviewStore
             const insertMember = this.db.prepare(
                 'INSERT INTO cluster_members (cluster_id, finding_id) VALUES (?, ?)',
             );
-            for (const cluster of record.clusters)
+            for (const cluster of consolidation.clusters)
             {
                 const newClusterId = clusterId(Number(insertCluster.run(
                     id, cluster.representativeId, cluster.severity, cluster.occurrence,
@@ -371,7 +364,7 @@ export class ReviewStore
         }));
     }
 
-    getConsolidation(id: ConsolidationId): StoredConsolidation | undefined
+    getConsolidation(id: ConsolidationId): Consolidation | undefined
     {
         const row = this.db.prepare('SELECT * FROM consolidations WHERE id = ?').get(id) as unknown as {
             id: number; created_at: string; owner: string; repo: string; head: string; base: string; run_ids: string;
@@ -393,7 +386,7 @@ export class ReviewStore
              WHERE cm.cluster_id = ? ORDER BY f.id`,
         );
 
-        const clusters: StoredCluster[] = clusterRows.map(c =>
+        const clusters: Cluster[] = clusterRows.map(c =>
         {
             const members = (memberQuery.all(c.id) as unknown as Array<FindingRow & { id: number; run_id: number }>)
                 .map(m => ({ id: findingId(m.id), runId: runId(m.run_id), ...toFinding(m) }));
@@ -406,7 +399,7 @@ export class ReviewStore
                 id: clusterId(c.id),
                 severity: c.severity as Severity,
                 occurrence: c.occurrence,
-                verificationStatus: c.verification_status as StoredCluster['verificationStatus'],
+                verificationStatus: c.verification_status as Cluster['verificationStatus'],
                 representative,
                 members,
             };
@@ -430,7 +423,7 @@ export class ReviewStore
     }
 }
 
-function toFinding(row: FindingRow): Finding
+function toFinding(row: FindingRow): NewFinding
 {
     return {
         file: row.file,

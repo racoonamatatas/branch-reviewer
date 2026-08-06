@@ -3,9 +3,8 @@
 // round-trip, never a parallel code path.
 
 import { distinctRuns, maxSeverity, runClustering } from '../consolidate/consolidate.js';
-import type { ConsolidatableFinding } from '../consolidate/consolidate.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
-import type { StoredRun } from '../store/store.js';
+import type { Finding, Run } from '../store/store.js';
 import { consolidationId, runId } from '../types/ids.js';
 import type { ConsolidationId, RunId } from '../types/ids.js';
 import { printConsolidation } from './render.js';
@@ -73,7 +72,7 @@ function show(store: ReviewStore, id: ConsolidationId): number
 
 async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
 {
-    const runs: StoredRun[] = [];
+    const runs: Run[] = [];
     for (const id of runIds)
     {
         const run = store.getRun(id);
@@ -97,7 +96,7 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
         }
     }
 
-    const findings: ConsolidatableFinding[] = runIds.flatMap(id => store.getFindings(id));
+    const findings: Finding[] = runIds.flatMap(id => store.getFindings(id));
     if (findings.length === 0)
     {
         throw new Error('The selected runs have no findings to consolidate.');
@@ -108,7 +107,6 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
 
     const byId = new Map(findings.map(f => [f.id, f]));
     const savedId = store.saveConsolidation({
-        createdAt: new Date().toISOString(),
         owner: first.owner,
         repo: first.repo,
         head: first.head,

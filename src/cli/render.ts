@@ -4,7 +4,7 @@
 
 import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
-import type { StoredConsolidation } from '../store/store.js';
+import type { Consolidation } from '../store/store.js';
 import { diffUsage, isZeroUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 
@@ -52,7 +52,7 @@ export function printStats(stats: ReviewRunStats, verbose: boolean): void
     }
 }
 
-export function printConsolidation(consolidation: StoredConsolidation): void
+export function printConsolidation(consolidation: Consolidation): void
 {
     const totalRuns = consolidation.runIds.length;
     console.log(`\nconsolidation #${consolidation.id}  ${consolidation.createdAt}  ${consolidation.owner}/${consolidation.repo} "${consolidation.head}" against "${consolidation.base}"`);
