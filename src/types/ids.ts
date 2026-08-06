@@ -28,3 +28,6 @@ export const consolidationId = idConstructor<'Consolidation'>('ConsolidationId')
 
 export type ClusterId = Id<'Cluster'>;
 export const clusterId = idConstructor<'Cluster'>('ClusterId');
+
+export type VerificationId = Id<'Verification'>;
+export const verificationId = idConstructor<'Verification'>('VerificationId');

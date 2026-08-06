@@ -3,7 +3,7 @@ import type { NewFinding } from '../../src/schema/schema.js';
 import { ReviewStore } from '../../src/store/store.js';
 import type { Finding, NewRun } from '../../src/store/store.js';
 import type { New } from '../../src/types/common.js';
-import { consolidationId, runId } from '../../src/types/ids.js';
+import { clusterId, consolidationId, runId } from '../../src/types/ids.js';
 
 const submittedRun: NewRun = {
     owner: 'acme',
@@ -225,6 +225,99 @@ describe('ReviewStore', () =>
 
             // Assert
             expect(consolidation).toBeUndefined();
+        });
+
+        describe('verifications', () =>
+        {
+            function savedClusters()
+            {
+                const saved = savedConsolidation();
+                const consolidation = store.getConsolidation(saved.consolidationId)!;
+                return { consolidationId: saved.consolidationId, clusters: consolidation.clusters };
+            }
+
+            it('should record a verification and reflect it as the cluster status', () =>
+            {
+                // Arrange
+                const { consolidationId: id, clusters } = savedClusters();
+
+                // Act
+                store.saveVerification({
+                    clusterId: clusters[1]!.id,
+                    verdict: 'confirmed',
+                    rationale: 'The diff shows the unbounded query.',
+                    confidence: 'High; only a schema change would overturn it.',
+                    costUsd: 0.12,
+                });
+
+                // Assert
+                const reread = store.getConsolidation(id)!;
+                expect(reread.clusters[1]?.verificationStatus).toBe('confirmed');
+                expect(reread.clusters[0]?.verificationStatus).toBe('pending');
+            });
+
+            it('should round-trip verification fields with a store-stamped createdAt', () =>
+            {
+                // Arrange
+                const { clusters } = savedClusters();
+                const cluster = clusters[1]!;
+
+                // Act
+                const id = store.saveVerification({
+                    clusterId: cluster.id,
+                    verdict: 'undetermined',
+                    rationale: 'The consumer lives outside this repo.',
+                    confidence: 'Low; a frontend checkout would settle it.',
+                    costUsd: 0.34,
+                });
+
+                // Assert
+                expect(store.getVerifications(cluster.id)).toEqual([{
+                    id,
+                    clusterId: cluster.id,
+                    createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) as unknown,
+                    verdict: 'undetermined',
+                    rationale: 'The consumer lives outside this repo.',
+                    confidence: 'Low; a frontend checkout would settle it.',
+                    costUsd: 0.34,
+                }]);
+            });
+
+            it('should keep verifications append-only with the latest verdict winning', () =>
+            {
+                // Arrange
+                const { consolidationId: id, clusters } = savedClusters();
+                const cluster = clusters[1]!;
+
+                // Act
+                store.saveVerification({
+                    clusterId: cluster.id, verdict: 'confirmed',
+                    rationale: 'First pass.', confidence: 'Medium.', costUsd: 0.1,
+                });
+                store.saveVerification({
+                    clusterId: cluster.id, verdict: 'undetermined',
+                    rationale: 'Second pass.', confidence: 'Low.', costUsd: 0.2,
+                });
+
+                // Assert
+                const verdicts = store.getVerifications(cluster.id).map(v => v.verdict);
+                expect(verdicts).toEqual(['confirmed', 'undetermined']);
+                expect(store.getConsolidation(id)!.clusters[1]?.verificationStatus).toBe('undetermined');
+            });
+
+            it('should reject a verification for an unknown cluster and roll back the row', () =>
+            {
+                // Arrange
+                savedClusters();
+                const unknown = clusterId(999);
+
+                // Act + Assert
+                expect(() => store.saveVerification({
+                    clusterId: unknown, verdict: 'refuted',
+                    rationale: 'n/a', confidence: 'n/a', costUsd: 0,
+                })).toThrow('No cluster #999.');
+                expect(store.getVerifications(unknown)).toEqual([]);
+            });
         });
     });
 });

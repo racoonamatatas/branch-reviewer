@@ -4,11 +4,19 @@
 
 import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
-import type { Consolidation } from '../store/store.js';
+import type { Consolidation, Verdict } from '../store/store.js';
 import { diffUsage, isZeroUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 
 const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'nit'];
+
+// "undetermined" is a verdict about reachability, not about the finding —
+// the report tells the reader what to do with it.
+const STATUS_LABEL: Record<Verdict, string> = {
+    confirmed: 'confirmed',
+    refuted: 'refuted',
+    undetermined: 'needs human eyes',
+};
 
 export function n(value: number): string
 {
@@ -69,7 +77,7 @@ export function printConsolidation(consolidation: Consolidation): void
         const unverified = cluster.occurrence === 1 && cluster.verificationStatus === 'pending'
             ? ', unverified'
             : '';
-        const status = cluster.verificationStatus !== 'pending' ? `, ${cluster.verificationStatus}` : '';
+        const status = cluster.verificationStatus !== 'pending' ? `, ${STATUS_LABEL[cluster.verificationStatus]}` : '';
         console.log(`[${cluster.severity}] ${f.file}${line} — ${f.title} (seen in ${cluster.occurrence}/${totalRuns} runs${unverified}${status})`);
         console.log(`    ${f.detail}`);
         if (f.suggestion !== undefined)

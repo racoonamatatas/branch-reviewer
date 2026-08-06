@@ -7,8 +7,8 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { NewFinding, Review, Severity } from '../schema/schema.js';
 import type { Created, Identified, New } from '../types/common.js';
-import { clusterId, consolidationId, findingId, runId } from '../types/ids.js';
-import type { ConsolidationId, FindingId, RunId } from '../types/ids.js';
+import { clusterId, consolidationId, findingId, runId, verificationId } from '../types/ids.js';
+import type { ClusterId, ConsolidationId, FindingId, RunId, VerificationId } from '../types/ids.js';
 import type { TokenUsage } from '../usage/usage.js';
 
 export const DEFAULT_DB_PATH = 'data/reviews.db';
@@ -65,10 +65,24 @@ export interface Cluster extends Identified<'Cluster'>
 {
     severity: Severity;
     occurrence: number;
-    verificationStatus: 'pending' | 'confirmed' | 'refuted';
+    verificationStatus: VerificationStatus;
     representative: Finding;
     members: Finding[];
 }
+
+export type Verdict = 'confirmed' | 'refuted' | 'undetermined';
+export type VerificationStatus = 'pending' | Verdict;  // a verdict, or not yet
+
+export interface Verification extends Identified<'Verification'>, Created
+{
+    clusterId: ClusterId;
+    verdict: Verdict;
+    rationale: string;
+    confidence: string;
+    costUsd: number;
+}
+
+export type NewVerification = New<Verification>;
 
 // A cluster at create time references its findings by id; the entity carries
 // them materialized. That difference is real shape, not server assignment,
@@ -139,6 +153,15 @@ CREATE TABLE IF NOT EXISTS cluster_members (
     cluster_id INTEGER NOT NULL REFERENCES clusters(id),
     finding_id INTEGER NOT NULL REFERENCES findings(id)
 );
+CREATE TABLE IF NOT EXISTS verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_id INTEGER NOT NULL REFERENCES clusters(id),
+    created_at TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    cost_usd REAL NOT NULL
+);
 `;
 
 interface RunRow
@@ -169,6 +192,17 @@ interface FindingRow
     title: string;
     detail: string;
     suggestion: string | null;
+}
+
+interface VerificationRow
+{
+    id: number;
+    cluster_id: number;
+    created_at: string;
+    verdict: string;
+    rationale: string;
+    confidence: string;
+    cost_usd: number;
 }
 
 export class ReviewStore
@@ -415,6 +449,59 @@ export class ReviewStore
             runIds: (JSON.parse(row.run_ids) as number[]).map(runId),
             clusters,
         };
+    }
+
+    // Append-only: re-running verification adds a row, nothing is overwritten.
+    // The cluster's verification_status mirrors the LATEST verdict — deliberately
+    // the store's first UPDATE, a derived column, not a mutation of history.
+    saveVerification(verification: NewVerification): VerificationId
+    {
+        this.db.exec('BEGIN');
+        try
+        {
+            // Status first: its changes count is the existence check, giving a
+            // named error before the INSERT's foreign key fires a generic one.
+            const updated = this.db.prepare(
+                'UPDATE clusters SET verification_status = ? WHERE id = ?',
+            ).run(verification.verdict, verification.clusterId);
+            if (updated.changes === 0)
+            {
+                throw new Error(`No cluster #${verification.clusterId}.`);
+            }
+
+            const result = this.db.prepare(
+                'INSERT INTO verifications (cluster_id, created_at, verdict, rationale, confidence, cost_usd) VALUES (?, ?, ?, ?, ?, ?)',
+            ).run(
+                verification.clusterId, new Date().toISOString(), verification.verdict,
+                verification.rationale, verification.confidence, verification.costUsd,
+            );
+            const id = verificationId(Number(result.lastInsertRowid));
+
+            this.db.exec('COMMIT');
+            return id;
+        }
+        catch (error)
+        {
+            this.db.exec('ROLLBACK');
+            throw error;
+        }
+    }
+
+    getVerifications(cluster: ClusterId): Verification[]
+    {
+        const rows = this.db.prepare(
+            'SELECT id, cluster_id, created_at, verdict, rationale, confidence, cost_usd FROM verifications WHERE cluster_id = ? ORDER BY id',
+        ).all(cluster) as unknown as VerificationRow[];
+
+        return rows.map(row => ({
+            id: verificationId(row.id),
+            clusterId: clusterId(row.cluster_id),
+            createdAt: row.created_at,
+            verdict: row.verdict as Verdict,
+            rationale: row.rationale,
+            confidence: row.confidence,
+            costUsd: row.cost_usd,
+        }));
     }
 
     close(): void
