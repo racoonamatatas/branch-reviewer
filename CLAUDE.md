@@ -41,7 +41,7 @@ Pipeline stages, each a directory under `src/` (tests mirror the tree under `tes
 2. **store** — run history on built-in `node:sqlite` (Node ≥ 24, no native dep) at `data/reviews.db` (gitignored, local-only — finding text contains repo internals). Findings are relational rows, not a JSON blob, because cross-run comparison queries them.
 3. **consolidate** — semantic clustering of findings across runs of the same target, judged by a tool-less one-turn `query()`. The judge proposes a partition of finding ids; validation (ids exist, partition is exact) is ours.
 4. **verify** — adversarial agent per occurrence-1 finding: same three tools, prompt inverted to refute. Three-valued verdict — confirmed / refuted / undetermined — because "couldn't refute" must never launder into "refuted". Verdicts inherit across consolidations by identical member set; `--reverify` re-tests deliberately.
-5. **coverage** — Chao1 estimator (`coverageOf`) over cluster occurrence counts: singletons/doubletons estimate how many findings remain unseen. Structurally typed on `{ occurrence }`, free of store and campaign.
+5. **coverage** — capture-recapture estimator (`coverageOf`) over cluster occurrence counts: singletons/doubletons estimate how many findings remain unseen. Structurally typed on `{ occurrence }`, free of store and campaign.
 6. **campaign** — the loop tying it together: review the same target repeatedly (rounds share prompt cache in one process), re-consolidate after each round, stop when rounds stop yielding novel clusters (patience) or on two consecutive aborts, then verify pending singletons.
 
 Key facts that shape the code:

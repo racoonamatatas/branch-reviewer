@@ -19,7 +19,7 @@ describe('coverageOf', () =>
         expect(coverage.f2).toBe(1);
     });
 
-    it('should estimate undiscovered findings with the classic Chao1 form', () =>
+    it('should estimate undiscovered findings with the classic form', () =>
     {
         // Arrange: f1 = 4, f2 = 2 → 16 / 4
         const spread = clusters(1, 1, 1, 1, 2, 2, 3);
@@ -66,7 +66,7 @@ describe('coverageOf', () =>
 
     it('should reproduce the real consolidation #3 estimate', () =>
     {
-        // Arrange: the 4-run target-repo union — 8 seen once, 3 twice, 1 thrice, 2 in all four
+        // Arrange: the reference target's 4-run union — 8 seen once, 3 twice, 1 thrice, 2 in all four
         const consolidationThree = clusters(1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 4, 4);
 
         // Act

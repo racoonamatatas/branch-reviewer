@@ -2,17 +2,17 @@
 // already tells us. Consolidation collects occurrence counts for confidence
 // badges; the same counts answer a second question for free — a population
 // where most findings were seen once is still being discovered, one where
-// findings keep recurring has been swept. That is Chao1, borrowed from
-// ecology (f1/f2 are singleton/doubleton species there, cluster occurrences
-// here). Structurally typed on { occurrence } so the estimator stays free of
-// both the store and the campaign that consumes it.
+// findings keep recurring has been swept. That is a capture-recapture
+// estimator, borrowed from ecology (f1/f2 are singleton/doubleton species
+// there, cluster occurrences here). Structurally typed on { occurrence } so
+// the estimator stays free of both the store and the campaign that consumes it.
 
 export interface Coverage
 {
     observed: number;        // distinct findings seen so far
     f1: number;              // seen in exactly one run
     f2: number;              // seen in exactly two runs
-    undiscovered: number;    // Chao1 estimate of findings not yet seen
+    undiscovered: number;    // estimate of findings not yet seen
     estimatedTotal: number;  // observed + undiscovered
 }
 
@@ -22,7 +22,7 @@ export function coverageOf(clusters: Array<{ occurrence: number }>): Coverage
     const f1 = clusters.filter(c => c.occurrence === 1).length;
     const f2 = clusters.filter(c => c.occurrence === 2).length;
 
-    // Classic Chao1 divides by f2; with no doubletons at all, the
+    // The classic form divides by f2; with no doubletons at all, the
     // bias-corrected form is the one that stays defined.
     const raw = f2 > 0
         ? (f1 * f1) / (2 * f2)
@@ -47,7 +47,7 @@ export function novelClusters<T>(clusters: Array<{ members: Array<{ runId: T }> 
 
 // The stopping rule, deliberately observational: a campaign ends when runs
 // stop finding new things, not when the estimate says the tail is small.
-// Chao1 on real data here stays high for many rounds (it answers "how much am
+// The estimate on real data here stays high for many rounds (it answers "how much am
 // I missing?", which is worth reporting), so gating on it would mean never
 // stopping before the run cap — the cap would decide while the report implied
 // the statistics had.
