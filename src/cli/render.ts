@@ -4,9 +4,10 @@
 
 import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
-import type { Consolidation, Verdict } from '../store/store.js';
+import type { Cluster, Consolidation, Verdict } from '../store/store.js';
 import { diffUsage, isZeroUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
+import type { VerificationResponse, VerificationStats } from '../verify/verify.js';
 
 const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'nit'];
 
@@ -58,6 +59,39 @@ export function printStats(stats: ReviewRunStats, verbose: boolean): void
             console.log(`  ${turn.messageId}  ${usageLine(turn.usage)}`);
         }
     }
+}
+
+// The verification loop reports by callback so it never writes to stdout;
+// this is the shared stdout half, used by both the verify and campaign entry
+// points so a verdict reads identically wherever it was produced.
+export function printVerdictProgress(indent = '  '): {
+    onCluster: (cluster: Cluster) => void;
+    onVerdict: (cluster: Cluster, response: VerificationResponse, stats: VerificationStats) => void;
+    onFailure: (cluster: Cluster, reason: string) => void;
+    onProgress: (event: string) => void;
+}
+{
+    return {
+        onCluster: (cluster) =>
+        {
+            const f = cluster.representative;
+            console.log(`\n${indent}--- cluster #${cluster.id}: [${cluster.severity}] ${f.file} — ${f.title}`);
+        },
+        onVerdict: (_cluster, response, stats) =>
+        {
+            console.log(`${indent}verdict: ${response.verdict} ($${stats.costUsd.toFixed(4)}, ${stats.turns} turn(s))`);
+            console.log(`${indent}rationale: ${response.rationale}`);
+            console.log(`${indent}confidence: ${response.confidence}`);
+        },
+        onFailure: (_cluster, reason) =>
+        {
+            console.error(`${indent}verification did not complete: ${reason} — cluster stays pending`);
+        },
+        onProgress: (event) =>
+        {
+            console.log(`${indent}${event}`);
+        },
+    };
 }
 
 export function printConsolidation(consolidation: Consolidation): void

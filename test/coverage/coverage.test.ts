@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coverageOf, shouldContinue } from '../../src/coverage/coverage.js';
+import { coverageOf, novelClusters, shouldContinue } from '../../src/coverage/coverage.js';
 
 function clusters(...occurrences: number[]): Array<{ occurrence: number }>
 {
@@ -80,35 +80,64 @@ describe('coverageOf', () =>
     });
 });
 
+describe('novelClusters', () =>
+{
+    it('should count clusters no other run reported', () =>
+    {
+        // Arrange
+        const clusters = [
+            { members: [{ runId: 5 }] },
+            { members: [{ runId: 1 }, { runId: 5 }] },
+            { members: [{ runId: 5 }, { runId: 5 }] },
+            { members: [{ runId: 1 }] },
+        ];
+
+        // Act
+        const novel = novelClusters(clusters, 5);
+
+        // Assert
+        expect(novel).toBe(2);
+    });
+
+    it('should count nothing when every cluster has an earlier witness', () =>
+    {
+        // Arrange
+        const clusters = [{ members: [{ runId: 1 }, { runId: 5 }] }, { members: [{ runId: 1 }] }];
+
+        // Act + Assert
+        expect(novelClusters(clusters, 5)).toBe(0);
+    });
+});
+
 describe('shouldContinue', () =>
 {
     it('should continue while rounds keep adding clusters', () =>
     {
         // Act + Assert
-        expect(shouldContinue([{ newClusters: 3 }, { newClusters: 1 }])).toBe(true);
+        expect(shouldContinue([{ novelClusters: 3 }, { novelClusters: 1 }])).toBe(true);
     });
 
     it('should continue when only the latest round was barren', () =>
     {
         // Act + Assert
-        expect(shouldContinue([{ newClusters: 2 }, { newClusters: 0 }])).toBe(true);
+        expect(shouldContinue([{ novelClusters: 2 }, { novelClusters: 0 }])).toBe(true);
     });
 
     it('should stop after two consecutive barren rounds', () =>
     {
         // Act + Assert
-        expect(shouldContinue([{ newClusters: 2 }, { newClusters: 0 }, { newClusters: 0 }])).toBe(false);
+        expect(shouldContinue([{ novelClusters: 2 }, { novelClusters: 0 }, { novelClusters: 0 }])).toBe(false);
     });
 
     it('should continue before patience rounds have happened at all', () =>
     {
         // Act + Assert
-        expect(shouldContinue([{ newClusters: 0 }])).toBe(true);
+        expect(shouldContinue([{ novelClusters: 0 }])).toBe(true);
     });
 
     it('should stop after a single barren round when patience is one', () =>
     {
         // Act + Assert
-        expect(shouldContinue([{ newClusters: 0 }], 1)).toBe(false);
+        expect(shouldContinue([{ novelClusters: 0 }], 1)).toBe(false);
     });
 });

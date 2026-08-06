@@ -35,17 +35,27 @@ export function coverageOf(clusters: Array<{ occurrence: number }>): Coverage
     return { observed, f1, f2, undiscovered, estimatedTotal: observed + undiscovered };
 }
 
+// The newest run's marginal yield: clusters no other run reported. Measured
+// inside one partition on purpose — comparing cluster counts between rounds
+// would be measuring the judge, not the branch, because each round re-judges
+// from scratch and a merge of two previously separate clusters can flatten or
+// reverse the count while the run really did find something.
+export function novelClusters<T>(clusters: Array<{ members: Array<{ runId: T }> }>, run: T): number
+{
+    return clusters.filter(c => c.members.every(m => m.runId === run)).length;
+}
+
 // The stopping rule, deliberately observational: a campaign ends when runs
 // stop finding new things, not when the estimate says the tail is small.
 // Chao1 on real data here stays high for many rounds (it answers "how much am
 // I missing?", which is worth reporting), so gating on it would mean never
 // stopping before the run cap — the cap would decide while the report implied
 // the statistics had.
-export function shouldContinue(rounds: Array<{ newClusters: number }>, patience = 2): boolean
+export function shouldContinue(rounds: Array<{ novelClusters: number }>, patience = 2): boolean
 {
     if (rounds.length < patience)
     {
         return true;
     }
-    return !rounds.slice(-patience).every(r => r.newClusters === 0);
+    return !rounds.slice(-patience).every(r => r.novelClusters === 0);
 }

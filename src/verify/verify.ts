@@ -11,7 +11,8 @@ import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { RepoClient } from '../github/github.js';
 import { assertSubscriptionCredit, previewArgs } from '../review/review.js';
-import type { Cluster } from '../store/store.js';
+import { ReviewStore } from '../store/store.js';
+import type { Cluster, Consolidation } from '../store/store.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
 import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
@@ -169,4 +170,68 @@ export async function verifyCluster(
     // The harness already validated against the JSON schema; this parse is
     // the type boundary between `unknown` and VerificationResponse.
     return { status: 'verified', response: verificationResponseSchema.parse(result.structured_output), stats };
+}
+
+// Adjudicating a whole consolidation is the verify feature's own orchestration
+// — it is where verdicts become rows — so it lives here rather than in one of
+// the two entry points that need it. The store is a value import for that
+// reason; the prompt and selection functions above stay pure. Reporting is by
+// callback, not console: stdout belongs to the CLI layer.
+export interface VerifyPendingOptions extends VerifyRunOptions
+{
+    onCluster?: (cluster: Cluster) => void;
+    onVerdict?: (cluster: Cluster, response: VerificationResponse, stats: VerificationStats) => void;
+    onFailure?: (cluster: Cluster, reason: string) => void;
+}
+
+export interface VerifyPendingSummary
+{
+    attempted: number;
+    verified: number;
+    failures: number;
+    costUsd: number;
+}
+
+// Record-and-continue: each verdict is saved as it lands, and a cluster whose
+// verification aborts or throws stays pending for a later re-run — append-only
+// verdicts make re-running the recovery path.
+export async function verifyPending(
+    store: ReviewStore,
+    client: RepoClient,
+    consolidation: Consolidation,
+    opts: VerifyPendingOptions = {},
+): Promise<VerifyPendingSummary>
+{
+    const pending = pendingOccurrenceOne(consolidation.clusters);
+    const target = { base: consolidation.base, head: consolidation.head };
+    const totalRuns = consolidation.runIds.length;
+
+    const summary: VerifyPendingSummary = { attempted: pending.length, verified: 0, failures: 0, costUsd: 0 };
+    for (const cluster of pending)
+    {
+        opts.onCluster?.(cluster);
+        try
+        {
+            const result = await verifyCluster(client, target, cluster, totalRuns, opts);
+            summary.costUsd += result.stats.costUsd;
+
+            if (result.status === 'aborted')
+            {
+                summary.failures++;
+                opts.onFailure?.(cluster, result.reason);
+                continue;
+            }
+
+            const { verdict, rationale, confidence } = result.response;
+            store.saveVerification({ clusterId: cluster.id, verdict, rationale, confidence, costUsd: result.stats.costUsd });
+            summary.verified++;
+            opts.onVerdict?.(cluster, result.response, result.stats);
+        }
+        catch (error)
+        {
+            summary.failures++;
+            opts.onFailure?.(cluster, error instanceof Error ? error.message : String(error));
+        }
+    }
+    return summary;
 }
