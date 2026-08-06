@@ -12,7 +12,16 @@ import type { ReviewTarget } from '../tools/tools.js';
 import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage, TurnUsage } from '../usage/usage.js';
 
-const DEFAULT_MAX_TURNS = 20;
+// A review of the reference target streams ~30 tool calls, and `num_turns`
+// comes back as tool calls + 2 (the initial prompt and the final answer),
+// measured across every run and verification in the store. 20 aborted two of
+// three campaign rounds; 40 leaves headroom for a diff twice that size.
+// Caveat: the budget and `num_turns` are not the same counter — parallel tool
+// blocks arrive in one round-trip, and an aborted run reports exactly
+// maxTurns + 1 while a successful one has been seen to report 32 under a cap
+// of 20. Compaction resetting the budget is the leading explanation, which is
+// why compact_boundary is now counted below.
+const DEFAULT_MAX_TURNS = 40;
 
 // Same prompt as the predecessor except step 4: submit_review no longer
 // exists — the harness collects the final response against the output schema.
@@ -48,6 +57,10 @@ export interface ReviewRunStats
     // callers report the delta, never act on it.
     streamed: TokenUsage;
     turnUsage: TurnUsage[];
+    // Auto-compactions the SDK performed mid-run. Observational, like the
+    // rest of this: a run that compacted has had its context rewritten, which
+    // is the leading suspect for num_turns outrunning the maxTurns budget.
+    compactions: number;
 }
 
 export type ReviewResult =
@@ -86,6 +99,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     });
 
     const accumulator = new UsageAccumulator();
+    let compactions = 0;
     let result: SDKResultMessage | undefined;
     try
     {
@@ -101,6 +115,12 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
                         opts.onProgress?.(`${block.name}(${previewArgs(block.input)})`);
                     }
                 }
+            }
+            else if (message.type === 'system' && message.subtype === 'compact_boundary')
+            {
+                compactions++;
+                const { trigger, pre_tokens: pre } = message.compact_metadata;
+                opts.onProgress?.(`[${trigger} compaction at ${pre} tokens]`);
             }
             else if (message.type === 'result')
             {
@@ -132,6 +152,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
         perModel: result.modelUsage,
         streamed: accumulator.total(),
         turnUsage: accumulator.turns(),
+        compactions,
     };
 
     if (result.subtype !== 'success')

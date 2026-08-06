@@ -42,6 +42,11 @@ export function printStats(stats: ReviewRunStats, verbose: boolean): void
             + ` $${m.costUSD.toFixed(4)}, context window ${n(m.contextWindow)}`);
     }
 
+    if (stats.compactions > 0)
+    {
+        console.log(`  ${stats.compactions} auto-compaction(s) during the run — context was rewritten mid-review`);
+    }
+
     // Observational reconciliation: our streamed sum vs the SDK's totals.
     // A delta is information about what the SDK counts that the stream does
     // not show — it never affects the review or the exit code.
