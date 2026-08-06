@@ -8,12 +8,14 @@
 import { readFileSync } from 'node:fs';
 import { runClustering } from '../src/consolidate/consolidate.js';
 import type { ConsolidatableFinding } from '../src/consolidate/consolidate.js';
+import { findingId, runId } from '../src/types/ids.js';
 import { FIXTURE_PATH } from './fixture.js';
 
+// The fixture file is wire-shaped: plain-number ids that gain their brand at load.
 interface Fixture
 {
     description: string;
-    findings: ConsolidatableFinding[];
+    findings: Array<Omit<ConsolidatableFinding, 'id' | 'runId'> & { id: number; runId: number }>;
     expectedClusters: number[][];
 }
 
@@ -48,7 +50,9 @@ async function main(): Promise<number>
     console.log(fixture.description);
     console.log(`Clustering ${fixture.findings.length} findings...`);
 
-    const clusters = await runClustering(fixture.findings, { model: process.env.REVIEW_MODEL });
+    const findings: ConsolidatableFinding[] = fixture.findings.map(f =>
+        ({ ...f, id: findingId(f.id), runId: runId(f.runId) }));
+    const clusters = await runClustering(findings, { model: process.env.REVIEW_MODEL });
     const actual = clusters.map(c => c.memberIds);
 
     if (canonical(actual).join('|') === canonical(fixture.expectedClusters).join('|'))

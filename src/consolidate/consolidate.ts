@@ -9,31 +9,39 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { assertSubscriptionCredit } from '../review/review.js';
 import type { Finding, Severity } from '../schema/schema.js';
+import { findingId, toTypedId } from '../types/ids.js';
+import type { FindingId, RunId } from '../types/ids.js';
 
 // A finding as consolidation sees it: the immutable fact plus its DB identity
 // and which run produced it.
 export interface ConsolidatableFinding extends Finding
 {
-    id: number;
-    runId: number;
+    id: FindingId;
+    runId: RunId;
 }
 
 export interface Cluster
 {
-    memberIds: number[];
-    representativeId: number;
+    memberIds: FindingId[];
+    representativeId: FindingId;
 }
 
+// Ids the judge hands back are the least-trusted numbers in the system:
+// authored by a model, not read from our own tables — they gain their
+// type during parse.
 export const clusterResponseSchema = z.object({
     clusters: z.array(z.object({
-        memberIds: z.array(z.number().int()).min(1)
+        memberIds: z.array(toTypedId(findingId)).min(1)
             .describe('Finding ids that describe the same underlying defect'),
-        representativeId: z.number().int()
+        representativeId: toTypedId(findingId)
             .describe('The member whose formulation is the sharpest and most complete'),
     })),
 });
 
-export const clusterResponseJsonSchema = z.toJSONSchema(clusterResponseSchema, { target: 'draft-7' });
+// io: 'input' — the wire shape the model emits, which is what the SDK's
+// outputFormat must describe; the default (output side) cannot represent
+// a transform and throws at module load.
+export const clusterResponseJsonSchema = z.toJSONSchema(clusterResponseSchema, { target: 'draft-7', io: 'input' });
 
 const JUDGE_SYSTEM_PROMPT = `You are a code-review finding deduplicator. You receive findings collected from several independent review runs of the same branch diff.
 
@@ -55,8 +63,8 @@ export function buildJudgePrompt(findings: ConsolidatableFinding[]): string
 // Returns a violation description, or undefined when the partition is valid.
 export function validatePartition(findings: ConsolidatableFinding[], clusters: Cluster[]): string | undefined
 {
-    const expected = new Set(findings.map(f => f.id));
-    const seen = new Set<number>();
+    const expected = new Set<FindingId>(findings.map(f => f.id));
+    const seen = new Set<FindingId>();
 
     for (const cluster of clusters)
     {

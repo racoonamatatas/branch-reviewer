@@ -3,6 +3,8 @@
 // totals only.
 
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
+import { runId } from '../types/ids.js';
+import type { RunId } from '../types/ids.js';
 import { n, printReview, usageLine } from './render.js';
 
 const USAGE = 'Usage: npm run history [-- <run-id>]';
@@ -17,12 +19,12 @@ function main(): number
         {
             return list(store);
         }
-        const id = Number(args[0]);
-        if (!Number.isInteger(id))
+        const raw = Number(args[0]);
+        if (!Number.isInteger(raw))
         {
             throw new Error(USAGE);
         }
-        return show(store, id);
+        return show(store, runId(raw));
     }
     finally
     {
@@ -46,7 +48,7 @@ function list(store: ReviewStore): number
     return 0;
 }
 
-function show(store: ReviewStore, id: number): number
+function show(store: ReviewStore, id: RunId): number
 {
     const run = store.getRun(id);
     if (run === undefined)

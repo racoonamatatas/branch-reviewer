@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ReviewStore } from '../../src/store/store.js';
 import type { RunRecord } from '../../src/store/store.js';
+import { consolidationId, runId } from '../../src/types/ids.js';
 
 const submittedRun: RunRecord = {
     createdAt: '2026-08-05T15:00:00.000Z',
@@ -113,7 +114,7 @@ describe('ReviewStore', () =>
     it('should return undefined for an unknown run id', () =>
     {
         // Act
-        const stored = store.getRun(999);
+        const stored = store.getRun(runId(999));
 
         // Assert
         expect(stored).toBeUndefined();
@@ -201,7 +202,7 @@ describe('ReviewStore', () =>
         it('should return undefined for an unknown consolidation id', () =>
         {
             // Act
-            const consolidation = store.getConsolidation(999);
+            const consolidation = store.getConsolidation(consolidationId(999));
 
             // Assert
             expect(consolidation).toBeUndefined();

@@ -6,17 +6,19 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_DB_PATH, ReviewStore } from '../src/store/store.js';
+import { consolidationId } from '../src/types/ids.js';
 import { FIXTURE_PATH } from './fixture.js';
 
 const USAGE = 'Usage: npm run eval:freeze -- <consolidation-id>';
 
 function main(): number
 {
-    const id = Number(process.argv[2]);
-    if (!Number.isInteger(id))
+    const raw = Number(process.argv[2]);
+    if (!Number.isInteger(raw))
     {
         throw new Error(USAGE);
     }
+    const id = consolidationId(raw);
 
     const store = new ReviewStore(DEFAULT_DB_PATH);
     try

@@ -6,6 +6,8 @@ import { distinctRuns, maxSeverity, runClustering } from '../consolidate/consoli
 import type { ConsolidatableFinding } from '../consolidate/consolidate.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import type { StoredRun } from '../store/store.js';
+import { consolidationId, runId } from '../types/ids.js';
+import type { ConsolidationId, RunId } from '../types/ids.js';
 import { printConsolidation } from './render.js';
 
 const USAGE = 'Usage: npm run consolidate -- <run-id> <run-id> [...] | npm run consolidate | npm run consolidate -- --show <consolidation-id>';
@@ -22,14 +24,19 @@ async function main(): Promise<number>
         }
         if (args[0] === '--show')
         {
-            return show(store, Number(args[1]));
+            const raw = Number(args[1]);
+            if (!Number.isInteger(raw))
+            {
+                throw new Error(USAGE);
+            }
+            return show(store, consolidationId(raw));
         }
-        const runIds = args.map(Number);
-        if (runIds.length < 2 || runIds.some(id => !Number.isInteger(id)))
+        const raw = args.map(Number);
+        if (raw.length < 2 || raw.some(id => !Number.isInteger(id)))
         {
             throw new Error(USAGE);
         }
-        return await consolidate(store, runIds);
+        return await consolidate(store, raw.map(runId));
     }
     finally
     {
@@ -52,12 +59,8 @@ function list(store: ReviewStore): number
     return 0;
 }
 
-function show(store: ReviewStore, id: number): number
+function show(store: ReviewStore, id: ConsolidationId): number
 {
-    if (!Number.isInteger(id))
-    {
-        throw new Error(USAGE);
-    }
     const consolidation = store.getConsolidation(id);
     if (consolidation === undefined)
     {
@@ -68,7 +71,7 @@ function show(store: ReviewStore, id: number): number
     return 0;
 }
 
-async function consolidate(store: ReviewStore, runIds: number[]): Promise<number>
+async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
 {
     const runs: StoredRun[] = [];
     for (const id of runIds)
@@ -104,7 +107,7 @@ async function consolidate(store: ReviewStore, runIds: number[]): Promise<number
     const clusters = await runClustering(findings, { model: process.env.REVIEW_MODEL });
 
     const byId = new Map(findings.map(f => [f.id, f]));
-    const consolidationId = store.saveConsolidation({
+    const savedId = store.saveConsolidation({
         createdAt: new Date().toISOString(),
         owner: first.owner,
         repo: first.repo,
@@ -122,9 +125,9 @@ async function consolidate(store: ReviewStore, runIds: number[]): Promise<number
             };
         }),
     });
-    console.log(`saved as consolidation #${consolidationId}`);
+    console.log(`saved as consolidation #${savedId}`);
 
-    printConsolidation(store.getConsolidation(consolidationId)!);
+    printConsolidation(store.getConsolidation(savedId)!);
     return 0;
 }
 
