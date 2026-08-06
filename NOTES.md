@@ -99,6 +99,73 @@ Shipped so far:
   estimator put ~11 findings undiscovered of ~26 total, with marginal yield
   steady at ~1 novel finding per run.
 
+## Slice log — discoveries worth keeping
+
+Per-slice detail that the condensed list above loses. Harness behavior, not
+target detail.
+
+**Slice 1 (reviewer).** `tools: []` denies *all* built-ins and is cleaner than
+enumerating `disallowedTools`; `permissionMode: 'dontAsk'`; `outputFormat:
+json_schema` replaces the predecessor's `submit_review` tool entirely (the
+harness collects and validates the final answer). Tool names and schemas are
+deliberately identical to branch-reviewer-api so differences between the two
+reviewers are attributable to the harness alone — SDK-native `outputFormat` is
+the one documented divergence. **SDK wart:** a heterogeneous array of `tool()`
+results won't type as `SdkMcpToolDefinition<any>` (handler args are
+contravariant), hence the erased `RegisteredTool` shape in `src/tools/tools.ts`.
+
+**Slice 2 (accounting).** Input-side fields reconcile to exactly zero against
+the result totals, but per-message `output_tokens` is an **at-start snapshot**,
+so the streamed output sum is a lower bound — dashboards must treat it as one.
+`UsageAccumulator` keys by API message id because parallel tool calls share an
+id and naive summation double-counts. **After an error result the SDK stream
+yields the result message and then throws** ("Claude Code returned an error
+result: …"); the runner catches, keeps the result (it carries turns and usage),
+and rethrows only if no result was ever seen.
+
+**Slice 3 (history).** `node:sqlite` means zero new dependencies (needs Node
+≥ 24). `cli.ts` must never be imported — its `main()` runs at module top level
+— which is why the renderers live in `src/cli/render.ts`, shared with the other
+entry points. Aborted runs persist with their stats; `--no-save` opts out.
+
+**Slice 4 (consolidation).** The clustering judge is the harness degrading
+gracefully into plain structured inference: no MCP servers, `tools: []`,
+`maxTurns: 1`, pure `outputFormat`. The judge proposes the partition,
+`validatePartition` enforces it (one retry with the violation named). Findings
+are immutable and clusters derived, so re-consolidating writes a new row rather
+than mutating. Naming: **"merge" is reserved for git semantics** (merge base) —
+the feature is "consolidate" everywhere, and legacy DBs migrate in place on
+open. "Singleton" is avoided in favor of occurrence phrasing ("seen in 1/N").
+
+**Slice 5 (verify).** Verdicts are first-class append-only rows, so improving
+the prompt and re-running never overwrites history; `clusters.verification_status`
+reflects the latest verdict and its vocabulary includes `undetermined`. What
+makes the prompt work is stated as method, not vibes: check where overrides
+actually live (deploy manifests and environment templates, not just application
+config) before concluding a setting is unpinned, and follow every conditional
+guarding a cited path and name it in the rationale.
+
+**Slice 6 (campaign).** Rounds fire back-to-back in one process to ride the
+prompt cache; each round re-consolidates every stored run of the target, so
+novel-cluster counts are measured *inside* one partition (comparing cluster
+counts between rounds would measure the judge, not the branch). Two consecutive
+aborts stop the campaign — structural, not worth burning the run cap on.
+
+**Slice 7 (next, headless auth).** The path is `claude setup-token` →
+`CLAUDE_CODE_OAUTH_TOKEN`, confirmed permitted for subscription use. Acceptance
+test is a review completing in a genuinely logged-out environment.
+
+**Standards to hold, not regress.** (1) The judge has a golden fixture and
+`npm run eval:judge` replays it — every clustering-prompt edit gets checked
+against it. (2) `read_file`'s description earns its keep: the project's best
+finding rested on three pieces of evidence *outside* the diff hunk (a sibling
+guard, an adjacent cast, and why static analysis was blind to it). When tuning
+tool descriptions, that finding is the bar.
+
+Personal working preferences (question pacing, slice discipline, strictness
+taste) live in the user's own `~/.claude/CLAUDE.md`, deliberately not committed
+here.
+
 ## Open items
 
 - Slice 7 (headless auth): verify `CLAUDE_CODE_OAUTH_TOKEN` works logged-out;
