@@ -1,8 +1,11 @@
 // Repo access abstraction plus the real GitHub REST implementation.
 // The compare endpoint uses three-dot semantics (merge-base), so the diff
 // only contains what the branch itself changed.
-// Ported verbatim from branch-reviewer-api — deliberately identical, so the
-// two reviewers differ only in harness.
+// RepoClient and its implementation are ported verbatim from
+// branch-reviewer-api — deliberately identical, so the two reviewers differ
+// only in harness. PullSource is this project's own addition (the trigger
+// slice needs to see PRs, the review path never does); it is a separate
+// interface so the review-tool contract stays the verbatim port.
 
 export interface ChangedFile
 {
@@ -19,6 +22,24 @@ export interface RepoClient
     readFile(path: string, ref: string): Promise<string>;
 }
 
+// What the trigger needs to know about an open PR to decide "review this?".
+// Labels are the gate, head SHA is the dedupe key, draft is the skip.
+export interface PullRequest
+{
+    number: number;
+    title: string;
+    headSha: string;
+    headRef: string;
+    baseRef: string;
+    draft: boolean;
+    labels: string[];
+}
+
+export interface PullSource
+{
+    listOpenPulls(): Promise<PullRequest[]>;
+}
+
 const API_VERSION = '2022-11-28';
 const PAGE_SIZE = 100;
 const MAX_FILES = 300;  // the compare endpoint stops listing files past this
@@ -32,7 +53,17 @@ interface RawChangedFile
     patch?: string;
 }
 
-export class GitHubClient implements RepoClient
+interface RawPull
+{
+    number: number;
+    title: string;
+    draft?: boolean;
+    head: { sha: string; ref: string };
+    base: { ref: string };
+    labels?: Array<{ name: string }>;
+}
+
+export class GitHubClient implements RepoClient, PullSource
 {
     private readonly owner: string;
     private readonly repo: string;
@@ -83,6 +114,33 @@ export class GitHubClient implements RepoClient
             throw new Error(`Not a readable file: ${path}`);
         }
         return Buffer.from(data.content, 'base64').toString('utf8');
+    }
+
+    async listOpenPulls(): Promise<PullRequest[]>
+    {
+        const pulls: PullRequest[] = [];
+        for (let page = 1; ; page++)
+        {
+            const batch = await this.request(
+                `/repos/${this.owner}/${this.repo}/pulls?state=open&per_page=${PAGE_SIZE}&page=${page}`,
+            ) as RawPull[];
+            for (const p of batch)
+            {
+                pulls.push({
+                    number: p.number,
+                    title: p.title,
+                    headSha: p.head.sha,
+                    headRef: p.head.ref,
+                    baseRef: p.base.ref,
+                    draft: p.draft ?? false,
+                    labels: (p.labels ?? []).map(label => label.name),
+                });
+            }
+            if (batch.length < PAGE_SIZE)
+            {
+                return pulls;
+            }
+        }
     }
 
     private async request(path: string): Promise<unknown>
