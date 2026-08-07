@@ -94,7 +94,7 @@ after every round; verifies pending singleton findings at the end unless
 ### `npm run serve`
 
 ```
-npm run serve [-- --port N]
+npm run serve [-- --port N] [--poll-interval seconds]
 ```
 
 Job server on `http://127.0.0.1:4780` (localhost only): review and campaign
@@ -111,12 +111,24 @@ POST /jobs                  enqueue: {"kind": "review"|"campaign", "owner", "rep
 GET  /jobs                  list job summaries, newest first
 GET  /jobs/<id>             one job: state, error, run ids as rounds land, consolidation
 POST /jobs/<id>/cancel      cancel a queued job (409 once running — its credit is spent)
+POST /watches               watch a repo: {"owner", "repo", "label"? (agent-review)}
+GET  /watches               list watches
+DELETE /watches/<id>        stop watching
 ```
 
 Jobs end `succeeded`, `aborted` (turn cap, or a campaign with two consecutive
 unusable rounds), or `failed` (the error is stored on the job). A job found
 `running` at startup was interrupted and is marked failed — never silently
 re-run; re-enqueue it deliberately.
+
+**Watches are the trigger.** Every `--poll-interval` (default 300s) the server
+lists each watched repo's open PRs and enqueues one review job per non-draft
+PR that carries the trigger label and whose head SHA has no job yet. Costs are
+opt-in twice over: labeling the PR is the request, and every push (new SHA)
+re-reviews only while the label stays on. A head SHA with any existing job —
+succeeded, failed, or cancelled — is never re-enqueued by automation; at most
+5 jobs enqueue per cycle, so a fresh watch on a label-heavy repo trickles in
+instead of billing its backlog at once.
 
 ## Eval
 

@@ -9,11 +9,11 @@ finding *labels* used below are fine.
 
 ## Status (2026-08-07)
 
-Slices 1–8 shipped. **Next: slice 9 — trigger automation.**
+Slices 1–9 shipped. **Next: slice 10 — Vue TS dashboard.**
 
-Remaining roadmap (sequencing user-confirmed): trigger automation
-(webhook/CI, its own slice — auth = *can* run anywhere, triggers = something
-else decides *when*) → Vue TS dashboard (last, standing decision) → deploy. Eventually: read→write promotion (posting findings to PRs)
+Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
+standing decision) → deploy (webhooks may replace polling then; needs server
+auth first). Eventually: read→write promotion (posting findings to PRs)
 — a deliberate, separately-decided step with its own risk profile, not a drift.
 
 Shipped so far:
@@ -31,6 +31,8 @@ Shipped so far:
    translation, `ANTHROPIC_AUTH_TOKEN` refused (2026-08-06).
 8. Node server + job model — durable job queue in SQLite, sequential worker,
    four-route HTTP surface on `node:http`, localhost only (2026-08-07).
+9. Trigger automation — label-gated PR polling: watches + `pollOnce`,
+   SHA-keyed dedupe, per-cycle cost fuse, poll loop in serve (2026-08-07).
 
 ## Standing design decisions (don't re-derive)
 
@@ -206,6 +208,28 @@ over HTTP, 42 tool events streamed against the job id, job succeeded in
 `npm run history` and indistinguishable from a CLI run. The same run
 finished over-cap with zero compactions — see the num_turns bullet above.
 
+**Slice 9 (trigger automation).** Polling, not webhooks — webhooks need
+inbound exposure and server auth, both deploy-slice concerns; polling works
+behind NAT with the existing token and the job model doesn't care which one
+feeds it. Label-gated (user-decided): only open non-draft PRs carrying the
+watch's trigger label (default `agent-review`) are reviewed, one review job
+per head SHA — cost is opt-in twice over (label = the request, each push =
+new SHA re-triggers only while labeled). The jobs table is the trigger's
+memory: `hasJobFor(owner, repo, head)` in any state blocks re-enqueue, so a
+failed job is never auto-retried and a human's cancel is never overridden;
+there is no separate seen-SHAs table to drift. Head is pinned to the SHA,
+not the branch name — the job reviews exactly the state that carried the
+label. Cost fuse: at most 5 enqueues per poll cycle across all watches, the
+rest deferred and counted. Watches live in a DB table (a committed config
+file would leak target identity). `PullSource` is a separate interface so
+`RepoClient` stays the verbatim port from branch-reviewer-api. The serve
+poll loop skips overlapping passes (two concurrent passes could both see a
+SHA as unseen and double-enqueue). Acceptance: free-path proven live —
+watch on a busy public repo (79 open PRs, none labeled) enqueued nothing
+across cycles, and an unreachable-repo watch printed its 404 per cycle
+while other watches kept polling; the paid end-to-end (label a PR, watch
+the job run unattended) awaits a repo where we control labels.
+
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked
 against it. (2) `read_file`'s description earns its keep: the project's best
@@ -224,8 +248,12 @@ here.
 - Server has no graceful shutdown — an in-flight run dies with the process
   (credit spent, result lost) and is marked failed on next start. Fine while
   local; revisit before deploy.
-- Server has no auth of its own — safe only because it binds 127.0.0.1; the
-  trigger slice must add auth before any exposure.
+- Server has no auth of its own — safe only because it binds 127.0.0.1;
+  auth must land before any exposure (deploy slice, where webhooks may also
+  replace polling).
+- Slice-9 paid acceptance pending: label a PR on a controlled repo and watch
+  the trigger run it unattended (~$3). The free path (gating, dedupe, error
+  isolation, interval) is proven.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - Learning-surface backlog (piggyback on future slices): submit_review-parity

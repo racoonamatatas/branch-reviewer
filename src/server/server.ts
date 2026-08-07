@@ -7,10 +7,12 @@
 import { createServer as createHttpServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import { jobId } from '../types/ids.js';
-import type { JobId } from '../types/ids.js';
+import { jobId, watchId } from '../types/ids.js';
+import type { JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
+import { DEFAULT_TRIGGER_LABEL } from './trigger.js';
+import type { WatchStore } from './trigger.js';
 
 // A job request is small; anything bigger than this is not one.
 const MAX_BODY_BYTES = 64 * 1024;
@@ -42,9 +44,18 @@ export const newJobRequestSchema = z.discriminatedUnion('kind', [
     }),
 ]);
 
+// A watch request: the trigger label is policy at this edge, like the job
+// defaults above.
+export const newWatchRequestSchema = z.strictObject({
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+    label: z.string().min(1).default(DEFAULT_TRIGGER_LABEL),
+});
+
 export interface ServerDeps
 {
     jobs: JobStore;
+    watches: WatchStore;
     // The worker kick — called after every successful enqueue. The server
     // does not know the worker; the wiring entry point ties them together.
     onEnqueued?: (id: JobId) => void;
@@ -94,10 +105,28 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
             : cancelJob(deps, id, res);
     }
 
+    if (path === '/watches' && req.method === 'POST')
+    {
+        return postWatch(deps, req, res);
+    }
+    if (path === '/watches' && req.method === 'GET')
+    {
+        return json(res, 200, { watches: deps.watches.list() });
+    }
+
+    const unwatch = /^\/watches\/(\d+)$/.exec(path);
+    if (unwatch !== null && req.method === 'DELETE')
+    {
+        const id = parseWatchId(unwatch[1]);
+        return id === undefined
+            ? json(res, 404, { error: 'No such watch.' })
+            : deleteWatch(deps, id, res);
+    }
+
     json(res, 404, { error: 'No such route.' });
 }
 
-// The route regex admits "0", which the id constructor rightly refuses; an
+// The route regexes admit "0", which the id constructors rightly refuse; an
 // id that cannot exist is a 404, not a crash.
 function parseId(text: string | undefined): JobId | undefined
 {
@@ -105,25 +134,21 @@ function parseId(text: string | undefined): JobId | undefined
     return Number.isInteger(n) && n > 0 ? jobId(n) : undefined;
 }
 
+function parseWatchId(text: string | undefined): WatchId | undefined
+{
+    const n = Number(text);
+    return Number.isInteger(n) && n > 0 ? watchId(n) : undefined;
+}
+
 async function postJob(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>
 {
-    const body = await readBody(req);
-    if (!body.ok)
+    const raw = await readJson(req, res);
+    if (!raw.ok)
     {
-        return json(res, 413, { error: `Request body exceeds ${MAX_BODY_BYTES} bytes.` });
+        return;
     }
 
-    let raw: unknown;
-    try
-    {
-        raw = JSON.parse(body.text);
-    }
-    catch
-    {
-        return json(res, 400, { error: 'Request body is not valid JSON.' });
-    }
-
-    const parsed = newJobRequestSchema.safeParse(raw);
+    const parsed = newJobRequestSchema.safeParse(raw.value);
     if (!parsed.success)
     {
         return json(res, 400, { error: z.prettifyError(parsed.error) });
@@ -132,6 +157,46 @@ async function postJob(deps: ServerDeps, req: IncomingMessage, res: ServerRespon
     const id = deps.jobs.enqueue(parsed.data);
     deps.onEnqueued?.(id);
     json(res, 201, { job: deps.jobs.get(id) });
+}
+
+async function postWatch(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>
+{
+    const raw = await readJson(req, res);
+    if (!raw.ok)
+    {
+        return;
+    }
+
+    const parsed = newWatchRequestSchema.safeParse(raw.value);
+    if (!parsed.success)
+    {
+        return json(res, 400, { error: z.prettifyError(parsed.error) });
+    }
+
+    // The UNIQUE constraint speaks here: a duplicate watch is a conflict
+    // with existing state, not a malformed request.
+    try
+    {
+        const id = deps.watches.add(parsed.data);
+        json(res, 201, { watch: deps.watches.list().find(w => w.id === id) });
+    }
+    catch (error)
+    {
+        json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+    }
+}
+
+function deleteWatch(deps: ServerDeps, id: WatchId, res: ServerResponse): void
+{
+    try
+    {
+        deps.watches.remove(id);
+    }
+    catch
+    {
+        return json(res, 404, { error: 'No such watch.' });
+    }
+    json(res, 200, { removed: id });
 }
 
 // 404 and 409 are different answers, so the missing-job check comes first;
@@ -152,6 +217,27 @@ function cancelJob(deps: ServerDeps, id: JobId, res: ServerResponse): void
         return json(res, 409, { error: error instanceof Error ? error.message : String(error) });
     }
     json(res, 200, { job: deps.jobs.get(id) });
+}
+
+// Reads and parses a JSON body; on failure the response has already been
+// sent and the caller just returns.
+async function readJson(req: IncomingMessage, res: ServerResponse): Promise<{ ok: true; value: unknown } | { ok: false }>
+{
+    const body = await readBody(req);
+    if (!body.ok)
+    {
+        json(res, 413, { error: `Request body exceeds ${MAX_BODY_BYTES} bytes.` });
+        return { ok: false };
+    }
+    try
+    {
+        return { ok: true, value: JSON.parse(body.text) };
+    }
+    catch
+    {
+        json(res, 400, { error: 'Request body is not valid JSON.' });
+        return { ok: false };
+    }
 }
 
 type Body = { ok: true; text: string } | { ok: false };
