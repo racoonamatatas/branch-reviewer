@@ -79,9 +79,11 @@ Shipped so far:
 - **`num_turns` = round-trips, not tool calls.** On clean runs it comes out as
   tool calls + 2 (initial prompt + final answer); parallel tool blocks share a
   turn. An aborted run reports exactly maxTurns + 1. One run reported 32 turns
-  under a cap of 20 without aborting — auto-compaction resetting the budget is
-  the leading hypothesis; `compact_boundary` messages are now counted and
-  printed, so the next over-cap run answers it.
+  under a cap of 20 without aborting — and the slice-8 acceptance run answered
+  the open question: it finished at 43 turns under a cap of 40 with **zero**
+  compactions, so compaction-resets-the-budget is dead. `num_turns` and the
+  maxTurns budget simply count different things; treat the cap as approximate
+  and size it with headroom.
 - **Verifier calibration: 8/8 defensible** on the canonical queue
   (consolidation #3 in the local DB). The one case with a "known real"
   expectation came back refuted, and *the refutation held* across three
@@ -198,6 +200,11 @@ guard. Both stores now set `PRAGMA busy_timeout = 5000` — the server is the
 first thing to put two connections on one file. Localhost only; exposure is
 the trigger slice's decision. No graceful shutdown: Ctrl-C kills an
 in-flight query() and recovery marks it failed next start.
+Acceptance passed 2026-08-07 on the reference target: review job enqueued
+over HTTP, 42 tool events streamed against the job id, job succeeded in
+6m50s → run #9 (submitted, 8 findings, 43 turns, $4.01), readable via
+`npm run history` and indistinguishable from a CLI run. The same run
+finished over-cap with zero compactions — see the num_turns bullet above.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked
