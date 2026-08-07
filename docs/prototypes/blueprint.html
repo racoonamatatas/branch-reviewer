@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<!-- Design reference for slice 10 chunk 4: the per-target "blueprint" view,
+     as approved from prototyping (v2: campaign loop band, promote actions,
+     detail callout). Mock data, neutral target. The Vue implementation in
+     dashboard/src/views/TargetBlueprintView.vue should match this sheet. -->
+<title>Pipeline — branch reviewer</title>
+<style>
+    /* Direction C v2: the pipeline as an engineering drawing.
+       New in v2: campaign loop band, promote-to-campaign actions,
+       cluster detail callout (the inbox's content, restyled). */
+    :root
+    {
+        color-scheme: dark;
+        --sheet:  #123058;
+        --sheet-2:#0e2949;
+        --grid-1: rgba(220, 232, 248, 0.055);
+        --grid-2: rgba(220, 232, 248, 0.11);
+        --ink:    #dbe7f5;
+        --bright: #ffffff;
+        --muted:  #8fa8c8;
+        --faint:  #5b779e;
+        --chalk:  #f2d479;
+        --stamp-ok:  #b7e4c7;
+        --stamp-no:  #ffa3a3;
+        --stamp-und: #f2d479;
+        --rule: rgba(219, 231, 245, 0.75);
+        --rule-soft: rgba(219, 231, 245, 0.35);
+    }
+    * { box-sizing: border-box; }
+    body
+    {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+            repeating-linear-gradient(0deg,   transparent 0 23px, var(--grid-1) 23px 24px),
+            repeating-linear-gradient(90deg,  transparent 0 23px, var(--grid-1) 23px 24px),
+            repeating-linear-gradient(0deg,   transparent 0 119px, var(--grid-2) 119px 120px),
+            repeating-linear-gradient(90deg,  transparent 0 119px, var(--grid-2) 119px 120px),
+            var(--sheet);
+        font-family: 'Avenir Next', Avenir, 'Segoe UI', system-ui, sans-serif;
+        line-height: 1.5;
+        padding: 1.5rem 1.5rem 2rem;
+    }
+    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .caps { text-transform: uppercase; letter-spacing: 0.16em; }
+    button { font: inherit; cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--chalk); outline-offset: 1px; }
+
+    .caption { margin-bottom: 1.2rem; }
+    .caption h1
+    {
+        margin: 0; font-size: 1rem; font-weight: 600; color: var(--bright);
+        text-transform: uppercase; letter-spacing: 0.22em;
+    }
+    .caption .sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.08em; }
+
+    /* blueprint button */
+    .bp-btn
+    {
+        background: transparent;
+        border: 1px solid var(--rule);
+        color: var(--bright);
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+        padding: 0.28rem 0.7rem;
+    }
+    .bp-btn:hover { background: var(--bright); color: var(--sheet); }
+    .bp-btn.chalk { border-color: var(--chalk); color: var(--chalk); }
+    .bp-btn.chalk:hover { background: var(--chalk); color: var(--sheet); }
+    .bp-btn.ok { border-color: var(--stamp-ok); color: var(--stamp-ok); }
+    .bp-btn.ok:hover { background: var(--stamp-ok); color: var(--sheet); }
+    .bp-btn.no { border-color: var(--stamp-no); color: var(--stamp-no); }
+    .bp-btn.no:hover { background: var(--stamp-no); color: var(--sheet); }
+    .bp-btn.mini { padding: 0.05rem 0.4rem; font-size: 0.62rem; }
+
+    /* ── campaign loop band ─────────────────────────── */
+    .loopband
+    {
+        border: 1px dashed var(--rule);
+        background: rgba(14, 41, 73, 0.55);
+        margin-bottom: 1rem;
+        padding: 0.6rem 0.9rem 0.7rem;
+        display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap;
+    }
+    .loopband .glyph { font-size: 1.3rem; color: var(--chalk); flex: none; }
+    .loopband .what { flex: none; }
+    .loopband .what .name { color: var(--bright); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.18em; }
+    .loopband .what .m { color: var(--faint); font-size: 0.72rem; letter-spacing: 0.06em; }
+    .rounds { display: flex; gap: 0.4rem; align-items: center; }
+    .round
+    {
+        border: 1px solid var(--rule-soft);
+        padding: 0.15rem 0.5rem 0.25rem;
+        text-align: center; min-width: 3.2em;
+    }
+    .round .r { display: block; color: var(--faint); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; }
+    .round .v { font-family: ui-monospace, Menlo, monospace; color: var(--bright); font-size: 0.9rem; }
+    .round.barren .v { color: var(--faint); }
+    .round.barren { border-style: dashed; }
+    .loopband .stopped
+    {
+        font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;
+        letter-spacing: 0.14em; color: var(--stamp-ok);
+        border: 2px solid var(--stamp-ok); padding: 0.15rem 0.5rem;
+        transform: rotate(-3deg); flex: none;
+    }
+    .loopband .cost { margin-left: auto; color: var(--muted); font-size: 0.75rem; font-family: ui-monospace, Menlo, monospace; }
+
+    /* ── the flow ───────────────────────────────────── */
+    .flowwrap { overflow-x: auto; padding-bottom: 0.5rem; }
+    .flow { display: flex; align-items: stretch; gap: 0; min-width: 1180px; }
+
+    .stage
+    {
+        border: 1px solid var(--rule);
+        background: rgba(14, 41, 73, 0.55);
+        flex: 1;
+        min-width: 0;
+        display: flex; flex-direction: column;
+    }
+    .stage-head
+    {
+        display: flex; align-items: baseline; gap: 0.6rem;
+        border-bottom: 1px solid var(--rule);
+        padding: 0.5rem 0.8rem;
+    }
+    .stage-head .no { font-family: ui-monospace, Menlo, monospace; color: var(--chalk); font-size: 0.85rem; }
+    .stage-head .name
+    {
+        color: var(--bright); font-weight: 600; font-size: 0.85rem;
+        text-transform: uppercase; letter-spacing: 0.18em;
+    }
+    .stage-head .desc { margin-left: auto; color: var(--faint); font-size: 0.75rem; letter-spacing: 0.06em; }
+    .stage-body { padding: 0.7rem 0.8rem 0.9rem; flex: 1; }
+
+    .connector
+    {
+        flex: none; width: 84px; align-self: stretch;
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        gap: 0.3rem; padding: 0 4px;
+    }
+    .connector .arrow { width: 100%; display: flex; align-items: center; color: var(--rule); }
+    .connector .arrow::before { content: ''; flex: 1; border-top: 2px dashed var(--rule-soft); }
+    .connector .arrow::after { content: '▶'; font-size: 0.7rem; margin-left: 2px; }
+    .connector .n { color: var(--chalk); font-size: 0.72rem; text-align: center; letter-spacing: 0.08em; text-transform: uppercase; }
+
+    /* stage 1: runs */
+    .run
+    {
+        display: flex; gap: 0.7rem; align-items: baseline;
+        border-bottom: 1px dashed var(--rule-soft);
+        padding: 0.32rem 0; font-size: 0.85rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .run:last-of-type { border-bottom: 0; }
+    .run .id { color: var(--bright); font-family: ui-monospace, Menlo, monospace; }
+    .run .m { color: var(--muted); }
+    .run .f { margin-left: auto; color: var(--ink); }
+
+    /* stage 2: clusters (clickable in v2) */
+    .sevgroup { margin-bottom: 0.6rem; }
+    .sevgroup .caps { font-size: 0.7rem; color: var(--faint); margin-bottom: 0.2rem; }
+    .cl
+    {
+        display: flex; gap: 0.6rem; align-items: baseline; width: 100%;
+        background: transparent; border: 0; border-left: 2px solid transparent;
+        color: inherit; text-align: left;
+        padding: 0.18rem 0.3rem; font-size: 0.82rem;
+    }
+    .cl:hover { background: rgba(219, 231, 245, 0.08); }
+    .cl[aria-current="true"] { border-left-color: var(--chalk); background: rgba(242, 212, 121, 0.08); }
+    .cl .t { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cl .occ { margin-left: auto; flex: none; color: var(--chalk); font-size: 0.75rem; letter-spacing: 0.15em; }
+    .cl .occ .empty { color: var(--faint); }
+
+    /* stage 3: verify */
+    .vrow
+    {
+        display: flex; gap: 0.6rem; align-items: center; width: 100%;
+        background: transparent; border: 0; border-left: 2px solid transparent;
+        border-bottom: 1px dashed var(--rule-soft); color: inherit; text-align: left;
+        padding: 0.42rem 0.3rem; font-size: 0.82rem;
+    }
+    .vrow:hover { background: rgba(219, 231, 245, 0.08); }
+    .vrow[aria-current="true"] { border-left-color: var(--chalk); background: rgba(242, 212, 121, 0.08); }
+    .vrow .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stamp
+    {
+        margin-left: auto; flex: none;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 0.68rem; letter-spacing: 0.14em;
+        border: 2px solid currentColor; padding: 0.08rem 0.45rem;
+        transform: rotate(-4deg);
+    }
+    .stamp-ok  { color: var(--stamp-ok); }
+    .stamp-no  { color: var(--stamp-no); }
+    .stamp-und { color: var(--stamp-und); border-style: dashed; }
+    .stamp-pend{ color: var(--faint); border: 1px dashed var(--faint); transform: none; }
+    .vnote { color: var(--faint); font-size: 0.75rem; margin-top: 0.6rem; letter-spacing: 0.04em; }
+
+    /* stage 4: coverage */
+    .fraction { font-family: ui-monospace, Menlo, monospace; font-size: 2.3rem; color: var(--bright); line-height: 1.1; }
+    .fraction .est { color: var(--chalk); }
+    .fraction .of { color: var(--faint); font-size: 1.3rem; }
+    .margincalc
+    {
+        margin-top: 0.7rem;
+        font-family: ui-monospace, Menlo, monospace;
+        color: var(--chalk); font-size: 0.8rem; line-height: 1.7;
+        border-left: 2px solid var(--chalk); padding-left: 0.7rem;
+    }
+    .margincalc .c { color: var(--muted); }
+    .verdictline
+    {
+        margin-top: 0.8rem; font-size: 0.78rem; letter-spacing: 0.1em;
+        text-transform: uppercase; color: var(--stamp-ok);
+    }
+    .cta { margin-top: 0.9rem; }
+
+    /* intake rail */
+    .intake
+    {
+        flex: none; width: 210px;
+        border: 1px dashed var(--rule-soft);
+        padding: 0.7rem 0.8rem; display: flex; flex-direction: column; gap: 0.5rem;
+    }
+    .intake .caps { font-size: 0.7rem; color: var(--faint); }
+    .intake .item { font-size: 0.8rem; }
+    .intake .item .mono { color: var(--bright); font-size: 0.78rem; }
+    .intake .item .m { color: var(--muted); font-size: 0.75rem; }
+    .intake .divider { border-top: 1px dashed var(--rule-soft); margin: 0.2rem 0; }
+    .intake .actions { display: flex; gap: 0.35rem; margin-top: 0.2rem; }
+
+    /* ── detail callout (v2) ────────────────────────── */
+    .callout
+    {
+        margin-top: 1.1rem;
+        border: 1px solid var(--rule);
+        background: rgba(14, 41, 73, 0.7);
+    }
+    .callout-head
+    {
+        display: flex; align-items: baseline; gap: 0.8rem; flex-wrap: wrap;
+        border-bottom: 1px solid var(--rule);
+        padding: 0.5rem 0.9rem;
+    }
+    .callout-head .k { font-family: ui-monospace, Menlo, monospace; color: var(--chalk); font-size: 0.8rem; letter-spacing: 0.12em; }
+    .callout-head .t { color: var(--bright); font-weight: 600; }
+    .callout-head .meta { margin-left: auto; color: var(--faint); font-size: 0.75rem; letter-spacing: 0.08em; }
+    .callout-body
+    {
+        display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+        gap: 0; min-height: 8rem;
+    }
+    @media (max-width: 900px) { .callout-body { grid-template-columns: 1fr; } }
+    .callout .left { padding: 0.8rem 0.9rem 1rem; border-right: 1px dashed var(--rule-soft); }
+    .callout .right { padding: 0.8rem 0.9rem 1rem; }
+    .callout h3 { margin: 0 0 0.4rem; font-size: 0.68rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.18em; font-weight: 600; }
+    .callout .prose { font-size: 0.88rem; max-width: 70ch; color: var(--ink); }
+    .callout .prose p { margin: 0 0 0.6em; }
+    .callout .sugg
+    {
+        border-left: 2px solid var(--chalk); padding: 0.1rem 0 0.1rem 0.7rem;
+        color: var(--chalk); font-size: 0.85rem; margin-top: 0.7rem; max-width: 70ch;
+    }
+    .callout .member { display: flex; gap: 0.7rem; font-size: 0.8rem; color: var(--muted); padding: 0.12rem 0; }
+    .callout .member .rid { color: var(--bright); font-family: ui-monospace, Menlo, monospace; }
+    .callout .rationale { font-size: 0.85rem; color: var(--ink); max-width: 60ch; }
+    .callout .confidence { font-size: 0.78rem; color: var(--muted); margin-top: 0.4rem; font-style: italic; }
+    .callout .vactions { display: flex; gap: 0.5rem; margin-top: 0.8rem; align-items: center; flex-wrap: wrap; }
+    .callout .vactions .note { color: var(--faint); font-size: 0.72rem; }
+    .callout .bigstamp
+    {
+        display: inline-block; font-family: ui-monospace, Menlo, monospace;
+        font-size: 0.8rem; letter-spacing: 0.16em;
+        border: 2px solid currentColor; padding: 0.15rem 0.6rem;
+        transform: rotate(-3deg); margin-bottom: 0.6rem;
+    }
+
+    /* title block */
+    .titleblockwrap { display: flex; justify-content: flex-end; margin-top: 1.4rem; }
+    .titleblock
+    {
+        border: 1px solid var(--rule);
+        display: grid; grid-template-columns: auto auto auto;
+        background: rgba(14, 41, 73, 0.7);
+        font-size: 0.75rem;
+    }
+    .titleblock .cell { border: 1px solid var(--rule-soft); padding: 0.35rem 0.9rem 0.4rem; }
+    .titleblock .k { display: block; color: var(--faint); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.18em; }
+    .titleblock .v { color: var(--bright); font-family: ui-monospace, Menlo, monospace; }
+</style>
+
+<div class="caption">
+    <h1>Branch Review Pipeline</h1>
+    <div class="sub caps">acme/widgets — feature/retry-taxonomy → main · consolidation Nº 7</div>
+</div>
+
+<div class="loopband">
+    <span class="glyph">↺</span>
+    <div class="what">
+        <div class="name">Campaign #10 — stages 01↔02 repeat until dry</div>
+        <div class="m caps">novel clusters per round · patience 2</div>
+    </div>
+    <div class="rounds">
+        <div class="round"><span class="r">r1</span><span class="v">5</span></div>
+        <div class="round"><span class="r">r2</span><span class="v">2</span></div>
+        <div class="round"><span class="r">r3</span><span class="v">2</span></div>
+        <div class="round barren"><span class="r">r4</span><span class="v">0</span></div>
+        <div class="round barren"><span class="r">r5</span><span class="v">0</span></div>
+    </div>
+    <span class="stopped">STOPPED: DRY</span>
+    <span class="cost">reviews $5.32 · verification $1.11</span>
+</div>
+
+<div class="flowwrap">
+    <div class="flow">
+        <div class="intake">
+            <span class="caps">Intake</span>
+            <div class="item">
+                <div class="mono">watch #1</div>
+                <div class="m">branch-reviewer-api · agent-review</div>
+            </div>
+            <div class="item">
+                <div class="mono">watch #2</div>
+                <div class="m">target-repo · agent-review</div>
+            </div>
+            <div class="divider"></div>
+            <span class="caps">Queue</span>
+            <div class="item">
+                <div class="mono">#12 ▶ running</div>
+                <div class="m">campaign · round 3</div>
+            </div>
+            <div class="item">
+                <div class="mono">#13 ● queued · review</div>
+                <div class="m">target-repo · pr-4188 · via watch</div>
+                <div class="actions"><button class="bp-btn mini chalk">↺ promote to campaign</button><button class="bp-btn mini">cancel</button></div>
+            </div>
+            <div class="item">
+                <div class="mono">#14 ● queued · review</div>
+                <div class="m">branch-reviewer-sdk · slice-9</div>
+                <div class="actions"><button class="bp-btn mini chalk">↺ promote to campaign</button><button class="bp-btn mini">cancel</button></div>
+            </div>
+            <div class="divider"></div>
+            <div class="item"><div class="m">poll every 300 s · fuse 3/cycle</div></div>
+        </div>
+
+        <div class="connector">
+            <div class="arrow"></div>
+            <span class="n">labeled PR<br>head SHA</span>
+        </div>
+
+        <div class="stage">
+            <div class="stage-head"><span class="no">01</span><span class="name">Review</span><span class="desc caps">5 runs</span></div>
+            <div class="stage-body">
+                <div class="run"><span class="id">#16</span><span class="m">31 turns · $1.12</span><span class="f">5 findings</span></div>
+                <div class="run"><span class="id">#17</span><span class="m">27 turns · $0.94</span><span class="f">4 findings</span></div>
+                <div class="run"><span class="id">#18</span><span class="m">38 turns · $1.31</span><span class="f">6 findings</span></div>
+                <div class="run"><span class="id">#19</span><span class="m">24 turns · $0.88</span><span class="f">3 findings</span></div>
+                <div class="run"><span class="id">#20</span><span class="m">29 turns · $1.07</span><span class="f">5 findings</span></div>
+                <div class="vnote">one run is a sample, not a survey — the union is the artifact</div>
+            </div>
+        </div>
+
+        <div class="connector">
+            <div class="arrow"></div>
+            <span class="n">23 findings</span>
+        </div>
+
+        <div class="stage">
+            <div class="stage-head"><span class="no">02</span><span class="name">Consolidate</span><span class="desc caps">9 clusters · click for detail</span></div>
+            <div class="stage-body" id="clusterlist">
+                <div class="sevgroup">
+                    <div class="caps">critical · 2</div>
+                    <button class="cl" data-id="41"><span class="t">429 w/o Retry-After terminal</span><span class="occ">●●●●<span class="empty">●</span></span></button>
+                    <button class="cl" data-id="42"><span class="t">Abort signal not propagated</span><span class="occ">●<span class="empty">●●●●</span></span></button>
+                </div>
+                <div class="sevgroup">
+                    <div class="caps">warning · 4</div>
+                    <button class="cl" data-id="43"><span class="t">Backoff jitter synchronized</span><span class="occ">●●●<span class="empty">●●</span></span></button>
+                    <button class="cl" data-id="44"><span class="t">Usage double-count on resume</span><span class="occ">●●<span class="empty">●●●</span></span></button>
+                    <button class="cl" data-id="45"><span class="t">Off-by-one in maxTurns guard</span><span class="occ">●<span class="empty">●●●●</span></span></button>
+                    <button class="cl" data-id="46"><span class="t">ECONNRESET mapped terminal</span><span class="occ">●<span class="empty">●●●●</span></span></button>
+                </div>
+                <div class="sevgroup" style="margin-bottom:0">
+                    <div class="caps">nit · 3</div>
+                    <button class="cl" data-id="47"><span class="t">Duplicated header building</span><span class="occ">●●<span class="empty">●●●</span></span></button>
+                    <button class="cl" data-id="48"><span class="t">Test names missing 'should'</span><span class="occ">●<span class="empty">●●●●</span></span></button>
+                    <button class="cl" data-id="49"><span class="t">Stale --stream flag comment</span><span class="occ">●<span class="empty">●●●●</span></span></button>
+                </div>
+            </div>
+        </div>
+
+        <div class="connector">
+            <div class="arrow"></div>
+            <span class="n">5 singletons</span>
+        </div>
+
+        <div class="stage">
+            <div class="stage-head"><span class="no">03</span><span class="name">Verify</span><span class="desc caps">adversarial</span></div>
+            <div class="stage-body" id="verifylist">
+                <button class="vrow" data-id="42"><span class="t">Abort signal not propagated</span><span class="stamp stamp-ok">CONFIRMED</span></button>
+                <button class="vrow" data-id="45"><span class="t">Off-by-one in maxTurns guard</span><span class="stamp stamp-no">REFUTED</span></button>
+                <button class="vrow" data-id="46"><span class="t">ECONNRESET mapped terminal</span><span class="stamp stamp-und">UNDETERMINED</span></button>
+                <button class="vrow" data-id="48"><span class="t">Test names missing 'should'</span><span class="stamp stamp-pend">PENDING</span></button>
+                <button class="vrow" data-id="49"><span class="t">Stale --stream flag comment</span><span class="stamp stamp-pend">PENDING</span></button>
+                <div class="vnote">only occurrence-1 clusters are queued — recurrence corroborates the other 4.<br>undetermined ≠ refuted: it means human eyes.</div>
+            </div>
+        </div>
+
+        <div class="connector">
+            <div class="arrow"></div>
+            <span class="n">occurrence<br>counts</span>
+        </div>
+
+        <div class="stage" style="max-width:280px">
+            <div class="stage-head"><span class="no">04</span><span class="name">Coverage</span><span class="desc caps">estimate</span></div>
+            <div class="stage-body">
+                <div class="fraction">9 <span class="of">of</span> <span class="est">≈15</span></div>
+                <div class="margincalc">
+                    f₁ = 5, f₂ = 2<br>
+                    f₁² / 2f₂ = 25/4 <span class="c">≈ 6 unseen</span><br>
+                    <span class="c">capture–recapture</span>
+                </div>
+                <div class="verdictline">campaign stopped: dry<br>(2 barren rounds)</div>
+                <div class="cta"><button class="bp-btn chalk">↺ resume campaign · +5 rounds</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="callout" id="callout">
+    <div class="callout-head">
+        <span class="k" id="co-k">DETAIL — CLUSTER Nº 42</span>
+        <span class="t" id="co-t"></span>
+        <span class="meta caps" id="co-meta"></span>
+    </div>
+    <div class="callout-body">
+        <div class="left">
+            <h3>Finding</h3>
+            <div class="prose" id="co-prose"></div>
+            <div class="sugg" id="co-sugg"></div>
+            <h3 style="margin-top:0.9rem">Members</h3>
+            <div id="co-members"></div>
+        </div>
+        <div class="right" id="co-verify"></div>
+    </div>
+</div>
+
+<div class="titleblockwrap">
+    <div class="titleblock">
+        <div class="cell"><span class="k">Project</span><span class="v">branch-reviewer</span></div>
+        <div class="cell"><span class="k">Target</span><span class="v">retry-taxonomy → main</span></div>
+        <div class="cell"><span class="k">Rev</span><span class="v">consolidation 7</span></div>
+        <div class="cell"><span class="k">Drawn by</span><span class="v">claude-opus-5</span></div>
+        <div class="cell"><span class="k">Date</span><span class="v">2026-08-07</span></div>
+        <div class="cell"><span class="k">Sheet</span><span class="v">1 / 1</span></div>
+    </div>
+</div>
+
+<script>
+    const CLUSTERS = {
+        41: {
+            sev: 'critical', occ: 4, file: 'src/client/retry.ts:57',
+            title: '429 without Retry-After is treated as terminal',
+            detail: ['When the API returns 429 and omits the Retry-After header, classifyError falls through to the terminal branch and the run is abandoned instead of retried. The header is omitted exactly under load-shed conditions — when a retry is most warranted.'],
+            sugg: 'Default to exponential backoff when Retry-After is absent; reserve the terminal branch for 4xx that cannot succeed on retry.',
+            members: [['run #16', 'retry.ts:57'], ['run #17', 'retry.ts:55-60'], ['run #18', 'retry.ts:57'], ['run #20', 'retry.ts:56']],
+            corroboration: 'Reported independently by 4 of 5 runs — recurrence corroborates; not queued for adversarial verification.',
+        },
+        42: {
+            sev: 'critical', occ: 1, file: 'src/client/transport.ts:112',
+            title: 'Abort signal is not propagated to the in-flight fetch',
+            detail: ['transport.request creates an AbortController and wires it to the caller’s cancellation token, but the fetch call never receives controller.signal. Cancelling a run resolves the caller’s promise while the HTTP request keeps streaming until the server closes it.', 'On a hung connection this leaks the request indefinitely: cancellation appears to succeed, but the socket — and the billed stream behind it — survives.'],
+            sugg: 'Pass { signal: controller.signal } in the fetch init; add a test asserting the request rejects with AbortError when the token fires.',
+            members: [['run #17', 'transport.ts:112']],
+            verification: { verdict: 'confirmed', cls: 'ok', cost: '$0.42',
+                rationale: 'Traced the signal path: the controller is constructed at transport.ts:98 and referenced nowhere else. The fetch init at line 112 demonstrably lacks a signal key, and no wrapper adds one. The finding stands as written.',
+                confidence: 'High — the refutation attempt found positive evidence for the finding instead.' },
+        },
+        43: {
+            sev: 'warning', occ: 3, file: 'src/client/retry.ts:83',
+            title: 'Backoff jitter is synchronized across parallel calls',
+            detail: ['The jitter term derives from a module-level seed that resets per batch, so parallel tool calls retrying after the same 529 all sleep the same duration and re-collide on the next attempt.'],
+            sugg: 'Derive jitter from Math.random() per attempt, or offset the seed by call index.',
+            members: [['run #16', 'retry.ts:83'], ['run #18', 'retry.ts:80-90'], ['run #20', 'retry.ts:83']],
+            corroboration: 'Reported by 3 of 5 runs — not queued for adversarial verification.',
+        },
+        44: {
+            sev: 'warning', occ: 2, file: 'src/usage/usage.ts:41',
+            title: 'Usage accumulator double-counts on stream resume',
+            detail: ['When a stream drops and resumes, message_start for the same message id is processed twice; the accumulator keys on event order, not id, so input tokens are added again.'],
+            sugg: 'Dedupe by message id, mirroring how parallel tool calls are already handled.',
+            members: [['run #17', 'usage.ts:41'], ['run #19', 'usage.ts:38-44']],
+            corroboration: 'Reported by 2 of 5 runs — not queued for adversarial verification.',
+        },
+        45: {
+            sev: 'warning', occ: 1, file: 'src/loop/loop.ts:29',
+            title: 'Possible off-by-one in maxTurns guard',
+            detail: ['The guard uses turns >= maxTurns before incrementing, which the run flagged as allowing one turn too many.'],
+            sugg: 'None — see verification.',
+            members: [['run #19', 'loop.ts:29']],
+            verification: { verdict: 'refuted', cls: 'no', cost: '$0.31',
+                rationale: 'The counter increments at the top of the loop before the guard, so the comparison is exact. test/loop/loop.test.ts:74 pins the boundary: a budget of 3 yields exactly 3 turns. Positive contrary evidence, not merely absence of proof.',
+                confidence: 'High — the boundary behavior is directly asserted by an existing test.' },
+        },
+        46: {
+            sev: 'warning', occ: 1, file: 'src/errors/errors.ts:66',
+            title: 'ECONNRESET is mapped terminal instead of transient',
+            detail: ['The error taxonomy maps ECONNRESET into the terminal bucket, so a mid-stream connection reset fails the job rather than retrying. Whether this is wrong depends on intent: if the reset arrives after a captured result, the capped path may be deliberate.'],
+            sugg: 'If unintended, move ECONNRESET beside ETIMEDOUT in the transient bucket; if intended, record the reasoning next to the mapping.',
+            members: [['run #18', 'errors.ts:66']],
+            verification: { verdict: 'undetermined', cls: 'und', cost: '$0.38',
+                rationale: 'Could not refute: the mapping is real and no test pins it. Could not confirm either: the taxonomy splits on the captured-result discriminator, and a reset with a captured result may be deliberately terminal. Design intent is not recoverable from the code.',
+                confidence: 'Needs a human who knows the intent — "could not refute" must not launder into "refuted".' },
+        },
+        47: {
+            sev: 'nit', occ: 2, file: 'src/client/transport.ts:18',
+            title: 'Duplicated header-building logic between transport and sse',
+            detail: ['transport.ts:18 and sse.ts:31 assemble the same auth and version headers by hand; a future header change must remember both sites.'],
+            sugg: 'Extract a buildHeaders(auth) helper used by both.',
+            members: [['run #16', 'transport.ts:18'], ['run #20', 'sse.ts:31']],
+            corroboration: 'Reported by 2 of 5 runs — not queued for adversarial verification.',
+        },
+        48: {
+            sev: 'nit', occ: 1, file: 'test/client/retry.test.ts',
+            title: "Test names in retry suite missing 'should' prefix",
+            detail: ["Five it() blocks use bare descriptions ('retries on 529') where the project convention is it('should ...')."],
+            sugg: 'Rename to match the convention enforced elsewhere in the suite.',
+            members: [['run #18', 'retry.test.ts']],
+            pending: true,
+        },
+        49: {
+            sev: 'nit', occ: 1, file: 'src/cli/review.ts:14',
+            title: 'Stale comment references removed --stream flag',
+            detail: ['The CLI header comment documents a --stream flag removed when streaming became the default; the comment now contradicts the argument parser below it.'],
+            sugg: 'Delete the stale line from the comment.',
+            members: [['run #20', 'review.ts:14']],
+            pending: true,
+        },
+    };
+
+    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+    function renderDetail(id)
+    {
+        const c = CLUSTERS[id];
+        document.getElementById('co-k').textContent = 'DETAIL — CLUSTER Nº ' + id;
+        document.getElementById('co-t').textContent = c.title;
+        document.getElementById('co-meta').textContent = c.sev + ' · seen in ' + c.occ + ' of 5 runs · ' + c.file;
+        document.getElementById('co-prose').innerHTML = c.detail.map(p => `<p>${esc(p)}</p>`).join('');
+        document.getElementById('co-sugg').textContent = 'SUGGESTION — ' + c.sugg;
+        document.getElementById('co-members').innerHTML =
+            c.members.map(([r, loc]) => `<div class="member"><span class="rid">${r}</span><span class="mono">${esc(loc)}</span></div>`).join('');
+
+        const v = document.getElementById('co-verify');
+        if (c.verification)
+        {
+            const stampColor = { ok: 'var(--stamp-ok)', no: 'var(--stamp-no)', und: 'var(--stamp-und)' }[c.verification.cls];
+            v.innerHTML = `<h3>Adversarial verification · ${c.verification.cost}</h3>
+                <span class="bigstamp" style="color:${stampColor}">${c.verification.verdict.toUpperCase()}</span>
+                <div class="rationale">${esc(c.verification.rationale)}</div>
+                <div class="confidence">${esc(c.verification.confidence)}</div>
+                <div class="vactions">
+                    <button class="bp-btn ok">stamp: confirm</button>
+                    <button class="bp-btn no">stamp: refute</button>
+                    <span class="note">human verdicts append — overrule, never overwrite</span>
+                </div>`;
+        }
+        else if (c.pending)
+        {
+            v.innerHTML = `<h3>Adversarial verification</h3>
+                <div class="rationale">Queued — singleton awaiting the adversarial pass. Running it now costs ≈$0.40 of subscription credit.</div>
+                <div class="vactions">
+                    <button class="bp-btn chalk">verify now</button>
+                    <button class="bp-btn ok">stamp: confirm</button>
+                    <button class="bp-btn no">stamp: refute</button>
+                </div>`;
+        }
+        else
+        {
+            v.innerHTML = `<h3>Verification</h3>
+                <div class="rationale">${esc(c.corroboration)}</div>
+                <div class="confidence">Occurrence is confidence, never a filter.</div>`;
+        }
+
+        document.querySelectorAll('[data-id]').forEach(el =>
+            el.setAttribute('aria-current', String(Number(el.dataset.id) === id)));
+    }
+
+    renderDetail(42);
+    document.body.addEventListener('click', (e) =>
+    {
+        const btn = e.target.closest('[data-id]');
+        if (!btn) return;
+        renderDetail(Number(btn.dataset.id));
+        document.getElementById('callout').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+</script>
