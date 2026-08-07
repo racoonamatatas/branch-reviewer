@@ -7,6 +7,7 @@
 import { createServer as createHttpServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { z } from 'zod';
+import type { Id } from '../types/common.js';
 import { jobId, watchId } from '../types/ids.js';
 import type { JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema } from './jobs.js';
@@ -89,7 +90,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     const show = /^\/jobs\/(\d+)$/.exec(path);
     if (show !== null && req.method === 'GET')
     {
-        const id = parseId(show[1]);
+        const id = parseId(show[1], jobId);
         const job = id === undefined ? undefined : deps.jobs.get(id);
         return job === undefined
             ? json(res, 404, { error: 'No such job.' })
@@ -99,7 +100,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     const cancel = /^\/jobs\/(\d+)\/cancel$/.exec(path);
     if (cancel !== null && req.method === 'POST')
     {
-        const id = parseId(cancel[1]);
+        const id = parseId(cancel[1], jobId);
         return id === undefined
             ? json(res, 404, { error: 'No such job.' })
             : cancelJob(deps, id, res);
@@ -117,7 +118,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     const unwatch = /^\/watches\/(\d+)$/.exec(path);
     if (unwatch !== null && req.method === 'DELETE')
     {
-        const id = parseWatchId(unwatch[1]);
+        const id = parseId(unwatch[1], watchId);
         return id === undefined
             ? json(res, 404, { error: 'No such watch.' })
             : deleteWatch(deps, id, res);
@@ -127,17 +128,14 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
 }
 
 // The route regexes admit "0", which the id constructors rightly refuse; an
-// id that cannot exist is a 404, not a crash.
-function parseId(text: string | undefined): JobId | undefined
+// id that cannot exist is a 404, not a crash. The constructor parameter is
+// constrained to branded-id constructors (same shape toTypedId requires), so
+// a plain (n: number) => number like Number cannot launder an unbranded id
+// through here.
+function parseId<T extends string>(text: string | undefined, constructor: (n: number) => Id<T>): Id<T> | undefined
 {
     const n = Number(text);
-    return Number.isInteger(n) && n > 0 ? jobId(n) : undefined;
-}
-
-function parseWatchId(text: string | undefined): WatchId | undefined
-{
-    const n = Number(text);
-    return Number.isInteger(n) && n > 0 ? watchId(n) : undefined;
+    return Number.isInteger(n) && n > 0 ? constructor(n) : undefined;
 }
 
 async function postJob(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>
