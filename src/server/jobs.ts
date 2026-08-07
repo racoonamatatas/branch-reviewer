@@ -132,6 +132,10 @@ export class JobStore
             mkdirSync(dirname(path), { recursive: true });
         }
         this.db = new DatabaseSync(path);
+        // The server runs two connections against one file (HTTP handlers
+        // here, the worker in ReviewStore); a locked write must wait, not
+        // throw SQLITE_BUSY.
+        this.db.exec('PRAGMA busy_timeout = 5000');
         this.db.exec(SCHEMA);
     }
 
