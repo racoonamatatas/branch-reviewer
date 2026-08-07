@@ -30,7 +30,8 @@ Optional `.env` vars:
 - `REVIEW_MODEL` — defaults to `claude-opus-5`.
 
 Every command below except `history` calls the model and burns real
-subscription credit — don't run them as casual checks.
+subscription credit — don't run them as casual checks. (`serve` is free to
+start; every job it executes bills like the equivalent command.)
 
 ## Commands
 
@@ -89,6 +90,33 @@ rounds in a row with no new finding, default 2), the run cap is hit
 (`--max-runs`, default 3), or two consecutive rounds abort. Consolidates
 after every round; verifies pending singleton findings at the end unless
 `--no-verify`.
+
+### `npm run serve`
+
+```
+npm run serve [-- --port N]
+```
+
+Job server on `http://127.0.0.1:4780` (localhost only): review and campaign
+requests queue as jobs in the same database as run history, and a single
+sequential worker executes them — back-to-back runs of one target ride each
+other's prompt cache, so parallelism would cost more, not less. Enqueued jobs
+bill credit exactly like the CLI commands; the server refuses to start if a
+pay-as-you-go credential is set.
+
+```
+POST /jobs                  enqueue: {"kind": "review"|"campaign", "owner", "repo", "head",
+                            "base"? (main), "params"?} — params mirror the CLI flags
+                            (campaign defaults: 3 runs, verify on)
+GET  /jobs                  list job summaries, newest first
+GET  /jobs/<id>             one job: state, error, run ids as rounds land, consolidation
+POST /jobs/<id>/cancel      cancel a queued job (409 once running — its credit is spent)
+```
+
+Jobs end `succeeded`, `aborted` (turn cap, or a campaign with two consecutive
+unusable rounds), or `failed` (the error is stored on the job). A job found
+`running` at startup was interrupted and is marked failed — never silently
+re-run; re-enqueue it deliberately.
 
 ## Eval
 

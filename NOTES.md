@@ -7,14 +7,13 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
-## Status (2026-08-06)
+## Status (2026-08-07)
 
-Slices 1–7 shipped. **Next: slice 8 — Node server + job model.**
+Slices 1–8 shipped. **Next: slice 9 — trigger automation.**
 
-Remaining roadmap (sequencing user-confirmed): Node server + job model →
-trigger automation (webhook/CI, its own slice — auth = *can* run anywhere,
-triggers = something else decides *when*) → Vue TS dashboard (last, standing
-decision) → deploy. Eventually: read→write promotion (posting findings to PRs)
+Remaining roadmap (sequencing user-confirmed): trigger automation
+(webhook/CI, its own slice — auth = *can* run anywhere, triggers = something
+else decides *when*) → Vue TS dashboard (last, standing decision) → deploy. Eventually: read→write promotion (posting findings to PRs)
 — a deliberate, separately-decided step with its own risk profile, not a drift.
 
 Shipped so far:
@@ -30,6 +29,8 @@ Shipped so far:
 6. Campaign — adaptive rounds + coverage estimate + chained verify (2026-08-06).
 7. Headless auth — `CLAUDE_CODE_OAUTH_TOKEN`, unauthenticated-result
    translation, `ANTHROPIC_AUTH_TOKEN` refused (2026-08-06).
+8. Node server + job model — durable job queue in SQLite, sequential worker,
+   four-route HTTP surface on `node:http`, localhost only (2026-08-07).
 
 ## Standing design decisions (don't re-derive)
 
@@ -175,6 +176,29 @@ run #9, a public fastify PR, $1.28, 10 findings. A fine-grained GitHub PAT
 authenticates while org approval is still pending (approval gates the org
 repo, not the token), so public-repo targets work immediately.
 
+**Slice 8 (server + job model).** Three chunks: job store, worker, HTTP
+surface. Jobs live in the same SQLite file as the runs they produce; states
+move queued → running → succeeded | aborted | failed (queued → cancelled
+before work starts), every transition guarded by its expected prior state.
+The worker is sequential on purpose — subscription credit is a serial
+resource and back-to-back runs of one target ride each other's prompt cache —
+and drains chain (`tail.then(drain)`) so a job enqueued in the race window
+between the last empty claim and the drain resolving is still picked up.
+Outcome mapping follows the locked taxonomy: submitted → succeeded, capped →
+aborted (run still saved), throw → failed with the error stored; a campaign's
+`no-usable-runs` aborts, `dry`/`max-runs` both succeed. Deliberate CLI
+divergence: a failed save fails a job (its result is reachable only through
+the store), where the CLI save is observational. A job found `running` at
+startup is marked failed, never silently re-run — a re-run bills credit,
+which is a human decision. HTTP: four routes hand-rolled on `node:http`
+(four routes don't earn a framework), request-level policy in the request
+schema (Zod `.prefault({})` runs the fallback through the schema so inner
+defaults apply), 404 vs 409 distinguished on cancel via the store's state
+guard. Both stores now set `PRAGMA busy_timeout = 5000` — the server is the
+first thing to put two connections on one file. Localhost only; exposure is
+the trigger slice's decision. No graceful shutdown: Ctrl-C kills an
+in-flight query() and recovery marks it failed next start.
+
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked
 against it. (2) `read_file`'s description earns its keep: the project's best
@@ -190,8 +214,11 @@ here.
 
 - "Needs human eyes" has no answer path — a human-verdict row on top of agent
   verdicts (append-only makes overrule natural).
-- README documents only the reviewer; history/consolidate/verify/campaign/eval
-  commands are missing.
+- Server has no graceful shutdown — an in-flight run dies with the process
+  (credit spent, result lost) and is marked failed on next start. Fine while
+  local; revisit before deploy.
+- Server has no auth of its own — safe only because it binds 127.0.0.1; the
+  trigger slice must add auth before any exposure.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - Learning-surface backlog (piggyback on future slices): submit_review-parity

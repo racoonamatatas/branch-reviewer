@@ -27,6 +27,7 @@ npm run history [-- <run-id>]
 npm run consolidate -- <run-id> <run-id> [...] | --show <consolidation-id>
 npm run verify -- <consolidation-id> [--max-turns N] [--reverify]
 npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]
+npm run serve [-- --port N]                 # job server on 127.0.0.1:4780; enqueued jobs bill like the CLI commands
 npm run eval:freeze -- <consolidation-id>   # freeze a consolidation as the judge's golden fixture
 npm run eval:judge                          # stochastic judge eval — run on demand, NOT part of the unit suite
 ```
@@ -43,6 +44,7 @@ Pipeline stages, each a directory under `src/` (tests mirror the tree under `tes
 4. **verify** — adversarial agent per occurrence-1 finding: same three tools, prompt inverted to refute. Three-valued verdict — confirmed / refuted / undetermined — because "couldn't refute" must never launder into "refuted". Verdicts inherit across consolidations by identical member set; `--reverify` re-tests deliberately.
 5. **coverage** — capture-recapture estimator (`coverageOf`) over cluster occurrence counts: singletons/doubletons estimate how many findings remain unseen. Structurally typed on `{ occurrence }`, free of store and campaign.
 6. **campaign** — the loop tying it together: review the same target repeatedly (rounds share prompt cache in one process), re-consolidate after each round, stop when rounds stop yielding novel clusters (patience) or on two consecutive aborts, then verify pending singletons.
+7. **server** — durable job queue (`src/server/jobs.ts`, guarded state machine in the same SQLite file), a single sequential worker (`src/server/worker.ts`, injectable runners, outcomes mapped onto the error taxonomy), and a four-route HTTP surface on `node:http` (`src/server/server.ts`; wiring in `src/cli/serve.ts`, localhost only). Interrupted jobs are marked failed at startup, never silently re-run.
 
 Key facts that shape the code:
 
