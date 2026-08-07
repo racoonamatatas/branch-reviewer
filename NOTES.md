@@ -21,7 +21,8 @@ consolidate → verify → coverage as one sheet, campaigns drawn as the loop
 around stages 1–2). Calm/minimal and editorial directions were rejected —
 schematic, information-dense surfaces win. Human-verdict write path is
 flagged but deliberately out of scope (first write endpoint = its own
-decision).
+decision). The approved blueprint mockup is committed at
+`docs/prototypes/blueprint.html` — chunk 4 implements that sheet.
 
 Slice-10 build notes so far: `dashboard/` is its own Vite+Vue3 strict-TS app;
 server types cross as `import type` via the `@server` alias and every response
