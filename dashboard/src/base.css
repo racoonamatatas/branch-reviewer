@@ -1,0 +1,17 @@
+/* Shared ground only — each view owns its palette (mission control is a dark
+   ops screen, the target view is a blueprint sheet), so the shell stays
+   nearly unstyled on purpose. */
+* { box-sizing: border-box; }
+
+html, body, #app
+{
+    margin: 0;
+    min-height: 100vh;
+}
+
+body
+{
+    font-family: system-ui, 'Segoe UI', sans-serif;
+    background: #0b0f14;
+    color: #c9d4de;
+}
