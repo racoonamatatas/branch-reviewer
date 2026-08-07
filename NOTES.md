@@ -227,8 +227,13 @@ poll loop skips overlapping passes (two concurrent passes could both see a
 SHA as unseen and double-enqueue). Acceptance: free-path proven live —
 watch on a busy public repo (79 open PRs, none labeled) enqueued nothing
 across cycles, and an unreachable-repo watch printed its 404 per cycle
-while other watches kept polling; the paid end-to-end (label a PR, watch
-the job run unattended) awaits a repo where we control labels.
+while other watches kept polling. Paid end-to-end passed 2026-08-07 on this
+repo's own PR #1: label applied → job auto-enqueued on the next 30s cycle
+with head pinned to the PR SHA → run #10 (submitted, 1 finding, 6 turns,
+$0.32) → the following cycle skipped the SHA (no duplicate). The finding
+was a defensible nit on the PR's own refactor — an unconstrained generic
+that would let unbranded ids past the checking-constructor convention —
+citing toTypedId as the standard to match.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked
@@ -251,9 +256,9 @@ here.
 - Server has no auth of its own — safe only because it binds 127.0.0.1;
   auth must land before any exposure (deploy slice, where webhooks may also
   replace polling).
-- Slice-9 paid acceptance pending: label a PR on a controlled repo and watch
-  the trigger run it unattended (~$3). The free path (gating, dedupe, error
-  isolation, interval) is proven.
+- A standing watch exists on this repo (label `agent-review`): any labeled
+  PR gets auto-reviewed whenever the server runs. Deliberate — remove via
+  DELETE /watches if unwanted.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
