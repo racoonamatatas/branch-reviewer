@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>branch-reviewer-sdk — how it works, slice by slice</title>
+<style>
+    :root
+    {
+        color-scheme: light;
+        --paper:    #fafaf9;
+        --panel:    #ffffff;
+        --ink:      #21262c;
+        --ink-2:    #56606b;
+        --ink-3:    #8a939d;
+        --line:     #e3e5e8;
+        --accent:   #2b4a7a;
+        --accent-2: #9c6b1f;
+        --code-bg:  #eef0f3;
+        --open-bg:  #f3f6fa;
+    }
+    @media (prefers-color-scheme: dark)
+    {
+        :root
+        {
+            color-scheme: dark;
+            --paper:    #10161f;
+            --panel:    #161d28;
+            --ink:      #d5dde6;
+            --ink-2:    #97a4b2;
+            --ink-3:    #64707d;
+            --line:     #26303d;
+            --accent:   #7ea3d4;
+            --accent-2: #d4a94e;
+            --code-bg:  #1e2733;
+            --open-bg:  #19222f;
+        }
+    }
+    * { box-sizing: border-box; }
+    body
+    {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: system-ui, 'Segoe UI', sans-serif;
+        line-height: 1.55;
+        padding: 2.5rem 1.5rem 4rem;
+    }
+    main { max-width: 860px; margin: 0 auto; }
+    code
+    {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 0.88em;
+        background: var(--code-bg);
+        padding: 0.08em 0.35em;
+        border-radius: 4px;
+    }
+
+    header.page { margin-bottom: 2rem; }
+    header.page h1 { margin: 0 0 0.3rem; font-size: 1.5rem; letter-spacing: 0.01em; }
+    header.page p { margin: 0 0 0.6rem; color: var(--ink-2); max-width: 68ch; }
+    .pipeline
+    {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 0.82rem;
+        color: var(--ink-3);
+        background: var(--code-bg);
+        border-radius: 8px;
+        padding: 0.6rem 0.9rem;
+        overflow-x: auto;
+        white-space: nowrap;
+        margin-top: 1rem;
+    }
+    .pipeline b { color: var(--accent); font-weight: 600; }
+
+    /* ── collapsible slice sections ─────────────────── */
+    details
+    {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--line);
+        border-radius: 8px;
+        margin-bottom: 0.6rem;
+    }
+    details[open] { border-left-color: var(--accent); background: var(--open-bg); }
+    summary
+    {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: baseline;
+        gap: 0.8rem;
+        padding: 0.7rem 1rem;
+        user-select: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before
+    {
+        content: '▸';
+        color: var(--ink-3);
+        flex: none;
+        transition: transform 0.12s;
+    }
+    details[open] summary::before { transform: rotate(90deg); color: var(--accent); }
+    summary:hover { color: var(--accent); }
+    summary .no
+    {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        color: var(--accent);
+        font-size: 0.85rem;
+        flex: none;
+        min-width: 1.6em;
+    }
+    summary h2 { margin: 0; font-size: 1rem; font-weight: 600; display: inline; }
+    .body { padding: 0.2rem 1.25rem 1rem; border-top: 1px solid var(--line); }
+    .lede
+    {
+        margin: 0.8rem 0 0;
+        color: var(--ink-2);
+        max-width: 68ch;
+        font-style: italic;
+    }
+
+    /* ── three bullet levels, visibly distinct ──────── */
+    .body ul { list-style: none; margin: 0.6rem 0 0; padding: 0; }
+    .body ul ul { margin: 0.15rem 0 0.3rem; padding-left: 1.4rem; }
+    .body li { position: relative; padding-left: 1.25rem; margin-bottom: 0.3rem; }
+    .body li::before { position: absolute; left: 0; }
+
+    /* level 1: square, accent, medium weight */
+    .body > ul > li { font-weight: 550; }
+    .body > ul > li::before { content: '▪'; color: var(--accent); }
+
+    /* level 2: dash, normal weight */
+    .body > ul > li > ul > li { font-weight: 400; font-size: 0.95rem; }
+    .body > ul > li > ul > li::before { content: '–'; color: var(--ink-3); }
+
+    /* level 3: dot, smaller, secondary ink */
+    .body > ul > li > ul > li > ul > li { font-size: 0.88rem; color: var(--ink-2); margin-bottom: 0.2rem; }
+    .body > ul > li > ul > li > ul > li::before { content: '·'; color: var(--accent-2); font-weight: 700; }
+
+    footer.page { margin-top: 2rem; color: var(--ink-3); font-size: 0.85rem; max-width: 68ch; }
+</style>
+</head>
+<body>
+<main>
+    <header class="page">
+        <h1>branch-reviewer-sdk — how it works, slice by slice</h1>
+        <p>An AI agent that reviews a GitHub branch and reports findings — built around one uncomfortable
+           observation: <strong>a single AI review is a sample, not a survey</strong>. Run the same review twice and
+           you get overlapping but different findings. Everything here exists to turn unreliable samples
+           into a trustworthy result: store every run, merge repeats, adversarially verify the one-offs,
+           estimate what's still unfound, and automate the whole loop.</p>
+        <p>It reads and reports only — it never edits code. And it runs on subscription credit only,
+           enforced in code, so no run can silently bill a pay-as-you-go API key.</p>
+        <div class="pipeline"><b>review</b> (one run) → <b>store</b> (keep it) → <b>consolidate</b> (merge repeats) → <b>verify</b> (attack the one-offs) → <b>coverage</b> (how much is left?) → <b>campaign</b> (loop until dry) → <b>server</b> (queue it) → <b>trigger</b> (label a PR, it happens by itself)</div>
+    </header>
+
+    <details>
+        <summary><span class="no">01</span><h2>Reviewer — one agent, one branch, structured findings</h2></summary>
+        <div class="body">
+            <p class="lede">The core act: point an agent at a branch, let it investigate, get back findings you can compute with.</p>
+            <ul>
+                <li>What a review actually is
+                    <ul>
+                        <li>One agent conversation: the model repeatedly picks a tool, reads the result, and digs further until it's ready to report</li>
+                        <li>The Claude Agent SDK runs that loop — tool dispatch, retries, validation — so this codebase is only wiring, policy, and the system prompt</li>
+                        <li>The target is a branch compared against its merge base: "what did this branch change?", not "what does this repo contain?"</li>
+                    </ul>
+                </li>
+                <li>The agent sees the repo through exactly three read-only tools
+                    <ul>
+                        <li><code>list_changed_files</code>, <code>get_diff</code>, <code>read_file</code> — nothing else; every built-in tool is switched off (<code>tools: []</code>)</li>
+                        <li>Read-only is a security posture, not a limitation
+                            <ul>
+                                <li>The agent reads untrusted repo content; an agent that can only read can be curious, but not dangerous</li>
+                            </ul>
+                        </li>
+                        <li><code>read_file</code> matters most: good findings rest on evidence <em>outside</em> the diff — a sibling guard, an adjacent cast — so the agent must be able to look around the change, not just at it</li>
+                    </ul>
+                </li>
+                <li>Findings come back as data, not prose
+                    <ul>
+                        <li>The SDK is given a JSON schema (<code>outputFormat: json_schema</code>) and validates the agent's final answer against it</li>
+                        <li>Each finding: file, line, severity (<code>critical</code> / <code>warning</code> / <code>nit</code>), title, detail, suggestion</li>
+                        <li>Why it matters: every later slice — storing, clustering, verifying — computes over findings; free text would end the pipeline here</li>
+                    </ul>
+                </li>
+                <li>The review is honest about its own limits
+                    <ul>
+                        <li>A run that hits its turn budget reports <em>aborted</em>, never a half-finished "success"</li>
+                        <li>Exit codes carry the verdict: 0 clean · 1 critical finding (or crash) · 2 aborted</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">02</span><h2>Accounting — know what every run costs</h2></summary>
+        <div class="body">
+            <p class="lede">Each run burns real credit. Before building anything bigger, make the spend visible — and keep the bookkeeping honest about what it can't know.</p>
+            <ul>
+                <li>Accounting is observational, never gating
+                    <ul>
+                        <li>Numbers are reported alongside results; no cost figure ever changes a review's outcome or exit code</li>
+                        <li>Why: a reviewer that stops mid-thought to save money produces the worst of both — spent credit and no result</li>
+                    </ul>
+                </li>
+                <li>Counting tokens from a stream is trickier than it looks
+                    <ul>
+                        <li>Parallel tool calls share one API message id — summing per-event usage double-counts, so the accumulator dedupes by id</li>
+                        <li>Input-side figures reconcile exactly against the SDK's final totals; per-message output counts are start-of-message snapshots
+                            <ul>
+                                <li>So the streamed output sum is a lower bound — anything live (like a dashboard) must treat it as one</li>
+                            </ul>
+                        </li>
+                        <li>The SDK result's totals are authoritative; the streamed sum only cross-checks them</li>
+                    </ul>
+                </li>
+                <li>A hard-won stream behavior, handled here once
+                    <ul>
+                        <li>After an error, the SDK yields the result message <em>and then throws</em></li>
+                        <li>The runner keeps that result — it carries the turn count and usage — and only rethrows if no result was ever seen
+                            <ul>
+                                <li>Without this, every aborted run would lose its stats, and aborted runs are exactly the ones worth studying</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">03</span><h2>History — runs become data</h2></summary>
+        <div class="body">
+            <p class="lede">If one run is a sample, the interesting questions are all cross-run questions — and those need runs on disk, queryable.</p>
+            <ul>
+                <li>Every run persists: target, model, status, turn count, cost, token usage, and all findings
+                    <ul>
+                        <li>SQLite via <code>node:sqlite</code>, built into Node ≥ 24 — zero new dependencies</li>
+                        <li>Aborted runs persist too, with their stats; failure is data</li>
+                    </ul>
+                </li>
+                <li>Findings are relational rows, not a JSON blob on the run
+                    <ul>
+                        <li>The whole point is queries like "which findings appeared in more than one run?" — a blob can't answer that; rows can</li>
+                        <li>This one schema decision is what makes slices 4–6 possible</li>
+                    </ul>
+                </li>
+                <li>The database is local-only, deliberately
+                    <ul>
+                        <li>Finding text quotes the reviewed repo's internals — it never belongs in a shared repo</li>
+                        <li><code>data/reviews.db</code> is gitignored; it travels between machines only as an encrypted copy</li>
+                    </ul>
+                </li>
+                <li>Persistence never changes an outcome
+                    <ul>
+                        <li>A failed save warns and moves on; <code>--no-save</code> opts out — the review's verdict belongs to the review</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">04</span><h2>Consolidation — the same bug wears different words</h2></summary>
+        <div class="body">
+            <p class="lede">Run a review five times and the same defect comes back with different titles, different line anchors, different framing. Merging repeats is a semantic problem — so a model does the matching, and code checks its work.</p>
+            <ul>
+                <li>Why string matching is dead on arrival
+                    <ul>
+                        <li>One defect recurs as "429 handled as fatal" here and "missing retry on rate limit" there, anchored two lines apart</li>
+                        <li>Any key built from (file, line, title) treats those as different findings — identity is semantic, not structural</li>
+                    </ul>
+                </li>
+                <li>An LLM judge clusters findings across runs
+                    <ul>
+                        <li>It's the same machinery as a review, dialed to zero: no tools, one turn, structured output only — pure inference</li>
+                        <li>The judge <em>proposes</em> a partition of finding ids; our code <em>enforces</em> it
+                            <ul>
+                                <li><code>validatePartition</code> checks every id exists and appears exactly once; one retry, with the violation named</li>
+                                <li>Trust boundary in one sentence: the model gets the semantic judgment, the code gets the invariants</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>Each cluster carries an occurrence count — "seen in 3 of 5 runs"
+                    <ul>
+                        <li>Occurrence is a <em>confidence badge, never a filter</em>: recurrence and importance are independent axes
+                            <ul>
+                                <li>Proven the hard way: the project's best-ever finding appeared in exactly one run out of many</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>Findings are immutable; clusters are derived
+                    <ul>
+                        <li>Re-consolidating writes a new consolidation row rather than editing an old one — history stays replayable</li>
+                    </ul>
+                </li>
+                <li>A stochastic component gets its own regression harness
+                    <ul>
+                        <li>A human-verified consolidation is frozen as a golden fixture; <code>eval:judge</code> replays it after any prompt change</li>
+                        <li>Kept outside the unit suite on purpose: a judge failure is a signal to inspect, not a broken build</li>
+                        <li>Measured stability: independent re-clusterings of the same runs produced identical partitions — which is what lets slice 6 do statistics on cluster counts</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">05</span><h2>Verification — attack your own findings</h2></summary>
+        <div class="body">
+            <p class="lede">A finding seen once might be a rare catch — or a hallucination. Instead of trusting it, send a second agent whose only job is to prove it wrong.</p>
+            <ul>
+                <li>The verifier is a review agent turned against a finding
+                    <ul>
+                        <li>Same three read tools, inverted prompt: gather evidence to <em>refute</em> this claim</li>
+                        <li>Only once-seen clusters are verified — findings that recur across independent runs corroborate themselves</li>
+                    </ul>
+                </li>
+                <li>Verdicts are three-valued, and the third value is the important one
+                    <ul>
+                        <li><code>confirmed</code> — the refutation attempt found supporting evidence instead</li>
+                        <li><code>refuted</code> — requires <em>positive contrary evidence</em> in the repo, not just a failure to confirm</li>
+                        <li><code>undetermined</code> — the evidence ran out; a human has to look
+                            <ul>
+                                <li>The rule that keeps the system honest: "couldn't refute" must never launder into "refuted" — a binary verifier disguises its blind spots as verdicts</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>Verdicts append, never overwrite
+                    <ul>
+                        <li>Each verification is a new row with rationale, confidence, and cost; the cluster shows the latest</li>
+                        <li>So improving the verifier and re-running builds a track record instead of erasing one — and a human verdict can later overrule on top</li>
+                    </ul>
+                </li>
+                <li>What tuning the verifier taught
+                    <ul>
+                        <li>Verdict instability traced to <em>search coverage</em>, not judgment — the fix was method in the prompt, not vibes
+                            <ul>
+                                <li>Check where overrides actually live (deploy manifests, environment templates) before calling a setting unpinned</li>
+                                <li>Follow every conditional guarding a cited path, and name it in the rationale</li>
+                            </ul>
+                        </li>
+                        <li>Calibration: 8 of 8 verdicts defensible — including one that refuted a finding believed real, and the refutation held
+                            <ul>
+                                <li>The "known truth" was stale; a verdict is only as good as the evidence it cites — and that cuts both ways</li>
+                            </ul>
+                        </li>
+                        <li>Verification costs about 30% of a full review — cheap insurance on exactly the findings that need it</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">06</span><h2>Campaign — how many runs are enough?</h2></summary>
+        <div class="body">
+            <p class="lede">If each run surfaces some findings, when do you stop paying for more? The campaign answers with ecology's tool for the same question: how do you estimate the animals you haven't caught yet?</p>
+            <ul>
+                <li>The loop: review → re-consolidate → check yield → repeat → verify
+                    <ul>
+                        <li>Each round reviews the same branch again, then re-clusters <em>all</em> stored runs of it into one fresh partition</li>
+                        <li>When rounds stop yielding novel clusters, stop and verify the once-seen ones</li>
+                    </ul>
+                </li>
+                <li>A capture–recapture estimator says how much is left
+                    <ul>
+                        <li>The intuition: if new runs keep finding <em>new</em> things, the pool isn't exhausted; if they keep re-finding <em>known</em> things, it nearly is</li>
+                        <li>Concretely: the count seen once (f₁) and count seen twice (f₂) estimate the undiscovered remainder as f₁²∕2f₂</li>
+                        <li>The estimate is reported, never gating
+                            <ul>
+                                <li>On real data it stays high for many rounds — gating on it would mean never stopping short of the run cap</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>What actually stops a campaign
+                    <ul>
+                        <li>Patience: N consecutive rounds with nothing novel (default 2) → dry</li>
+                        <li>A hard run cap, as the backstop</li>
+                        <li>Two consecutive aborted rounds → structural problem; more rounds would burn credit, not find bugs</li>
+                    </ul>
+                </li>
+                <li>Two design details that save real money
+                    <ul>
+                        <li>Rounds fire back-to-back in one process, so each rides the previous round's prompt cache
+                            <ul>
+                                <li>Fresh input drops to a sliver against millions of cached tokens — spreading rounds over days would pay full price every time</li>
+                            </ul>
+                        </li>
+                        <li>Verdict inheritance: a new consolidation's cluster with an identical member set inherits the existing verdict instead of re-paying for verification
+                            <ul>
+                                <li>Motivated by a campaign that re-spent ~$5 re-adjudicating already-settled findings; <code>--reverify</code> re-tests deliberately</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>Why novelty is measured inside one partition
+                    <ul>
+                        <li>Comparing cluster counts <em>between</em> two separate clusterings would measure the judge's mood, not the branch — one partition, one yardstick</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">07</span><h2>Headless auth — the money guardrail</h2></summary>
+        <div class="body">
+            <p class="lede">Everything so far runs where a human logged in. To run unattended on a server, the system needs credentials — without ever opening a second, silent billing path.</p>
+            <ul>
+                <li>The invariant: subscription credit only, enforced in code
+                    <ul>
+                        <li><code>assertSubscriptionCredit()</code> refuses to run at all if <code>ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_AUTH_TOKEN</code> is set</li>
+                        <li>Why refuse instead of prefer: credential precedence is undocumented — the only safe assumption is that a present API key might win, and a run must never silently bill pay-as-you-go</li>
+                    </ul>
+                </li>
+                <li>The one blessed credential: <code>CLAUDE_CODE_OAUTH_TOKEN</code>
+                    <ul>
+                        <li>Minted by <code>claude setup-token</code> — subscription credit by construction, so it's the deliberate exception to the refusal list</li>
+                        <li>The mint is an interactive browser OAuth flow: run it once in a real terminal, put the token in <code>.env</code>, done</li>
+                    </ul>
+                </li>
+                <li>Unauthenticated failure is weirder than you'd expect — so it's translated
+                    <ul>
+                        <li>The SDK reports "not logged in" as <code>subtype: 'success'</code> with <code>is_error: true</code>, then the stream throws
+                            <ul>
+                                <li>Downstream code expecting structured output would die on a confusing parse error instead of the real cause</li>
+                            </ul>
+                        </li>
+                        <li>A shared <code>throwIfErrorResult()</code> catches the shape everywhere and tells a headless machine the actual fix: run <code>claude setup-token</code></li>
+                    </ul>
+                </li>
+                <li>Proven, not assumed
+                    <ul>
+                        <li>Acceptance: a full review completed with <code>HOME</code> pointed at an empty directory — no login state visible, only <code>.env</code> credentials in play</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">08</span><h2>Server — reviews become jobs</h2></summary>
+        <div class="body">
+            <p class="lede">A CLI does one thing while you watch. A server accepts work, survives restarts, and must never lie about what happened while you weren't looking.</p>
+            <ul>
+                <li>A durable job queue, in the same SQLite file as the runs
+                    <ul>
+                        <li>A job is a request — "review this branch", "run a campaign" — with a full lifecycle on disk</li>
+                        <li>States: <code>queued → running → succeeded | aborted | failed</code>, plus <code>queued → cancelled</code>
+                            <ul>
+                                <li>Cancel only works on queued jobs — a running job has already spent credit</li>
+                                <li>Every transition checks its expected prior state; an illegal move is an error, never a silent no-op</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>One worker, strictly sequential — a feature, not a bottleneck
+                    <ul>
+                        <li>Subscription credit is a serial resource; parallel jobs would race each other for it</li>
+                        <li>Back-to-back runs of one target ride each other's prompt cache — sequence is literally cheaper</li>
+                        <li>Job outcomes map through a fixed error taxonomy
+                            <ul>
+                                <li>Transient (network, overload) → retry candidate · terminal (auth, bad branch) → fail fast · capped (turn budget) → aborted, run still saved</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>Honesty about interruption
+                    <ul>
+                        <li>A job found <code>running</code> at startup was orphaned by a crash — it's marked failed, never silently re-run
+                            <ul>
+                                <li>A re-run bills credit; spending money is a human decision</li>
+                            </ul>
+                        </li>
+                        <li>Unlike the CLI, a failed save fails the job — a server job's result is only reachable through the store, so "saved" is part of "succeeded"</li>
+                    </ul>
+                </li>
+                <li>The HTTP surface is deliberately small
+                    <ul>
+                        <li>Hand-rolled on <code>node:http</code> — four routes don't earn a framework</li>
+                        <li>Request policy lives in the request schema: defaults and validation in one Zod shape, unknown fields rejected with a precise error</li>
+                        <li>Binds <code>127.0.0.1</code> only and has no auth — safe <em>because</em> unreachable; exposure is a future, deliberate step</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">09</span><h2>Trigger — label a PR, the rest happens by itself</h2></summary>
+        <div class="body">
+            <p class="lede">The last mile of automation: nobody calls the API. Put a label on a pull request, and the next poll cycle turns it into a review job — with the spend still under human control.</p>
+            <ul>
+                <li>Polling, not webhooks
+                    <ul>
+                        <li>Webhooks need a reachable server and auth — neither exists yet; polling works behind NAT with the token already in hand</li>
+                        <li>The job model doesn't care which one feeds it, so webhooks can replace polling later without touching anything downstream</li>
+                    </ul>
+                </li>
+                <li>A watch = "poll this repo for this label"
+                    <ul>
+                        <li>Stored as database rows, managed over HTTP — a committed config file would leak which repos get reviewed</li>
+                    </ul>
+                </li>
+                <li>Cost stays opt-in twice over
+                    <ul>
+                        <li>Only open, non-draft PRs carrying the trigger label are considered — the label <em>is</em> the request, and removing it stops future triggers</li>
+                        <li>One job per head commit SHA: a new push re-triggers only while the label stays on</li>
+                        <li>The job pins the SHA, not the branch name — it reviews exactly the code state that carried the label, even if the branch moves</li>
+                    </ul>
+                </li>
+                <li>The jobs table doubles as the trigger's memory
+                    <ul>
+                        <li>Any existing job for (owner, repo, SHA) — in <em>any</em> state — blocks re-enqueue
+                            <ul>
+                                <li>A failed job is never auto-retried, a human's cancel is never overridden, and there's no separate "seen SHAs" table to drift out of sync</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>Safety valves for a thing that acts on its own
+                    <ul>
+                        <li>A per-cycle cap on enqueues across all watches — a mass labeling event can't drain the budget in one poll</li>
+                        <li>Overlapping poll passes are skipped: two concurrent passes could both see a SHA as new and double-enqueue</li>
+                        <li>One misconfigured watch logs its error and the others keep polling</li>
+                    </ul>
+                </li>
+                <li>Proven end-to-end, both the free and the paid path
+                    <ul>
+                        <li>Free: a watch on a busy public repo (79 open PRs, none labeled) enqueued nothing, cycle after cycle</li>
+                        <li>Paid: a label applied to a real PR auto-enqueued on the next cycle, reviewed unattended, and the following cycle skipped the SHA — no duplicate</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <details>
+        <summary><span class="no">∑</span><h2>The whole machine — one PR, start to finish</h2></summary>
+        <div class="body">
+            <p class="lede">Everything above, replayed as one story.</p>
+            <ul>
+                <li>You label a pull request <code>agent-review</code>
+                    <ul>
+                        <li>Within a poll cycle, the trigger sees it, pins the head SHA, and enqueues a job — unless that SHA was ever seen before</li>
+                    </ul>
+                </li>
+                <li>The worker picks the job up, alone and in order
+                    <ul>
+                        <li>A review agent explores the branch through three read-only tools and returns schema-validated findings</li>
+                        <li>The run persists with its cost and turn count — succeeded, aborted, or failed, it's all recorded truthfully</li>
+                    </ul>
+                </li>
+                <li>For a campaign, the loop takes over
+                    <ul>
+                        <li>Rounds repeat while they yield novel clusters, riding the prompt cache; consolidation re-merges every run into one partition after each round</li>
+                        <li>The estimator reports how much is likely still unfound; patience decides when to stop</li>
+                    </ul>
+                </li>
+                <li>Trust is earned per finding
+                    <ul>
+                        <li>Findings seen in several runs corroborate themselves</li>
+                        <li>Findings seen once get an adversarial verifier — confirmed, refuted with evidence, or handed to a human as undetermined</li>
+                    </ul>
+                </li>
+                <li>What you read at the end is not "what one AI said"
+                    <ul>
+                        <li>It's the union of independent samples, semantically deduplicated, adversarially tested, with a coverage estimate attached
+                            <ul>
+                                <li>That artifact — not any single run — is the review</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </details>
+
+    <footer class="page">
+        Kept deliberately free of review-target identity and raw finding text — same rule as
+        <code>NOTES.md</code>, <code>data/</code>, and <code>eval/fixtures/</code>. Update this page when a slice ships.
+    </footer>
+</main>
+</body>
+</html>
