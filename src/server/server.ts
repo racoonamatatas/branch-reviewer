@@ -1,14 +1,18 @@
-// The HTTP surface of the job model: enqueue, inspect, cancel. Nothing here
-// touches the model — the worker does that — so every handler is a fast,
-// synchronous store call and the server stays responsive while a review
-// runs. Hand-rolled on node:http for the same reason the store is on
-// node:sqlite: four routes do not earn a framework dependency.
+// The HTTP surface: the job model (enqueue, inspect, cancel), watches, and
+// the dashboard's read-only window onto run history. Nothing here touches
+// the model — the worker does that — so every handler is a fast, synchronous
+// store call and the server stays responsive while a review runs. Hand-rolled
+// on node:http for the same reason the store is on node:sqlite: ten routes
+// still do not earn a framework dependency.
 
 import { createServer as createHttpServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { z } from 'zod';
+import { coverageOf } from '../coverage/coverage.js';
+import type { Coverage } from '../coverage/coverage.js';
+import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
 import type { Id } from '../types/common.js';
-import { jobId, watchId } from '../types/ids.js';
+import { consolidationId, jobId, watchId } from '../types/ids.js';
 import type { JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
@@ -53,10 +57,25 @@ export const newWatchRequestSchema = z.strictObject({
     label: z.string().min(1).default(DEFAULT_TRIGGER_LABEL),
 });
 
+// What the dashboard reads per cluster: the entity plus its verification
+// history (append-only — the last row is the verdict the cluster shows).
+export interface ClusterDetail extends Cluster
+{
+    verifications: Verification[];
+}
+
+export interface ConsolidationDetail extends Consolidation
+{
+    clusters: ClusterDetail[];
+}
+
 export interface ServerDeps
 {
     jobs: JobStore;
     watches: WatchStore;
+    // The dashboard's read-only window: runs, consolidations, verdicts.
+    // Never written from HTTP — the worker owns every write to it.
+    store: ReviewStore;
     // The worker kick — called after every successful enqueue. The server
     // does not know the worker; the wiring entry point ties them together.
     onEnqueued?: (id: JobId) => void;
@@ -76,7 +95,8 @@ export function createServer(deps: ServerDeps): Server
 
 async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>
 {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const path = url.pathname;
 
     if (path === '/jobs' && req.method === 'POST')
     {
@@ -124,7 +144,71 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
             : deleteWatch(deps, id, res);
     }
 
+    if (path === '/targets' && req.method === 'GET')
+    {
+        return json(res, 200, { targets: deps.store.listTargets() });
+    }
+
+    if (path === '/runs' && req.method === 'GET')
+    {
+        const query = parseTargetFilter(url);
+        return query.ok
+            ? json(res, 200, { runs: deps.store.listRuns(query.filter) })
+            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+    }
+
+    if (path === '/consolidations' && req.method === 'GET')
+    {
+        const query = parseTargetFilter(url);
+        return query.ok
+            ? json(res, 200, { consolidations: deps.store.listConsolidations(query.filter) })
+            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+    }
+
+    const detail = /^\/consolidations\/(\d+)$/.exec(path);
+    if (detail !== null && req.method === 'GET')
+    {
+        const id = parseId(detail[1], consolidationId);
+        const consolidation = id === undefined ? undefined : deps.store.getConsolidation(id);
+        return consolidation === undefined
+            ? json(res, 404, { error: 'No such consolidation.' })
+            : json(res, 200, detailOf(deps.store, consolidation));
+    }
+
     json(res, 404, { error: 'No such route.' });
+}
+
+// The target filter is all-or-nothing (see TargetFilter): a partial triple
+// is a caller mistake, not a broader query.
+function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefined } | { ok: false }
+{
+    const owner = url.searchParams.get('owner');
+    const repo = url.searchParams.get('repo');
+    const head = url.searchParams.get('head');
+    if (owner === null && repo === null && head === null)
+    {
+        return { ok: true, filter: undefined };
+    }
+    if (owner === null || repo === null || head === null)
+    {
+        return { ok: false };
+    }
+    return { ok: true, filter: { owner, repo, head } };
+}
+
+// Assembled per request: cluster counts are small and the store is
+// synchronous, so per-cluster verification lookups beat maintaining a
+// joined query. Coverage is recomputed rather than stored — it is a pure
+// function of the occurrence counts already in hand.
+function detailOf(store: ReviewStore, consolidation: Consolidation): { consolidation: ConsolidationDetail; coverage: Coverage }
+{
+    return {
+        consolidation: {
+            ...consolidation,
+            clusters: consolidation.clusters.map(c => ({ ...c, verifications: store.getVerifications(c.id) })),
+        },
+        coverage: coverageOf(consolidation.clusters),
+    };
 }
 
 // The route regexes admit "0", which the id constructors rightly refuse; an

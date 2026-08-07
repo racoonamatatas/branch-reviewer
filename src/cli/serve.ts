@@ -133,7 +133,7 @@ function main(): void
         }
     };
 
-    const server = createServer({ jobs, watches, onEnqueued: kick });
+    const server = createServer({ jobs, watches, store, onEnqueued: kick });
     server.listen(args.port, HOST, () =>
     {
         console.log(`branch-reviewer serving on http://${HOST}:${args.port} `

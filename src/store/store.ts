@@ -40,6 +40,28 @@ export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 'c
     findingsCount: number;
 }
 
+// The dashboard's coordinates for "this branch" — the same triple the trigger
+// dedupes jobs on. All-or-nothing at the HTTP edge: filtering by owner alone
+// would silently mix branches.
+export interface TargetFilter
+{
+    owner: string;
+    repo: string;
+    head: string;
+}
+
+// One reviewed branch aggregated across its runs. A view, not an entity:
+// nothing here owns an id or a createdAt — every field is derived from runs
+// and consolidations, so there is no Identified/Created mixin to earn.
+export interface TargetSummary extends TargetFilter
+{
+    base: string;
+    runCount: number;
+    lastRunAt: string;
+    totalCostUsd: number;
+    latestConsolidationId?: ConsolidationId;
+}
+
 export interface Finding extends Identified<'Finding'>
 {
     runId: RunId;
@@ -284,15 +306,18 @@ export class ReviewStore
         }
     }
 
-    listRuns(): RunSummary[]
+    listRuns(filter?: TargetFilter): RunSummary[]
     {
+        const where = filter === undefined ? '' : 'WHERE r.owner = ? AND r.repo = ? AND r.head = ?';
+        const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
         const rows = this.db.prepare(
             `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.cost_usd,
                     COUNT(f.id) AS findings_count
              FROM runs r LEFT JOIN findings f ON f.run_id = r.id
+             ${where}
              GROUP BY r.id
              ORDER BY r.id DESC`,
-        ).all() as unknown as Array<RunRow & { findings_count: number }>;
+        ).all(...params) as unknown as Array<RunRow & { findings_count: number }>;
 
         return rows.map(row => ({
             id: runId(row.id),
@@ -301,6 +326,41 @@ export class ReviewStore
             status: row.status as RunSummary['status'],
             findingsCount: row.findings_count,
             costUsd: row.cost_usd,
+        }));
+    }
+
+    // Grouped by the full quad (base included) so two review series of one
+    // branch against different bases stay separate rows; the filter methods
+    // key on the triple because that is what callers navigate by.
+    listTargets(): TargetSummary[]
+    {
+        const rows = this.db.prepare(
+            `SELECT r.owner, r.repo, r.head, r.base,
+                    COUNT(*) AS run_count,
+                    MAX(r.created_at) AS last_run_at,
+                    SUM(r.cost_usd) AS total_cost_usd,
+                    (SELECT MAX(c.id) FROM consolidations c
+                     WHERE c.owner = r.owner AND c.repo = r.repo AND c.head = r.head AND c.base = r.base) AS latest_consolidation_id
+             FROM runs r
+             GROUP BY r.owner, r.repo, r.head, r.base
+             ORDER BY MAX(r.id) DESC`,
+        ).all() as unknown as Array<{
+            owner: string; repo: string; head: string; base: string;
+            run_count: number; last_run_at: string; total_cost_usd: number;
+            latest_consolidation_id: number | null;
+        }>;
+
+        return rows.map(row => ({
+            owner: row.owner,
+            repo: row.repo,
+            head: row.head,
+            base: row.base,
+            runCount: row.run_count,
+            lastRunAt: row.last_run_at,
+            totalCostUsd: row.total_cost_usd,
+            ...(row.latest_consolidation_id !== null
+                ? { latestConsolidationId: consolidationId(row.latest_consolidation_id) }
+                : {}),
         }));
     }
 
@@ -398,15 +458,18 @@ export class ReviewStore
         }
     }
 
-    listConsolidations(): ConsolidationSummary[]
+    listConsolidations(filter?: TargetFilter): ConsolidationSummary[]
     {
+        const where = filter === undefined ? '' : 'WHERE m.owner = ? AND m.repo = ? AND m.head = ?';
+        const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
         const rows = this.db.prepare(
             `SELECT m.id, m.created_at, m.owner, m.repo, m.head, m.base, m.run_ids,
                     COUNT(c.id) AS cluster_count
              FROM consolidations m LEFT JOIN clusters c ON c.consolidation_id = m.id
+             ${where}
              GROUP BY m.id
              ORDER BY m.id DESC`,
-        ).all() as unknown as Array<{
+        ).all(...params) as unknown as Array<{
             id: number; created_at: string; owner: string; repo: string; head: string; base: string;
             run_ids: string; cluster_count: number;
         }>;

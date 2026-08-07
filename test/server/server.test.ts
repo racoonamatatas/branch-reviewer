@@ -1,13 +1,17 @@
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { NewFinding } from '../../src/schema/schema.js';
 import { JobStore } from '../../src/server/jobs.js';
 import { createServer } from '../../src/server/server.js';
 import { WatchStore } from '../../src/server/trigger.js';
+import { ReviewStore } from '../../src/store/store.js';
+import type { RunId } from '../../src/types/ids.js';
 import type { JobId } from '../../src/types/ids.js';
 
 let jobs: JobStore;
 let watches: WatchStore;
+let store: ReviewStore;
 let server: Server;
 let base: string;
 let enqueued: JobId[];
@@ -16,8 +20,9 @@ beforeEach(async () =>
 {
     jobs = new JobStore(':memory:');
     watches = new WatchStore(':memory:');
+    store = new ReviewStore(':memory:');
     enqueued = [];
-    server = createServer({ jobs, watches, onEnqueued: id => enqueued.push(id) });
+    server = createServer({ jobs, watches, store, onEnqueued: id => enqueued.push(id) });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -27,6 +32,7 @@ afterEach(async () =>
     await new Promise(resolve => server.close(resolve));
     jobs.close();
     watches.close();
+    store.close();
 });
 
 async function post(path: string, body?: unknown): Promise<Response>
@@ -295,12 +301,187 @@ describe('watches', () =>
     });
 });
 
+// Seeds one submitted run of a target with the given findings; the review
+// history endpoints below read what these write.
+function seedRun(head: string, findings: NewFinding[]): RunId
+{
+    return store.saveRun({
+        owner: 'acme', repo: 'widgets', head, base: 'main', model: 'test-model',
+        status: 'submitted',
+        review: { summary: 'a summary', findings },
+        turns: 5,
+        costUsd: 1.25,
+        usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    });
+}
+
+const finding = (title: string): NewFinding =>
+    ({ file: 'src/a.ts', line: 1, severity: 'warning', title, detail: 'because' });
+
+describe('GET /targets', () =>
+{
+    it('should aggregate runs per target, newest target first', async () =>
+    {
+        // Arrange
+        seedRun('feature/x', [finding('one')]);
+        seedRun('feature/x', [finding('two')]);
+        seedRun('feature/y', []);
+
+        // Act
+        const res = await fetch(`${base}/targets`);
+        const body = await res.json() as { targets: Array<{ head: string; runCount: number; totalCostUsd: number }> };
+
+        // Assert
+        expect(res.status).toBe(200);
+        expect(body.targets.map(t => [t.head, t.runCount])).toEqual([['feature/y', 1], ['feature/x', 2]]);
+        expect(body.targets[1]?.totalCostUsd).toBeCloseTo(2.5);
+    });
+
+    it('should point at the latest consolidation when one exists', async () =>
+    {
+        // Arrange
+        const run = seedRun('feature/x', [finding('one')]);
+        const found = store.getFindings(run);
+        const id = store.saveConsolidation({
+            owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', runIds: [run],
+            clusters: [{
+                memberIds: found.map(f => f.id),
+                representativeId: found[0]!.id,
+                severity: 'warning',
+                occurrence: 1,
+            }],
+        });
+
+        // Act
+        const res = await fetch(`${base}/targets`);
+        const body = await res.json() as { targets: Array<{ latestConsolidationId?: number }> };
+
+        // Assert
+        expect(body.targets[0]?.latestConsolidationId).toBe(id);
+    });
+});
+
+describe('GET /runs', () =>
+{
+    it('should list all runs without a filter and only the target\'s with one', async () =>
+    {
+        // Arrange
+        seedRun('feature/x', [finding('one')]);
+        seedRun('feature/y', []);
+
+        // Act
+        const all = await (await fetch(`${base}/runs`)).json() as { runs: unknown[] };
+        const filtered = await (await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x`))
+            .json() as { runs: Array<{ target: string; findingsCount: number }> };
+
+        // Assert
+        expect(all.runs).toHaveLength(2);
+        expect(filtered.runs).toHaveLength(1);
+        expect(filtered.runs[0]).toMatchObject({ target: 'acme/widgets feature/x → main', findingsCount: 1 });
+    });
+
+    it('should 400 a partial target filter instead of guessing', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/runs?owner=acme`)).status).toBe(400);
+    });
+});
+
+describe('GET /consolidations', () =>
+{
+    it('should list summaries filtered by target', async () =>
+    {
+        // Arrange
+        const run = seedRun('feature/x', [finding('one')]);
+        const found = store.getFindings(run);
+        store.saveConsolidation({
+            owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', runIds: [run],
+            clusters: [{
+                memberIds: found.map(f => f.id),
+                representativeId: found[0]!.id,
+                severity: 'warning',
+                occurrence: 1,
+            }],
+        });
+
+        // Act
+        const match = await (await fetch(`${base}/consolidations?owner=acme&repo=widgets&head=feature/x`))
+            .json() as { consolidations: Array<{ clusterCount: number }> };
+        const miss = await (await fetch(`${base}/consolidations?owner=acme&repo=widgets&head=feature/z`))
+            .json() as { consolidations: unknown[] };
+
+        // Assert
+        expect(match.consolidations).toHaveLength(1);
+        expect(match.consolidations[0]?.clusterCount).toBe(1);
+        expect(miss.consolidations).toHaveLength(0);
+    });
+});
+
+describe('GET /consolidations/:id', () =>
+{
+    it('should return clusters with verification history and computed coverage', async () =>
+    {
+        // Arrange — two runs; one cluster seen by both, one seen once and verified.
+        const first = seedRun('feature/x', [finding('shared'), finding('only-here')]);
+        const second = seedRun('feature/x', [finding('shared again')]);
+        const [shared, onlyHere] = store.getFindings(first);
+        const [sharedAgain] = store.getFindings(second);
+        const id = store.saveConsolidation({
+            owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', runIds: [first, second],
+            clusters: [
+                {
+                    memberIds: [shared!.id, sharedAgain!.id],
+                    representativeId: shared!.id,
+                    severity: 'warning',
+                    occurrence: 2,
+                },
+                {
+                    memberIds: [onlyHere!.id],
+                    representativeId: onlyHere!.id,
+                    severity: 'warning',
+                    occurrence: 1,
+                },
+            ],
+        });
+        const singleton = store.getConsolidation(id)!.clusters.find(c => c.occurrence === 1)!;
+        store.saveVerification({
+            clusterId: singleton.id,
+            verdict: 'confirmed',
+            rationale: 'the guard is real',
+            confidence: 'high',
+            costUsd: 0.4,
+        });
+
+        // Act
+        const res = await fetch(`${base}/consolidations/${id}`);
+        const body = await res.json() as {
+            consolidation: { clusters: Array<{ occurrence: number; verificationStatus: string; verifications: Array<{ verdict: string; rationale: string }> }> };
+            coverage: { observed: number; f1: number; f2: number; undiscovered: number; estimatedTotal: number };
+        };
+
+        // Assert
+        expect(res.status).toBe(200);
+        const verified = body.consolidation.clusters.find(c => c.occurrence === 1);
+        expect(verified).toMatchObject({ verificationStatus: 'confirmed' });
+        expect(verified?.verifications).toMatchObject([{ verdict: 'confirmed', rationale: 'the guard is real' }]);
+        expect(body.consolidation.clusters.find(c => c.occurrence === 2)?.verifications).toEqual([]);
+        expect(body.coverage).toEqual({ observed: 2, f1: 1, f2: 1, undiscovered: 1, estimatedTotal: 3 });
+    });
+
+    it('should 404 an unknown consolidation and an id that cannot exist', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/consolidations/99`)).status).toBe(404);
+        expect((await fetch(`${base}/consolidations/0`)).status).toBe(404);
+    });
+});
+
 describe('routing', () =>
 {
     it('should 404 an unknown route', async () =>
     {
         // Act + Assert
-        expect((await fetch(`${base}/runs`)).status).toBe(404);
+        expect((await fetch(`${base}/nope`)).status).toBe(404);
     });
 
     it('should 404 the wrong method on a known path', async () =>
