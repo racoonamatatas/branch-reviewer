@@ -9,7 +9,31 @@ finding *labels* used below are fine.
 
 ## Status (2026-08-07)
 
-Slices 1–9 shipped. **Next: slice 10 — Vue TS dashboard.**
+Slices 1–9 shipped. **Slice 10 (Vue TS dashboard) in progress: chunks 1–3 of
+5 done** — read API, Vue scaffold, mission control view + fixture server.
+Remaining: chunk 4 (blueprint view per target: pipeline sheet, rev picker,
+detail callout), chunk 5 (static serving from the job server).
+
+Slice-10 decisions (user-picked from four design prototypes): two views —
+mission control as home (dark ops screen: queue, watches, targets, actions),
+and a per-target "blueprint" view shaped like the pipeline itself (review →
+consolidate → verify → coverage as one sheet, campaigns drawn as the loop
+around stages 1–2). Calm/minimal and editorial directions were rejected —
+schematic, information-dense surfaces win. Human-verdict write path is
+flagged but deliberately out of scope (first write endpoint = its own
+decision).
+
+Slice-10 build notes so far: `dashboard/` is its own Vite+Vue3 strict-TS app;
+server types cross as `import type` via the `@server` alias and every response
+schema carries `satisfies z.ZodType<ServerType>` so API drift is a compile
+error (`dashboard/src/api/schemas.ts`); ids brand during parse with the real
+`toTypedId`. `npm run dashboard:fixture` boots the HTTP surface over :memory:
+stores — no worker, no trigger, no credit — for UI work
+(`scripts/fixture-server.ts`); pair with `npm run dashboard:dev`. Casual
+`npm run serve` is NOT safe for UI dev: the standing watch polls immediately.
+Promote-to-campaign is cancel-then-enqueue so the 409 on a just-started
+review stops a duplicate campaign. Live worker feed deferred — needs an SSE
+transport; `usePolling` is the seam it replaces.
 
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
