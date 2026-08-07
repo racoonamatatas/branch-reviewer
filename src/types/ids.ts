@@ -34,3 +34,6 @@ export const verificationId = idConstructor<'Verification'>('VerificationId');
 
 export type JobId = Id<'Job'>;
 export const jobId = idConstructor<'Job'>('JobId');
+
+export type WatchId = Id<'Watch'>;
+export const watchId = idConstructor<'Watch'>('WatchId');

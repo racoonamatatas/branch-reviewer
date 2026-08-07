@@ -225,6 +225,22 @@ describe('cancel', () =>
     });
 });
 
+describe('hasJobFor', () =>
+{
+    it('should find a job by target head in any state, and miss unknown heads', () =>
+    {
+        // Arrange: a cancelled job still counts — automation must not
+        // override a human's cancel.
+        const id = store.enqueue(reviewJob());
+        store.cancel(id);
+
+        // Act + Assert
+        expect(store.hasJobFor('acme', 'widgets', 'feature/x')).toBe(true);
+        expect(store.hasJobFor('acme', 'widgets', 'feature/z')).toBe(false);
+        expect(store.hasJobFor('acme', 'other', 'feature/x')).toBe(false);
+    });
+});
+
 describe('recoverInterrupted', () =>
 {
     it('should fail running jobs at startup and report them', () =>

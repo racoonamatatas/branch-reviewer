@@ -169,6 +169,17 @@ export class JobStore
         }));
     }
 
+    // The trigger's dedupe question: has this head ever been enqueued for
+    // this repo, in any state? Failed and cancelled jobs count — automation
+    // re-running a failure (bills credit) or overriding a human's cancel are
+    // both human decisions, so any existing job blocks the trigger.
+    hasJobFor(owner: string, repo: string, head: string): boolean
+    {
+        return this.db.prepare(
+            'SELECT 1 FROM jobs WHERE owner = ? AND repo = ? AND head = ? LIMIT 1',
+        ).get(owner, repo, head) !== undefined;
+    }
+
     // The single worker's intake: oldest queued job moves to running. The
     // WHERE state = 'queued' guard makes the claim atomic even if a second
     // consumer ever appears; losing the race just means claiming the next one.
