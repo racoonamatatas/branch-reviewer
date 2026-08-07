@@ -78,9 +78,9 @@ export type NewReviewJob = Omit<New<ReviewJob>, Lifecycle>;
 export type NewCampaignJob = Omit<New<CampaignJob>, Lifecycle>;
 export type NewJob = NewReviewJob | NewCampaignJob;
 
-export interface JobSummary extends Pick<Job, 'id' | 'createdAt' | 'kind' | 'state'>
+export interface JobSummary extends Pick<Job, 'id' | 'createdAt' | 'kind' | 'state' | 'owner' | 'repo' | 'head' | 'base'>
 {
-    target: string;  // "owner/repo head → base"
+    target: string;  // "owner/repo head → base" — the human rendering of the four fields
     runCount: number;
 }
 
@@ -164,6 +164,10 @@ export class JobStore
             createdAt: row.created_at,
             kind: row.kind as Job['kind'],
             state: row.state as JobState,
+            owner: row.owner,
+            repo: row.repo,
+            head: row.head,
+            base: row.base,
             target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
             runCount: (JSON.parse(row.run_ids) as number[]).length,
         }));

@@ -11,6 +11,7 @@
         "campaign": "tsx --env-file-if-exists=.env src/cli/campaign.ts",
         "serve": "tsx --env-file-if-exists=.env src/cli/serve.ts",
         "dashboard:dev": "npm --prefix dashboard run dev",
+        "dashboard:fixture": "tsx scripts/fixture-server.ts",
         "dashboard:build": "npm --prefix dashboard run build",
         "dashboard:typecheck": "npm --prefix dashboard run typecheck",
         "eval:freeze": "tsx eval/freeze.ts",

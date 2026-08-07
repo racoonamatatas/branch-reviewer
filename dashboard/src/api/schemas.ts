@@ -30,6 +30,10 @@ export const jobSummarySchema = z.object({
     createdAt: z.string(),
     kind: z.enum(['review', 'campaign']),
     state: jobStateSchema,
+    owner: z.string(),
+    repo: z.string(),
+    head: z.string(),
+    base: z.string(),
     target: z.string(),
     runCount: z.number().int(),
 }) satisfies z.ZodType<JobSummary>;
