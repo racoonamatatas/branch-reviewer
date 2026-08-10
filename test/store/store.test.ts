@@ -126,6 +126,7 @@ describe('ReviewStore', () =>
             target: 'acme/widgets feature-x → main',
             status: 'submitted',
             findingsCount: 2,
+            turns: 30,
             costUsd: 2.5,
         });
         expect(summaries[0]!.findingsCount).toBe(0);

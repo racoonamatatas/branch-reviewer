@@ -101,6 +101,7 @@ export const runSummarySchema = z.object({
     id: toTypedId(runId),
     createdAt: z.string(),
     status: z.enum(['submitted', 'aborted']),
+    turns: z.number().int(),
     costUsd: z.number(),
     target: z.string(),
     findingsCount: z.number().int(),

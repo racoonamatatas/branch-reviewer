@@ -34,7 +34,7 @@ export interface Run extends Identified<'Run'>, Created
 
 export type NewRun = New<Run>;
 
-export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 'costUsd'>
+export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 'turns' | 'costUsd'>
 {
     target: string;  // "owner/repo head → base"
     findingsCount: number;
@@ -311,7 +311,7 @@ export class ReviewStore
         const where = filter === undefined ? '' : 'WHERE r.owner = ? AND r.repo = ? AND r.head = ?';
         const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
         const rows = this.db.prepare(
-            `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.cost_usd,
+            `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.turns, r.cost_usd,
                     COUNT(f.id) AS findings_count
              FROM runs r LEFT JOIN findings f ON f.run_id = r.id
              ${where}
@@ -325,6 +325,7 @@ export class ReviewStore
             target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
             status: row.status as RunSummary['status'],
             findingsCount: row.findings_count,
+            turns: row.turns,
             costUsd: row.cost_usd,
         }));
     }

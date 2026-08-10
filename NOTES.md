@@ -9,10 +9,9 @@ finding *labels* used below are fine.
 
 ## Status (2026-08-07)
 
-Slices 1–9 shipped. **Slice 10 (Vue TS dashboard) in progress: chunks 1–3 of
-5 done** — read API, Vue scaffold, mission control view + fixture server.
-Remaining: chunk 4 (blueprint view per target: pipeline sheet, rev picker,
-detail callout), chunk 5 (static serving from the job server).
+Slices 1–9 shipped. **Slice 10 (Vue TS dashboard) in progress: chunks 1–4 of
+5 done** — read API, Vue scaffold, mission control view + fixture server,
+blueprint view. Remaining: chunk 5 (static serving from the job server).
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -35,6 +34,24 @@ stores — no worker, no trigger, no credit — for UI work
 Promote-to-campaign is cancel-then-enqueue so the 409 on a just-started
 review stops a duplicate campaign. Live worker feed deferred — needs an SSE
 transport; `usePolling` is the seam it replaces.
+
+Chunk-4 (blueprint view) decisions: a "rev" is a consolidation — the picker
+switches whole partitions (clusters are one judge call's opinion, they don't
+compose across revs), follows the latest until the user pins an older one,
+and details cache forever because consolidation rows are immutable.
+`RunSummary` gained `turns` (the sheet's run lines need it; the `satisfies`
+guard forced the dashboard schema in the same change). The campaign loop
+band is **derived, not stored**: per-run novelty = clusters whose members
+all come from that run, computed inside the displayed partition (same
+definition as `novelClusters`, retrospectively); the stamp is the campaign
+job's state because `stoppedBy` is never persisted. The coverage margin calc
+mirrors `coverageOf`'s two branches — displaying f₁²/2f₂ when f₂ = 0 showed
+division by zero on the fixture. Write actions without endpoints (verify
+now, human stamps) render disabled with a note, keeping the approved mockup's
+shape while the first write endpoint stays its own decision. Verified against
+the fixture server with headless Firefox via geckodriver + raw WebDriver curl
+(snap Firefox single-instance blocks `--headless --screenshot` while the
+desktop browser runs; geckodriver sidesteps it).
 
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
@@ -284,6 +301,17 @@ here.
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
+- **Decide: loop-band novelty stays derived, or `RoundOutcome` gets
+  persisted.** Chunk 4 derives per-run novelty in the browser from the
+  displayed partition (and shows the campaign job's state because `stoppedBy`
+  is not stored either). Derivation is always consistent with the rev on
+  screen but anachronistic — a newer judge call can merge away a round's
+  novel cluster, so the sheet can't answer "what did the campaign see when
+  it decided to stop". Storing rounds buys that history at the cost of a
+  migration, a write path, API surface, and a second copy of truth. Current
+  lean: keep deriving until a real consumer of as-it-happened rounds shows
+  up; either way, the dashboard's re-implementation of `novelClusters`
+  should become a value import from the pure coverage module.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
