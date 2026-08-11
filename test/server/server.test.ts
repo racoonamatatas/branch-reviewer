@@ -55,15 +55,28 @@ const reviewRequest = { kind: 'review', owner: 'acme', repo: 'widgets', head: 'f
 
 describe('POST /jobs', () =>
 {
-    it('should enqueue a review job with CLI-mirroring defaults and kick the worker', async () =>
+    it('should enqueue held by default and leave the worker asleep', async () =>
     {
         // Act
         const res = await post('/jobs', reviewRequest);
         const { job } = await res.json() as { job: { id: number; state: string; base: string; params: unknown } };
 
+        // Assert: CLI-mirroring defaults, but no billing without a click —
+        // the worker is not kicked for a job it may not claim.
+        expect(res.status).toBe(201);
+        expect(job).toMatchObject({ state: 'held', base: 'main', params: {} });
+        expect(enqueued).toEqual([]);
+    });
+
+    it('should enqueue queued and kick the worker when start is explicit', async () =>
+    {
+        // Act
+        const res = await post('/jobs', { ...reviewRequest, start: true });
+        const { job } = await res.json() as { job: { id: number; state: string } };
+
         // Assert
         expect(res.status).toBe(201);
-        expect(job).toMatchObject({ state: 'queued', base: 'main', params: {} });
+        expect(job.state).toBe('queued');
         expect(enqueued).toEqual([job.id]);
     });
 
@@ -214,7 +227,7 @@ describe('POST /jobs/:id/cancel', () =>
     it('should 409 a job that is already running: its credit is spent', async () =>
     {
         // Arrange
-        const created = await post('/jobs', reviewRequest);
+        const created = await post('/jobs', { ...reviewRequest, start: true });
         const { job } = await created.json() as { job: { id: number } };
         jobs.claimNext();
 
@@ -570,6 +583,46 @@ describe('POST /clusters/:id/verdict', () =>
         // Act + Assert
         expect((await post('/clusters/999/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
         expect((await post('/clusters/0/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
+    });
+});
+
+describe('POST /jobs/:id/release', () =>
+{
+    it('should release a held job and kick the worker', async () =>
+    {
+        // Arrange
+        const created = await post('/jobs', reviewRequest);
+        const { job } = await created.json() as { job: { id: number } };
+        expect(enqueued).toEqual([]);
+
+        // Act
+        const res = await post(`/jobs/${job.id}/release`);
+        const body = await res.json() as { job: { state: string } };
+
+        // Assert
+        expect(res.status).toBe(200);
+        expect(body.job.state).toBe('queued');
+        expect(enqueued).toEqual([job.id]);
+    });
+
+    it('should 404 a job that does not exist', async () =>
+    {
+        expect((await post('/jobs/999/release')).status).toBe(404);
+    });
+
+    it('should 409 a job that is not held, without kicking the worker', async () =>
+    {
+        // Arrange: started jobs are already queued; releasing again is a
+        // state error, not a no-op.
+        const created = await post('/jobs', { ...reviewRequest, start: true });
+        const { job } = await created.json() as { job: { id: number } };
+
+        // Act
+        const res = await post(`/jobs/${job.id}/release`);
+
+        // Assert
+        expect(res.status).toBe(409);
+        expect(enqueued).toEqual([job.id]);
     });
 });
 

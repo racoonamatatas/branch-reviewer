@@ -210,7 +210,7 @@ describe('cancel', () =>
         store.claimNext();
 
         // Act + Assert
-        expect(() => store.cancel(id)).toThrow('it is running, not queued');
+        expect(() => store.cancel(id)).toThrow('it is running, not held or queued');
     });
 
     it('should not let a cancelled job be claimed', () =>
@@ -222,6 +222,57 @@ describe('cancel', () =>
         // Act + Assert
         expect(store.claimNext()).toBeUndefined();
         expect(store.get(id)?.state).toBe('cancelled');
+    });
+});
+
+describe('held jobs', () =>
+{
+    it('should keep a held job out of the worker\'s reach until released', () =>
+    {
+        // Arrange
+        const id = store.enqueue(reviewJob(), { held: true });
+
+        // Act + Assert: invisible to claimNext while held...
+        expect(store.get(id)?.state).toBe('held');
+        expect(store.claimNext()).toBeUndefined();
+
+        // ...and claimable the moment a human releases it.
+        store.release(id);
+        expect(store.get(id)?.state).toBe('queued');
+        expect(store.claimNext()?.id).toBe(id);
+    });
+
+    it('should cancel a held job: the fuse works before release too', () =>
+    {
+        // Arrange
+        const id = store.enqueue(reviewJob(), { held: true });
+
+        // Act
+        store.cancel(id);
+
+        // Assert
+        expect(store.get(id)?.state).toBe('cancelled');
+    });
+
+    it('should refuse to release a job that is not held', () =>
+    {
+        // Arrange
+        const queued = store.enqueue(reviewJob());
+        const cancelled = store.enqueue(reviewJob({ head: 'feature/y' }), { held: true });
+        store.cancel(cancelled);
+
+        // Act + Assert
+        expect(() => store.release(queued)).toThrow('it is queued, not held');
+        expect(() => store.release(cancelled)).toThrow('it is cancelled, not held');
+    });
+
+    it('should count a held job in hasJobFor: proposed work still blocks the trigger', () =>
+    {
+        // Arrange
+        store.enqueue(reviewJob(), { held: true });
+
+        // Act + Assert
+        expect(store.hasJobFor('acme', 'widgets', 'feature/x')).toBe(true);
     });
 });
 

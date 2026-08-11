@@ -24,7 +24,7 @@ import {
 const severitySchema = z.enum(['critical', 'warning', 'nit']) satisfies z.ZodType<Severity>;
 const verdictSchema = z.enum(['confirmed', 'refuted', 'undetermined']);
 const verificationStatusSchema = z.enum(['pending', 'confirmed', 'refuted', 'undetermined']) satisfies z.ZodType<VerificationStatus>;
-const jobStateSchema = z.enum(['queued', 'running', 'succeeded', 'aborted', 'failed', 'cancelled']) satisfies z.ZodType<JobState>;
+const jobStateSchema = z.enum(['held', 'queued', 'running', 'succeeded', 'aborted', 'failed', 'cancelled']) satisfies z.ZodType<JobState>;
 
 export const jobSummarySchema = z.object({
     id: toTypedId(jobId),

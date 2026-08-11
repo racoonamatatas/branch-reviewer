@@ -17,6 +17,7 @@ const props = defineProps<{
 }>();
 
 const STAMP_CLASS: Record<JobSummary['state'], string> = {
+    held: 'pend',
     succeeded: 'ok',
     running: 'und',
     queued: 'und',

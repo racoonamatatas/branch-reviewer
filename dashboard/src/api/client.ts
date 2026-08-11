@@ -74,6 +74,10 @@ export const api = {
     cancelJob: async (id: JobId) =>
         (await request(`/jobs/${id}/cancel`, z.object({ job: jobSchema }), post(undefined))).job,
 
+    // The human "go" for a held job — this is the click that starts billing.
+    releaseJob: async (id: JobId) =>
+        (await request(`/jobs/${id}/release`, z.object({ job: jobSchema }), post(undefined))).job,
+
     listWatches: async () =>
         (await request('/watches', z.object({ watches: z.array(watchSchema) }))).watches,
 
@@ -98,12 +102,14 @@ export const api = {
     stampVerdict: async (id: ClusterId, verdict: HumanVerdictRequest) =>
         (await request(`/clusters/${id}/verdict`, z.object({ verifications: z.array(verificationSchema) }), post(verdict))).verifications,
 
-    // The tail past a cursor; 0 (or omitted) fetches the whole ring. The
-    // caller detects a server restart by an overlap: a returned seq at or
-    // below its own cursor means "start over", not "append".
+    // The tail past a cursor; 0 (or omitted) fetches the whole ring. `boot`
+    // names the server's process life — when it changes, the caller's cursor
+    // describes a ring that no longer exists and the tail must be refetched
+    // whole, never appended across lives.
     listEvents: async (after = 0) =>
         await request(`/events${after > 0 ? `?after=${after}` : ''}`, z.object({
             events: z.array(activityEventSchema),
+            boot: z.string(),
             poll: pollStatusSchema,
         })),
 

@@ -149,6 +149,28 @@ Enqueue-held vs Start-now buttons; ▶ release transition), a verify job kind
 auto-enqueued held after each review, coverage honesty (exclude refuted
 clusters from the estimator, flag empty-diff runs).
 
+Chunk 2 — `held`: the machine proposes, the human disposes. New first state
+in the job machine (held → queued → running → …; held and queued both exit
+to cancelled), chosen at the enqueue door (`enqueue(job, { held })`) rather
+than by transition: whether work may bill without a further click is the
+enqueuer's decision. The trigger enqueues held; POST /jobs defaults to held
+with `start: true` as the explicit express lane (request policy, not stored);
+POST /jobs/:id/release is the human "go" and the only place the worker gets
+kicked for a formerly-held job. UI rule: the chalk ▶ is the only click that
+bills, everywhere — the form's two doors (◌ enqueue held / ▶ start), the
+queue's ▶ start on held rows, the sheet CTA (start: true, it *is* the click);
+promote always parks the campaign held. No DB migration: state had no CHECK.
+Adding 'held' to JobState made tsc sweep every Record<JobState, …> display
+table — the discriminated-union payoff, working as intended. Chunk-1's diff
+was itself reviewed via PR #3 (run 21, 5 findings, $0.91) and CLI-verified
+5/5 confirmed ($2.73); all five fixed in this chunk: /events gained a `boot`
+process-life id (seq comparison across restarts can be out-run; boot change
+is unambiguous — client refetches whole, never appends across lives), feed
+timestamps render local via a shared `clock()` (ISO slicing displayed UTC),
+the feed fetch degrades independently of the queue fetch, ring-eviction gaps
+render as explicit "N evicted" lines, and stage pulses key on kind per stage
+so the future verify kind cannot light Review.
+
 Chunk-9 live test (2026-08-11, ~$5.50): labeled PR #2 on this repo →
 auto-enqueued review of the chunk-9 diff itself (run 18, 4 findings, $2.18)
 → CLI consolidate #11 → CLI verify (3 confirmed, 1 refuted, $3.26). The

@@ -1,11 +1,14 @@
 // The server's job model: a durable queue of review/campaign requests in the
 // same SQLite database as the results they produce. States move strictly
-// queued → running → succeeded | aborted | failed (queued → cancelled is the
-// one exit before work starts); every transition is guarded by its expected
-// prior state, so a stale caller gets a named error instead of a silent
-// double-write. A job found `running` at startup was interrupted mid-flight —
-// it is marked failed, never silently re-run: a re-run bills real credit,
-// which is a human decision.
+// held → queued → running → succeeded | aborted | failed (held and queued
+// can also exit to cancelled — the only exits before work starts); every
+// transition is guarded by its expected prior state, so a stale caller gets
+// a named error instead of a silent double-write. `held` exists because
+// enqueueing and spending are different decisions: automation and enqueue
+// buttons propose work as held, and only a human release makes it claimable
+// — credit never moves without a click. A job found `running` at startup was
+// interrupted mid-flight — it is marked failed, never silently re-run: a
+// re-run bills real credit, which is a human decision.
 
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -38,7 +41,7 @@ export const campaignJobParamsSchema = z.strictObject({
 export type ReviewJobParams = z.infer<typeof reviewJobParamsSchema>;
 export type CampaignJobParams = z.infer<typeof campaignJobParamsSchema>;
 
-export type JobState = 'queued' | 'running' | 'succeeded' | 'aborted' | 'failed' | 'cancelled';
+export type JobState = 'held' | 'queued' | 'running' | 'succeeded' | 'aborted' | 'failed' | 'cancelled';
 
 // Discriminated on kind so params never need downcasting at the use site.
 interface JobCommon extends Identified<'Job'>, Created
@@ -139,15 +142,28 @@ export class JobStore
         this.db.exec(SCHEMA);
     }
 
-    enqueue(job: NewJob): JobId
+    // held is the caller's choice at the door, not a transition: whether the
+    // job may bill as soon as the worker is free (queued) or waits for a
+    // human release (held) is decided by whoever enqueues.
+    enqueue(job: NewJob, opts: { held?: boolean } = {}): JobId
     {
         const result = this.db.prepare(
-            'INSERT INTO jobs (created_at, kind, owner, repo, head, base, params) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO jobs (created_at, kind, owner, repo, head, base, params, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         ).run(
             new Date().toISOString(), job.kind, job.owner, job.repo, job.head, job.base,
-            JSON.stringify(job.params),
+            JSON.stringify(job.params), opts.held === true ? 'held' : 'queued',
         );
         return jobId(Number(result.lastInsertRowid));
+    }
+
+    // The human "go": a held job becomes claimable. The caller kicks the
+    // worker afterwards — the store does not know the worker exists.
+    release(id: JobId): void
+    {
+        this.requireState(id, ['held'], 'release');
+        this.db.prepare(
+            "UPDATE jobs SET state = 'queued' WHERE id = ? AND state = 'held'",
+        ).run(id);
     }
 
     get(id: JobId): Job | undefined
@@ -210,7 +226,7 @@ export class JobStore
     // campaign's runs are visible round by round, not only at the end.
     recordRun(id: JobId, run: RunId): void
     {
-        const row = this.requireState(id, 'running', 'record a run on');
+        const row = this.requireState(id, ['running'], 'record a run on');
         const runIds = [...(JSON.parse(row.run_ids) as number[]), run];
         this.db.prepare('UPDATE jobs SET run_ids = ? WHERE id = ?').run(JSON.stringify(runIds), id);
     }
@@ -237,9 +253,9 @@ export class JobStore
     // already spent credit and finishes on its own terms.
     cancel(id: JobId): void
     {
-        this.requireState(id, 'queued', 'cancel');
+        this.requireState(id, ['held', 'queued'], 'cancel');
         this.db.prepare(
-            "UPDATE jobs SET state = 'cancelled', finished_at = ? WHERE id = ? AND state = 'queued'",
+            "UPDATE jobs SET state = 'cancelled', finished_at = ? WHERE id = ? AND state IN ('held', 'queued')",
         ).run(new Date().toISOString(), id);
     }
 
@@ -259,22 +275,22 @@ export class JobStore
 
     private finish(id: JobId, state: 'succeeded' | 'aborted' | 'failed', extra: { error?: string; consolidationId?: ConsolidationId }): void
     {
-        this.requireState(id, 'running', state === 'succeeded' ? 'complete' : state === 'aborted' ? 'abort' : 'fail');
+        this.requireState(id, ['running'], state === 'succeeded' ? 'complete' : state === 'aborted' ? 'abort' : 'fail');
         this.db.prepare(
             "UPDATE jobs SET state = ?, finished_at = ?, error = ?, consolidation_id = ? WHERE id = ? AND state = 'running'",
         ).run(state, new Date().toISOString(), extra.error ?? null, extra.consolidationId ?? null, id);
     }
 
-    private requireState(id: JobId, expected: JobState, action: string): JobRow
+    private requireState(id: JobId, expected: JobState[], action: string): JobRow
     {
         const row = this.db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as unknown as JobRow | undefined;
         if (row === undefined)
         {
             throw new Error(`No job #${id}.`);
         }
-        if (row.state !== expected)
+        if (!expected.includes(row.state as JobState))
         {
-            throw new Error(`Cannot ${action} job #${id}: it is ${row.state}, not ${expected}.`);
+            throw new Error(`Cannot ${action} job #${id}: it is ${row.state}, not ${expected.join(' or ')}.`);
         }
         return row;
     }

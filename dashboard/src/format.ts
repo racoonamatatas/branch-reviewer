@@ -24,3 +24,10 @@ export function usd(amount: number): string
 {
     return `$${amount.toFixed(2)}`;
 }
+
+// Wall-clock rendering in the reader's own timezone — slicing an ISO string
+// displays UTC, which disagrees with every other clock on the page.
+export function clock(at: string | number): string
+{
+    return new Date(at).toTimeString().slice(0, 8);
+}

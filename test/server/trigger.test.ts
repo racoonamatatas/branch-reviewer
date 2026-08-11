@@ -125,7 +125,8 @@ describe('pollOnce', () =>
             repo: 'widgets',
             head: 'sha-7',
             base: 'main',
-            state: 'queued',
+            // Held, not queued: the label proposes, a human release disposes.
+            state: 'held',
             params: {},
         });
     });
@@ -221,7 +222,7 @@ describe('pollOnce', () =>
         ));
 
         // Assert
-        expect(events).toEqual(['acme/widgets PR #7 (abcdef0) enqueued as job #1']);
+        expect(events).toEqual(['acme/widgets PR #7 (abcdef0) enqueued as job #1 — held, release to run']);
     });
 
     it('should do nothing with no watches', async () =>

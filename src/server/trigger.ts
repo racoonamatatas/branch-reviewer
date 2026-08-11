@@ -169,6 +169,8 @@ export async function pollOnce(deps: TriggerDeps): Promise<PollReport>
                 report.capped++;
                 continue;
             }
+            // Held, not queued: the label proposes the review, a human release
+            // disposes — automation alone never moves credit.
             const id = deps.jobs.enqueue({
                 kind: 'review',
                 owner: watch.owner,
@@ -176,9 +178,9 @@ export async function pollOnce(deps: TriggerDeps): Promise<PollReport>
                 head: pull.headSha,
                 base: pull.baseRef,
                 params: {},
-            });
+            }, { held: true });
             report.enqueued.push(id);
-            deps.onEvent?.(`${watch.owner}/${watch.repo} PR #${pull.number} (${pull.headSha.slice(0, 7)}) enqueued as job #${id}`);
+            deps.onEvent?.(`${watch.owner}/${watch.repo} PR #${pull.number} (${pull.headSha.slice(0, 7)}) enqueued as job #${id} — held, release to run`);
         }
     }
 

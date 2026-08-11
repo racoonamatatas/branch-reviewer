@@ -13,6 +13,7 @@ import type { JobId, WatchId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest, NewWatchRequest } from '../api/client';
 import ActivityPanel from '../components/ActivityPanel.vue';
+import { clock } from '../format';
 import NewJobForm from '../components/NewJobForm.vue';
 import QueuePanel from '../components/QueuePanel.vue';
 import TargetSheet from '../components/TargetSheet.vue';
@@ -66,9 +67,11 @@ function describe(e: unknown): string
 }
 
 // The activity feed accumulates by cursor: each cycle fetches only the tail
-// past the last seq we hold. An overlap in the numbering means the server
-// restarted and renumbered — start over instead of appending.
+// past the last seq we hold. `boot` names the server's process life — when
+// it changes, our cursor describes a ring that no longer exists (comparing
+// seqs alone can be fooled by a busy new process out-running the cursor).
 const events = ref<ActivityEvent[]>([]);
+const feedBoot = ref<string>();
 const pollStatus = ref<PollStatus>();
 const cursor = computed(() => events.value.at(-1)?.seq ?? 0);
 
@@ -84,23 +87,16 @@ const sheet = ref<InstanceType<typeof TargetSheet>>();
 async function refresh(): Promise<void>
 {
     const sheetRefresh = sheet.value?.refresh();
+    // The feed degrades independently: a hiccup on /events must not blank
+    // the queue, and a queue error must not lose feed continuity.
+    const feedPromise = api.listEvents(cursor.value).catch(() => undefined);
     try
     {
-        const [jobList, watchList, targetList, feed] = await Promise.all([
+        [jobs.value, watches.value, targets.value] = await Promise.all([
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
-            api.listEvents(cursor.value),
         ]);
-        jobs.value = jobList;
-        watches.value = watchList;
-        targets.value = targetList;
-        pollStatus.value = feed.poll;
-        if (feed.events.length > 0)
-        {
-            const restarted = feed.events[0]!.seq <= cursor.value;
-            events.value = restarted ? feed.events : [...events.value, ...feed.events].slice(-200);
-        }
         refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
     }
@@ -108,11 +104,27 @@ async function refresh(): Promise<void>
     {
         connectionError.value = describe(e);
     }
+
+    let feed = await feedPromise;
+    if (feed !== undefined && feedBoot.value !== undefined && feed.boot !== feedBoot.value)
+    {
+        // New process life: our cursor named the old ring, so this response
+        // may be a partial tail. Refetch whole instead of appending lives.
+        feed = await api.listEvents(0).catch(() => undefined);
+    }
+    if (feed !== undefined)
+    {
+        events.value = feed.boot === feedBoot.value
+            ? [...events.value, ...feed.events].slice(-200)
+            : feed.events;
+        feedBoot.value = feed.boot;
+        pollStatus.value = feed.poll;
+    }
     await sheetRefresh;
 }
 
 const updatedLabel = computed(() =>
-    refreshedAtMs.value === undefined ? '…' : new Date(refreshedAtMs.value).toTimeString().slice(0, 8));
+    refreshedAtMs.value === undefined ? '…' : clock(refreshedAtMs.value));
 
 const pollLabel = computed(() =>
 {
@@ -153,12 +165,15 @@ async function act(action: () => Promise<unknown>): Promise<void>
 }
 
 const cancel = (id: JobId): Promise<void> => act(() => api.cancelJob(id));
+const release = (id: JobId): Promise<void> => act(() => api.releaseJob(id));
 const enqueue = (job: NewJobRequest): Promise<void> => act(() => api.enqueueJob(job));
 const addWatch = (watch: NewWatchRequest): Promise<void> => act(() => api.addWatch(watch));
 const removeWatch = (id: WatchId): Promise<void> => act(() => api.removeWatch(id));
 
 // Cancel first: if the review started running in the race window, the 409
-// stops the promotion before a duplicate campaign is enqueued.
+// stops the promotion before a duplicate campaign is enqueued. The campaign
+// lands held regardless of the review's posture — promote upgrades the plan,
+// ▶ start stays the only click that bills.
 const promote = (job: JobSummary): Promise<void> => act(async () =>
 {
     await api.cancelJob(job.id);
@@ -167,6 +182,7 @@ const promote = (job: JobSummary): Promise<void> => act(async () =>
 
 const running = computed(() => jobs.value.find(j => j.state === 'running'));
 const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').length);
+const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').length);
 </script>
 
 <template>
@@ -181,6 +197,8 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
                         <b v-else class="mono">idle</b>
                     </span>
                     <span class="kv caps">queued <b class="mono">{{ queuedCount }}</b></span>
+                    <!-- Held is the count that wants a human — it earns the chalk. -->
+                    <span v-if="heldCount > 0" class="kv caps">held <b class="mono busy">{{ heldCount }}</b></span>
                     <span class="kv caps">poll <b class="mono">{{ pollLabel }}</b></span>
                     <span class="kv caps">updated <b class="mono">{{ updatedLabel }}</b></span>
                 </template>
@@ -192,7 +210,7 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
 
         <main>
             <div class="col">
-                <QueuePanel :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" />
+                <QueuePanel :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
                 <NewJobForm @enqueue="enqueue" />
             </div>
             <div class="col side">
@@ -217,6 +235,7 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
                 @close="closeSheet"
                 @cancel="cancel"
                 @promote="promote"
+                @release="release"
                 @enqueue="enqueue"
             />
         </div>

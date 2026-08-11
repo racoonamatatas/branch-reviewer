@@ -46,6 +46,14 @@ describe('EventLog', () =>
         expect(log.latest()).toBe(1);
     });
 
+    it('should name each process life with a distinct boot id', () =>
+    {
+        const a = new EventLog();
+        const b = new EventLog();
+        expect(a.boot).not.toBe('');
+        expect(a.boot).not.toBe(b.boot);
+    });
+
     it('should stamp source and an ISO timestamp on each event', () =>
     {
         const log = new EventLog();

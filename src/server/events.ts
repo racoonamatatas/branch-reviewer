@@ -4,6 +4,8 @@
 // dashboard can tell "working" from "frozen". Anything worth keeping is
 // already a row somewhere else.
 
+import { randomUUID } from 'node:crypto';
+
 export type EventSource = 'server' | 'worker' | 'trigger';
 
 export interface ActivityEvent
@@ -24,6 +26,12 @@ export type PollStatus =
 
 export class EventLog
 {
+    // Names this process life. Sequence numbers restart with the process, so
+    // a client comparing seqs across a restart can be fooled whenever the new
+    // life out-runs its old cursor before the next poll (run 21 finding,
+    // confirmed); the boot id changing is unambiguous.
+    readonly boot: string = randomUUID();
+
     private readonly capacity: number;
     private readonly buffer: ActivityEvent[] = [];
     private seq = 0;

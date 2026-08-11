@@ -35,15 +35,20 @@ const targetFields = {
 // records exactly what was asked, the HTTP layer decides what an omission
 // means. Defaults mirror the CLI (base main, campaign of 3 runs, verify on);
 // prefault parses the fallback so the inner defaults apply to it too.
+// `start` defaults false: enqueueing proposes, and only an explicit start
+// (or a later release) lets the worker claim it — same posture as the
+// trigger's held enqueues.
 export const newJobRequestSchema = z.discriminatedUnion('kind', [
     z.strictObject({
         kind: z.literal('review'),
         ...targetFields,
+        start: z.boolean().default(false),
         params: reviewJobParamsSchema.prefault({}),
     }),
     z.strictObject({
         kind: z.literal('campaign'),
         ...targetFields,
+        start: z.boolean().default(false),
         params: campaignJobParamsSchema.extend({
             maxRuns: z.number().int().positive().default(3),
             verify: z.boolean().default(true),
@@ -148,6 +153,16 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
             : cancelJob(deps, id, res);
     }
 
+    // The human "go" for a held job — the one transition that starts billing.
+    const release = /^\/jobs\/(\d+)\/release$/.exec(path);
+    if (release !== null && req.method === 'POST')
+    {
+        const id = parseId(release[1], jobId);
+        return id === undefined
+            ? json(res, 404, { error: 'No such job.' })
+            : releaseJob(deps, id, res);
+    }
+
     if (path === '/watches' && req.method === 'POST')
     {
         return postWatch(deps, req, res);
@@ -176,7 +191,11 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         {
             return json(res, 400, { error: 'after must be a non-negative integer.' });
         }
-        return json(res, 200, { events: deps.activity.log.since(after), poll: deps.activity.poll() });
+        return json(res, 200, {
+            events: deps.activity.log.since(after),
+            boot: deps.activity.log.boot,
+            poll: deps.activity.poll(),
+        });
     }
 
     if (path === '/targets' && req.method === 'GET')
@@ -304,8 +323,16 @@ async function postJob(deps: ServerDeps, req: IncomingMessage, res: ServerRespon
         return json(res, 400, { error: z.prettifyError(parsed.error) });
     }
 
-    const id = deps.jobs.enqueue(parsed.data);
-    deps.onEnqueued?.(id);
+    // `start` is request policy, not job data — it decides the door the job
+    // enters through and is not stored. The worker is only kicked for a job
+    // it is actually allowed to claim.
+    const { start, ...job } = parsed.data;
+    const id = deps.jobs.enqueue(job, { held: !start });
+    deps.activity.log.push('server', `job #${id} enqueued over HTTP (${job.kind}${start ? '' : ' — held, release to run'})`);
+    if (start)
+    {
+        deps.onEnqueued?.(id);
+    }
     json(res, 201, { job: deps.jobs.get(id) });
 }
 
@@ -393,6 +420,28 @@ function cancelJob(deps: ServerDeps, id: JobId, res: ServerResponse): void
     {
         return json(res, 409, { error: error instanceof Error ? error.message : String(error) });
     }
+    deps.activity.log.push('server', `job #${id} cancelled`);
+    json(res, 200, { job: deps.jobs.get(id) });
+}
+
+// Same 404/409 split as cancel; the worker kick happens only after the
+// transition commits, so a lost race never wakes the worker for nothing.
+function releaseJob(deps: ServerDeps, id: JobId, res: ServerResponse): void
+{
+    if (deps.jobs.get(id) === undefined)
+    {
+        return json(res, 404, { error: 'No such job.' });
+    }
+    try
+    {
+        deps.jobs.release(id);
+    }
+    catch (error)
+    {
+        return json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+    }
+    deps.activity.log.push('server', `job #${id} released — worker may claim it`);
+    deps.onEnqueued?.(id);
     json(res, 200, { job: deps.jobs.get(id) });
 }
 

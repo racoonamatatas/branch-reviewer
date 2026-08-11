@@ -168,11 +168,9 @@ function main(): void
         jobs,
         watches,
         store,
-        onEnqueued: (id) =>
-        {
-            activityLog.push('server', `job #${id} enqueued over HTTP`);
-            kick();
-        },
+        // HTTP-edge logging lives in the routes (they know held vs started);
+        // this callback is purely the worker kick.
+        onEnqueued: kick,
         activity: {
             log: activityLog,
             poll: () => ({ polling: true, intervalMs: args.pollIntervalMs, ...(lastPollAt !== undefined ? { lastAt: lastPollAt } : {}) }),

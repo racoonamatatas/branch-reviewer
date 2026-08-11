@@ -12,9 +12,11 @@ defineProps<{ watches: Watch[]; jobs: JobSummary[] }>();
 const emit = defineEmits<{
     cancel: [id: JobId];
     promote: [job: JobSummary];
+    release: [id: JobId];
 }>();
 
 const GLYPH: Record<JobSummary['state'], string> = {
+    held: '◌',
     running: '▶',
     queued: '●',
     succeeded: '✓',
@@ -37,8 +39,9 @@ const GLYPH: Record<JobSummary['state'], string> = {
         <div v-for="job in jobs" :key="job.id" class="item">
             <div class="mono">#{{ job.id }} {{ GLYPH[job.state] }} {{ job.state }} · {{ job.kind }}</div>
             <div class="m">{{ age(job.createdAt) }} · {{ job.runCount }} runs</div>
-            <div v-if="job.state === 'queued'" class="actions">
-                <button v-if="job.kind === 'review'" class="bp-btn mini chalk" @click="emit('promote', job)">↺ promote to campaign</button>
+            <div v-if="job.state === 'held' || job.state === 'queued'" class="actions">
+                <button v-if="job.state === 'held'" class="bp-btn mini chalk" @click="emit('release', job.id)">▶ start</button>
+                <button v-if="job.kind === 'review'" class="bp-btn mini" @click="emit('promote', job)">↺ promote to campaign</button>
                 <button class="bp-btn mini" @click="emit('cancel', job.id)">cancel</button>
             </div>
         </div>

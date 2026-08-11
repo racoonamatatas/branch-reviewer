@@ -41,6 +41,7 @@ const emit = defineEmits<{
     close: [];
     cancel: [id: JobId];
     promote: [job: JobSummary];
+    release: [id: JobId];
     enqueue: [job: NewJobRequest];
 }>();
 
@@ -269,12 +270,13 @@ const campaignJob = computed(() =>
     targetJobs.value.filter(j => j.kind === 'campaign')
         .reduce<JobSummary | undefined>((latest, j) => latest === undefined || j.id > latest.id ? j : latest, undefined));
 
-// Liveness pulses on the stage heads: a running review touches stage 01; a
-// running campaign loops through review, consolidate, and verify, so all
-// three pulse — per-stage precision needs job kinds the server doesn't have
-// yet. Stamps stay PENDING while the dot blinks: "in motion" and "no verdict
-// yet" are both true.
+// Liveness pulses on the stage heads, keyed by kind per stage — never by
+// "anything is running", so a future job kind (verify) cannot light stages
+// it does not touch. A review touches stage 01; a campaign loops through
+// review, consolidate, and verify, so all three pulse. Stamps stay PENDING
+// while the dot blinks: "in motion" and "no verdict yet" are both true.
 const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
+const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign');
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 
 const rounds = computed(() =>
@@ -292,13 +294,15 @@ const verifyCostUsd = computed(() =>
 // act() owns the API call, the error display, and the immediate refresh.
 // Stamping stays here: it touches the rev's verification history, which is
 // this sheet's data, nobody else's.
+// start: true — this button IS the billing click (chalk, tooltip says so);
+// parking it held would just demand a second click somewhere else.
 function resumeCampaign(): void
 {
     if (base.value === undefined)
     {
         return;
     }
-    emit('enqueue', { kind: 'campaign', owner: props.owner, repo: props.repo, head: props.head, base: base.value });
+    emit('enqueue', { kind: 'campaign', owner: props.owner, repo: props.repo, head: props.head, base: base.value, start: true });
 }
 
 // A stamp appends to the one thing the forever-cache assumed immutable — the
@@ -358,7 +362,13 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
 
         <div class="flowwrap">
             <div class="flow">
-                <BlueprintIntake :watches="targetWatches" :jobs="targetJobs" @cancel="emit('cancel', $event)" @promote="emit('promote', $event)" />
+                <BlueprintIntake
+                    :watches="targetWatches"
+                    :jobs="targetJobs"
+                    @cancel="emit('cancel', $event)"
+                    @promote="emit('promote', $event)"
+                    @release="emit('release', $event)"
+                />
 
                 <div class="connector">
                     <div class="arrow"></div>
@@ -368,7 +378,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">01</span><span class="name">Review</span>
-                        <span v-if="runningKind" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="reviewing" class="pulse" title="a job for this target is running">●</span>
                         <span class="desc caps">{{ consolidation ? `${runCount} runs` : `${runs.length} runs` }}</span>
                     </div>
                     <div class="stage-body">

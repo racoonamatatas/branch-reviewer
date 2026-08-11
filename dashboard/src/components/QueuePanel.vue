@@ -20,7 +20,7 @@ function isSelected(job: JobSummary): boolean
 // The server returns the full ledger; mission control shows the pending work
 // and only a tail of history. Active jobs run oldest-first, so ascending id
 // is execution order and the running job sorts to the top on its own.
-const ACTIVE = new Set<JobSummary['state']>(['running', 'queued']);
+const ACTIVE = new Set<JobSummary['state']>(['held', 'running', 'queued']);
 const active = computed(() =>
     props.jobs.filter(j => ACTIVE.has(j.state)).sort((a, b) => a.id - b.id));
 // Newest-first sorted here, not trusted from the API — the tail is truncated
@@ -35,9 +35,11 @@ const olderCount = computed(() => recent.value.length - recentShown.value.length
 const emit = defineEmits<{
     cancel: [id: JobId];
     promote: [job: JobSummary];
+    release: [id: JobId];
 }>();
 
 const GLYPH: Record<JobSummary['state'], string> = {
+    held: '◌',
     running: '▶',
     queued: '●',
     succeeded: '✓',
@@ -74,8 +76,10 @@ function targetRoute(job: JobSummary): string
                         <td class="num">{{ job.runCount > 0 ? job.runCount : '–' }}</td>
                         <td class="num">{{ age(job.createdAt) }}</td>
                         <td class="actions">
-                            <template v-if="job.state === 'queued'">
-                                <button v-if="job.kind === 'review'" class="bp-btn mini chalk" @click="emit('promote', job)">↺ campaign</button>
+                            <template v-if="job.state === 'held' || job.state === 'queued'">
+                                <!-- ▶ start is the chalk action: it is the click that bills. -->
+                                <button v-if="job.state === 'held'" class="bp-btn mini chalk" @click="emit('release', job.id)">▶ start</button>
+                                <button v-if="job.kind === 'review'" class="bp-btn mini" @click="emit('promote', job)">↺ campaign</button>
                                 <button class="bp-btn mini" @click="emit('cancel', job.id)">cancel</button>
                             </template>
                         </td>
@@ -186,6 +190,7 @@ tr.done td, tr.done .target a
     border-bottom-color: var(--chalk);
 }
 
+.state-held      { color: var(--bright); }
 .state-running   { color: var(--chalk); }
 .state-queued    { color: var(--bright); }
 .state-succeeded { color: var(--stamp-ok); }

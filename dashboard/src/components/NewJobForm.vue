@@ -12,6 +12,11 @@ const repo = ref('');
 const head = ref('');
 const base = ref('');
 
+// Two doors, one form: enqueue parks the job as held, start makes it
+// claimable immediately. Both are submit buttons so native validation runs;
+// the click sets the flag before the submit event reads it.
+const start = ref(false);
+
 function submit(): void
 {
     if (owner.value === '' || repo.value === '' || head.value === '')
@@ -23,9 +28,11 @@ function submit(): void
         owner: owner.value,
         repo: repo.value,
         head: head.value,
+        start: start.value,
         // Omitted base lets the server default to main, same as the CLI.
         ...(base.value !== '' ? { base: base.value } : {}),
     });
+    start.value = false;
     head.value = '';
 }
 </script>
@@ -46,9 +53,10 @@ function submit(): void
                 <input v-model.trim="repo" placeholder="repo" required>
                 <input v-model.trim="head" placeholder="branch or SHA" required class="wide">
                 <input v-model.trim="base" placeholder="base (main)">
-                <button type="submit" class="bp-btn chalk">enqueue ▶</button>
+                <button type="submit" class="bp-btn" @click="start = false">◌ enqueue held</button>
+                <button type="submit" class="bp-btn chalk" @click="start = true">▶ start</button>
             </form>
-            <p class="note">a job bills subscription credit when the worker picks it up — cancel is only possible while queued</p>
+            <p class="note">enqueue parks the job as held — ▶ start (now or later) is the click that bills subscription credit</p>
         </div>
     </section>
 </template>
