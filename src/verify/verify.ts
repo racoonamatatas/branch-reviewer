@@ -236,7 +236,7 @@ export async function verifyPending(
             }
 
             const { verdict, rationale, confidence } = result.response;
-            store.saveVerification({ clusterId: cluster.id, verdict, rationale, confidence, costUsd: result.stats.costUsd });
+            store.saveVerification({ source: 'agent', clusterId: cluster.id, verdict, rationale, confidence, costUsd: result.stats.costUsd });
             summary.verified++;
             opts.onVerdict?.(cluster, result.response, result.stats);
         }

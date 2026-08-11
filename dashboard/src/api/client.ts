@@ -3,18 +3,19 @@
 // data straight out of the store — branded ids included.
 
 import { z } from 'zod';
-import type { newJobRequestSchema, newWatchRequestSchema } from '@server/server/server';
+import type { humanVerdictRequestSchema, newJobRequestSchema, newWatchRequestSchema } from '@server/server/server';
 import type { TargetFilter } from '@server/store/store';
-import type { ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
+import type { ClusterId, ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
 import {
     consolidationDetailSchema, consolidationSummarySchema, coverageSchema, findingSchema,
-    jobSchema, jobSummarySchema, runSummarySchema, targetSummarySchema, watchSchema,
+    jobSchema, jobSummarySchema, runSummarySchema, targetSummarySchema, verificationSchema, watchSchema,
 } from './schemas';
 
 // The request types are the server's own schemas, imported as types: what the
 // server would reject, the client cannot express.
 export type NewJobRequest = z.input<typeof newJobRequestSchema>;
 export type NewWatchRequest = z.input<typeof newWatchRequestSchema>;
+export type HumanVerdictRequest = z.input<typeof humanVerdictRequestSchema>;
 
 export class ApiError extends Error
 {
@@ -93,6 +94,9 @@ export const api = {
 
     listConsolidations: async (filter?: TargetFilter) =>
         (await request(`/consolidations${targetQuery(filter)}`, z.object({ consolidations: z.array(consolidationSummarySchema) }))).consolidations,
+
+    stampVerdict: async (id: ClusterId, verdict: HumanVerdictRequest) =>
+        (await request(`/clusters/${id}/verdict`, z.object({ verifications: z.array(verificationSchema) }), post(verdict))).verifications,
 
     getConsolidation: async (id: ConsolidationId) =>
         await request(`/consolidations/${id}`, z.object({

@@ -251,7 +251,7 @@ const rounds = computed(() =>
 const reviewCostUsd = computed(() => revRuns.value.reduce((sum, r) => sum + r.costUsd, 0));
 const verifyCostUsd = computed(() =>
     (consolidation.value?.clusters ?? []).reduce(
-        (sum, c) => sum + c.verifications.reduce((s, v) => s + v.costUsd, 0), 0));
+        (sum, c) => sum + c.verifications.reduce((s, v) => s + (v.source === 'agent' ? v.costUsd : 0), 0), 0));
 
 // ── actions (same shape as mission control) ─────────────
 async function act(action: () => Promise<unknown>): Promise<void>
@@ -280,6 +280,24 @@ const promote = (job: JobSummary): Promise<void> => act(async () =>
 
 const resumeCampaign = (): Promise<void> => act(() =>
     api.enqueueJob({ kind: 'campaign', owner: props.owner, repo: props.repo, head: props.head, base: base.value! }));
+
+// A stamp appends to the one thing the forever-cache assumed immutable — the
+// rev's verification history — so the cached detail is invalidated and
+// refetched in place. Same-id refetch: the selection survives.
+const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<void> => act(async () =>
+{
+    const cluster = selectedCluster.value;
+    const revId = selectedRevId.value;
+    if (cluster === undefined || revId === undefined)
+    {
+        return;
+    }
+    await api.stampVerdict(cluster.id, { verdict, rationale });
+    detailCache.delete(revId);
+    const fetched = await api.getConsolidation(revId);
+    detailCache.set(revId, fetched);
+    detail.value = fetched;
+});
 </script>
 
 <template>
@@ -461,7 +479,7 @@ const resumeCampaign = (): Promise<void> => act(() =>
             </div>
         </div>
 
-        <BlueprintCallout v-if="calloutSubject" :subject="calloutSubject" :run-count="runCount" />
+        <BlueprintCallout v-if="calloutSubject" :subject="calloutSubject" :run-count="runCount" @stamp="stamp" />
 
         <div class="titleblockwrap">
             <div class="titleblock">

@@ -126,15 +126,29 @@ export const findingSchema = z.object({
     suggestion: z.string().optional(),
 }) satisfies z.ZodType<Finding>;
 
-const verificationSchema = z.object({
+// Provenance mirrors the server's union: agent rows carry confidence and
+// price, human rows never do, and a human verdict is never undetermined.
+const verificationBase = {
     id: toTypedId(verificationId),
     clusterId: toTypedId(clusterId),
     createdAt: z.string(),
-    verdict: verdictSchema,
     rationale: z.string(),
-    confidence: z.string(),
-    costUsd: z.number(),
-}) satisfies z.ZodType<Verification>;
+};
+
+export const verificationSchema = z.discriminatedUnion('source', [
+    z.object({
+        ...verificationBase,
+        source: z.literal('agent'),
+        verdict: verdictSchema,
+        confidence: z.string(),
+        costUsd: z.number(),
+    }),
+    z.object({
+        ...verificationBase,
+        source: z.literal('human'),
+        verdict: z.enum(['confirmed', 'refuted']),
+    }),
+]) satisfies z.ZodType<Verification>;
 
 const clusterDetailSchema = z.object({
     id: toTypedId(clusterId),

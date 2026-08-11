@@ -12,8 +12,8 @@ import { coverageOf } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
 import type { Id } from '../types/common.js';
-import { consolidationId, jobId, runId, watchId } from '../types/ids.js';
-import type { JobId, WatchId } from '../types/ids.js';
+import { clusterId, consolidationId, jobId, runId, watchId } from '../types/ids.js';
+import type { ClusterId, JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
 import { serveStatic } from './static.js';
@@ -56,6 +56,15 @@ export const newWatchRequestSchema = z.strictObject({
     owner: z.string().min(1),
     repo: z.string().min(1),
     label: z.string().min(1).default(DEFAULT_TRIGGER_LABEL),
+});
+
+// A human verdict. confirmed/refuted only — undetermined is the machine's
+// honest "I don't know", and a human who doesn't know doesn't stamp. The
+// rationale is required: verdicts inherit across consolidations by member
+// set, so a bare stamp would propagate with no trace of why it was earned.
+export const humanVerdictRequestSchema = z.strictObject({
+    verdict: z.enum(['confirmed', 'refuted']),
+    rationale: z.string().min(1),
 });
 
 // What the dashboard reads per cluster: the entity plus its verification
@@ -193,6 +202,19 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
             : json(res, 200, detailOf(deps.store, consolidation));
     }
 
+    // The review store's one HTTP write, and a deliberate breach of "the
+    // worker owns every write": a human verdict is the single write that
+    // cannot come from the worker. It appends to the verification history —
+    // overrule, never overwrite.
+    const stamp = /^\/clusters\/(\d+)\/verdict$/.exec(path);
+    if (stamp !== null && req.method === 'POST')
+    {
+        const id = parseId(stamp[1], clusterId);
+        return id === undefined
+            ? json(res, 404, { error: 'No such cluster.' })
+            : postVerdict(deps, id, req, res);
+    }
+
     // API routes always win — the static handler only ever sees their
     // misses, so a dist file named "jobs" could never shadow the queue.
     if (deps.staticRoot !== undefined && req.method === 'GET')
@@ -264,6 +286,33 @@ async function postJob(deps: ServerDeps, req: IncomingMessage, res: ServerRespon
     const id = deps.jobs.enqueue(parsed.data);
     deps.onEnqueued?.(id);
     json(res, 201, { job: deps.jobs.get(id) });
+}
+
+async function postVerdict(deps: ServerDeps, id: ClusterId, req: IncomingMessage, res: ServerResponse): Promise<void>
+{
+    const raw = await readJson(req, res);
+    if (!raw.ok)
+    {
+        return;
+    }
+
+    const parsed = humanVerdictRequestSchema.safeParse(raw.value);
+    if (!parsed.success)
+    {
+        return json(res, 400, { error: z.prettifyError(parsed.error) });
+    }
+
+    // The store's own existence check speaks: an unknown cluster throws a
+    // named error before anything is written.
+    try
+    {
+        deps.store.saveVerification({ source: 'human', clusterId: id, ...parsed.data });
+    }
+    catch
+    {
+        return json(res, 404, { error: 'No such cluster.' });
+    }
+    json(res, 201, { verifications: deps.store.getVerifications(id) });
 }
 
 async function postWatch(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>

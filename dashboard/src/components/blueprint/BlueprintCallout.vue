@@ -14,14 +14,26 @@ export type CalloutSubject =
 
 <script setup lang="ts">
 // The detail callout under the sheet: one cluster's full content — finding
-// prose, members, and the verification panel. The write actions (verify now,
-// human stamps) are drawn as the approved mockup has them but disabled: the
-// server has no verify endpoint and no human-verdict path yet, and the first
-// write endpoint is its own decision, not a dashboard side effect.
-import { computed } from 'vue';
+// prose, members, and the verification panel. Human stamps are live (the
+// review store's first and only HTTP write); "verify now" stays drawn but
+// disabled until a verify job kind exists.
+import { computed, ref } from 'vue';
 import { usd } from '../../format';
 
 const props = defineProps<{ subject: CalloutSubject; runCount: number }>();
+
+const emit = defineEmits<{ stamp: [verdict: 'confirmed' | 'refuted', rationale: string] }>();
+
+// The rationale is required by the endpoint: verdicts inherit across
+// consolidations by member set, so a bare stamp would propagate with no
+// trace of why. The buttons stay dead until there is one.
+const rationale = ref('');
+
+function stamp(verdict: 'confirmed' | 'refuted'): void
+{
+    emit('stamp', verdict, rationale.value.trim());
+    rationale.value = '';
+}
 
 const cluster = computed(() => props.subject.kind === 'cluster' ? props.subject.cluster : undefined);
 const finding = computed(() => props.subject.kind === 'cluster' ? props.subject.cluster.representative : props.subject.finding);
@@ -72,17 +84,32 @@ function location(file: string, line?: number): string
             </div>
             <div class="right">
                 <template v-if="latest">
-                    <h3>Adversarial verification · {{ usd(latest.costUsd) }}</h3>
-                    <span class="bigstamp" :class="VERDICT_CLASS[latest.verdict]">{{ latest.verdict.toUpperCase() }}</span>
+                    <h3>{{ latest.source === 'human' ? 'Human verdict' : `Adversarial verification · ${usd(latest.costUsd)}` }}</h3>
+                    <span class="bigstamp" :class="VERDICT_CLASS[latest.verdict]">{{ latest.verdict.toUpperCase() }}{{ latest.source === 'human' ? ' · HUMAN' : '' }}</span>
                     <div class="rationale">{{ latest.rationale }}</div>
-                    <div class="confidence">{{ latest.confidence }}</div>
+                    <div v-if="latest.source === 'agent'" class="confidence">{{ latest.confidence }}</div>
                     <div v-if="cluster && cluster.verifications.length > 1" class="confidence">
                         {{ cluster.verifications.length - 1 }} earlier verdict(s) in the append-only history.
                     </div>
                     <div class="vactions">
-                        <button class="bp-btn ok" disabled title="No human-verdict endpoint yet — the first write path is its own decision.">stamp: confirm</button>
-                        <button class="bp-btn no" disabled title="No human-verdict endpoint yet — the first write path is its own decision.">stamp: refute</button>
-                        <span class="note">human verdicts append — overrule, never overwrite · write path not built yet</span>
+                        <input
+                            v-model="rationale"
+                            class="rationale-input mono"
+                            placeholder="your rationale — required, it inherits with the verdict"
+                        >
+                        <button
+                            class="bp-btn ok"
+                            :disabled="rationale.trim() === ''"
+                            :title="rationale.trim() === '' ? 'A verdict needs a rationale.' : 'Append a human CONFIRMED verdict.'"
+                            @click="stamp('confirmed')"
+                        >stamp: confirm</button>
+                        <button
+                            class="bp-btn no"
+                            :disabled="rationale.trim() === ''"
+                            :title="rationale.trim() === '' ? 'A verdict needs a rationale.' : 'Append a human REFUTED verdict.'"
+                            @click="stamp('refuted')"
+                        >stamp: refute</button>
+                        <span class="note">human verdicts append — overrule, never overwrite</span>
                     </div>
                 </template>
                 <template v-else-if="cluster === undefined">
@@ -263,6 +290,18 @@ h3
     color: var(--faint);
     font-size: 0.72rem;
 }
+
+.rationale-input
+{
+    flex: 1 1 100%;
+    background: transparent;
+    border: 1px solid var(--rule-soft);
+    color: var(--ink);
+    font-size: 0.78rem;
+    padding: 0.3rem 0.5rem;
+}
+
+.rationale-input::placeholder { color: var(--faint); }
 
 .bigstamp
 {

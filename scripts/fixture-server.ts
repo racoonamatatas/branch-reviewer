@@ -109,6 +109,7 @@ const clusters = store.getConsolidation(consolidation)!.clusters;
 const clusterOf = (title: string) => clusters.find(c => c.representative.title === title)!;
 
 store.saveVerification({
+    source: 'agent',
     clusterId: clusterOf('Abort signal not propagated to in-flight fetch').id,
     verdict: 'confirmed',
     rationale: 'The controller is constructed at transport.ts:98 and referenced nowhere else; the fetch init demonstrably lacks a signal key.',
@@ -116,6 +117,7 @@ store.saveVerification({
     costUsd: 0.42,
 });
 store.saveVerification({
+    source: 'agent',
     clusterId: clusterOf('Possible off-by-one in maxTurns guard').id,
     verdict: 'refuted',
     rationale: 'The counter increments before the guard and a test pins the boundary: a budget of 3 yields exactly 3 turns.',
@@ -123,6 +125,7 @@ store.saveVerification({
     costUsd: 0.31,
 });
 store.saveVerification({
+    source: 'agent',
     clusterId: clusterOf('ECONNRESET mapped terminal instead of transient').id,
     verdict: 'undetermined',
     rationale: 'The mapping is real and untested, but a reset after a captured result may be deliberately terminal. Design intent is not recoverable from the code.',

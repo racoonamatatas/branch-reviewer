@@ -95,16 +95,34 @@ export interface Cluster extends Identified<'Cluster'>
 export type Verdict = 'confirmed' | 'refuted' | 'undetermined';
 export type VerificationStatus = 'pending' | Verdict;  // a verdict, or not yet
 
-export interface Verification extends Identified<'Verification'>, Created
+// Provenance is a discriminated union, not optional fields: an agent verdict
+// always has a confidence self-assessment and a price, a human verdict never
+// does, and no row may claim both halves. Humans stamp confirmed or refuted
+// only — undetermined is the machine's honest "I don't know", and a human who
+// doesn't know simply doesn't stamp.
+interface VerificationBase extends Identified<'Verification'>, Created
 {
     clusterId: ClusterId;
     verdict: Verdict;
     rationale: string;
+}
+
+export interface AgentVerification extends VerificationBase
+{
+    source: 'agent';
     confidence: string;
     costUsd: number;
 }
 
-export type NewVerification = New<Verification>;
+export interface HumanVerification extends VerificationBase
+{
+    source: 'human';
+    verdict: Exclude<Verdict, 'undetermined'>;
+}
+
+export type Verification = AgentVerification | HumanVerification;
+
+export type NewVerification = New<AgentVerification> | New<HumanVerification>;
 
 // A defect's stable identity across consolidations. Cluster rows are one
 // judge call's opinion and get new ids every time the same runs are
@@ -188,10 +206,12 @@ CREATE TABLE IF NOT EXISTS verifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cluster_id INTEGER NOT NULL REFERENCES clusters(id),
     created_at TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('agent', 'human')),
     verdict TEXT NOT NULL,
     rationale TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    cost_usd REAL NOT NULL
+    confidence TEXT,
+    cost_usd REAL,
+    CHECK ((source = 'agent') = (confidence IS NOT NULL AND cost_usd IS NOT NULL))
 );
 `;
 
@@ -230,10 +250,11 @@ interface VerificationRow
     id: number;
     cluster_id: number;
     created_at: string;
+    source: string;
     verdict: string;
     rationale: string;
-    confidence: string;
-    cost_usd: number;
+    confidence: string | null;
+    cost_usd: number | null;
 }
 
 export class ReviewStore
@@ -252,6 +273,7 @@ export class ReviewStore
         // SQLITE_BUSY.
         this.db.exec('PRAGMA busy_timeout = 5000');
         this.migrateLegacyMergeTables();
+        this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
     }
 
@@ -268,6 +290,47 @@ export class ReviewStore
             this.db.exec('ALTER TABLE merges RENAME TO consolidations');
             this.db.exec('ALTER TABLE clusters RENAME COLUMN merge_id TO consolidation_id');
         }
+    }
+
+    // Databases from before human verdicts existed lack the source column,
+    // and every row in them was written by the verifier. SQLite cannot relax
+    // NOT NULL in place, so the table is rebuilt around the new CHECKed
+    // shape; ids are copied verbatim because member-set inheritance and the
+    // latest-wins rule both order by them.
+    private migrateVerificationProvenance(): void
+    {
+        const table = this.db.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'verifications'",
+        ).get();
+        if (table === undefined)
+        {
+            return;
+        }
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('verifications') as unknown as Array<{ name: string }>;
+        if (columns.some(c => c.name === 'source'))
+        {
+            return;
+        }
+        this.db.exec(`
+            BEGIN;
+            ALTER TABLE verifications RENAME TO verifications_legacy;
+            CREATE TABLE verifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id INTEGER NOT NULL REFERENCES clusters(id),
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL CHECK (source IN ('agent', 'human')),
+                verdict TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                confidence TEXT,
+                cost_usd REAL,
+                CHECK ((source = 'agent') = (confidence IS NOT NULL AND cost_usd IS NOT NULL))
+            );
+            INSERT INTO verifications (id, cluster_id, created_at, source, verdict, rationale, confidence, cost_usd)
+                SELECT id, cluster_id, created_at, 'agent', verdict, rationale, confidence, cost_usd
+                FROM verifications_legacy;
+            DROP TABLE verifications_legacy;
+            COMMIT;
+        `);
     }
 
     saveRun(run: NewRun): RunId
@@ -556,10 +619,12 @@ export class ReviewStore
             }
 
             const result = this.db.prepare(
-                'INSERT INTO verifications (cluster_id, created_at, verdict, rationale, confidence, cost_usd) VALUES (?, ?, ?, ?, ?, ?)',
+                'INSERT INTO verifications (cluster_id, created_at, source, verdict, rationale, confidence, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?)',
             ).run(
-                verification.clusterId, new Date().toISOString(), verification.verdict,
-                verification.rationale, verification.confidence, verification.costUsd,
+                verification.clusterId, new Date().toISOString(), verification.source, verification.verdict,
+                verification.rationale,
+                verification.source === 'agent' ? verification.confidence : null,
+                verification.source === 'agent' ? verification.costUsd : null,
             );
             const id = verificationId(Number(result.lastInsertRowid));
 
@@ -597,18 +662,23 @@ export class ReviewStore
     getVerifications(cluster: ClusterId): Verification[]
     {
         const rows = this.db.prepare(
-            'SELECT id, cluster_id, created_at, verdict, rationale, confidence, cost_usd FROM verifications WHERE cluster_id = ? ORDER BY id',
+            'SELECT id, cluster_id, created_at, source, verdict, rationale, confidence, cost_usd FROM verifications WHERE cluster_id = ? ORDER BY id',
         ).all(cluster) as unknown as VerificationRow[];
 
-        return rows.map(row => ({
-            id: verificationId(row.id),
-            clusterId: clusterId(row.cluster_id),
-            createdAt: row.created_at,
-            verdict: row.verdict as Verdict,
-            rationale: row.rationale,
-            confidence: row.confidence,
-            costUsd: row.cost_usd,
-        }));
+        return rows.map((row) =>
+        {
+            const base = {
+                id: verificationId(row.id),
+                clusterId: clusterId(row.cluster_id),
+                createdAt: row.created_at,
+                rationale: row.rationale,
+            };
+            // The CHECK constraint guarantees the halves line up; the casts
+            // restate what the row's source already proved.
+            return row.source === 'human'
+                ? { ...base, source: 'human' as const, verdict: row.verdict as Exclude<Verdict, 'undetermined'> }
+                : { ...base, source: 'agent' as const, verdict: row.verdict as Verdict, confidence: row.confidence as string, costUsd: row.cost_usd as number };
+        });
     }
 
     close(): void

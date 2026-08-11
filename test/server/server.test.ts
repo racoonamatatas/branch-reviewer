@@ -6,7 +6,7 @@ import { JobStore } from '../../src/server/jobs.js';
 import { createServer } from '../../src/server/server.js';
 import { WatchStore } from '../../src/server/trigger.js';
 import { ReviewStore } from '../../src/store/store.js';
-import type { RunId } from '../../src/types/ids.js';
+import type { ClusterId, RunId } from '../../src/types/ids.js';
 import type { JobId } from '../../src/types/ids.js';
 
 let jobs: JobStore;
@@ -469,6 +469,7 @@ describe('GET /consolidations/:id', () =>
         });
         const singleton = store.getConsolidation(id)!.clusters.find(c => c.occurrence === 1)!;
         store.saveVerification({
+            source: 'agent',
             clusterId: singleton.id,
             verdict: 'confirmed',
             rationale: 'the guard is real',
@@ -497,6 +498,71 @@ describe('GET /consolidations/:id', () =>
         // Act + Assert
         expect((await fetch(`${base}/consolidations/99`)).status).toBe(404);
         expect((await fetch(`${base}/consolidations/0`)).status).toBe(404);
+    });
+});
+
+describe('POST /clusters/:id/verdict', () =>
+{
+    function seedCluster(): ClusterId
+    {
+        const run = seedRun('feature/x', [finding('suspicious')]);
+        const [f] = store.getFindings(run);
+        const id = store.saveConsolidation({
+            owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', runIds: [run],
+            clusters: [{ memberIds: [f!.id], representativeId: f!.id, severity: 'warning', occurrence: 1 }],
+        });
+        return store.getConsolidation(id)!.clusters[0]!.id;
+    }
+
+    it('should append a human verdict and return the full history', async () =>
+    {
+        // Arrange — the agent ruled undetermined; the human overrules.
+        const clusterId = seedCluster();
+        store.saveVerification({
+            source: 'agent', clusterId, verdict: 'undetermined',
+            rationale: 'Needs human eyes.', confidence: 'Low.', costUsd: 0.3,
+        });
+
+        // Act
+        const res = await post(`/clusters/${clusterId}/verdict`, {
+            verdict: 'refuted',
+            rationale: 'Checked the file mode myself: 100755.',
+        });
+        const body = await res.json() as { verifications: Array<{ source: string; verdict: string }> };
+
+        // Assert — appended, not overwritten, and the cluster shows the ruling.
+        expect(res.status).toBe(201);
+        expect(body.verifications.map(v => [v.source, v.verdict])).toEqual([
+            ['agent', 'undetermined'],
+            ['human', 'refuted'],
+        ]);
+    });
+
+    it('should reject an undetermined stamp: humans rule or abstain', async () =>
+    {
+        // Arrange
+        const clusterId = seedCluster();
+
+        // Act + Assert
+        const res = await post(`/clusters/${clusterId}/verdict`, { verdict: 'undetermined', rationale: 'hmm' });
+        expect(res.status).toBe(400);
+    });
+
+    it('should reject a stamp without a rationale', async () =>
+    {
+        // Arrange
+        const clusterId = seedCluster();
+
+        // Act + Assert
+        const res = await post(`/clusters/${clusterId}/verdict`, { verdict: 'confirmed', rationale: '' });
+        expect(res.status).toBe(400);
+    });
+
+    it('should 404 an unknown cluster without writing anything', async () =>
+    {
+        // Act + Assert
+        expect((await post('/clusters/999/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
+        expect((await post('/clusters/0/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
     });
 });
 

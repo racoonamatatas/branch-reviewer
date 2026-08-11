@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import type { NewFinding } from '../../src/schema/schema.js';
 import { ReviewStore } from '../../src/store/store.js';
@@ -244,6 +248,7 @@ describe('ReviewStore', () =>
 
                 // Act
                 store.saveVerification({
+                    source: 'agent',
                     clusterId: clusters[1]!.id,
                     verdict: 'confirmed',
                     rationale: 'The diff shows the unbounded query.',
@@ -265,6 +270,7 @@ describe('ReviewStore', () =>
 
                 // Act
                 const id = store.saveVerification({
+                    source: 'agent',
                     clusterId: cluster.id,
                     verdict: 'undetermined',
                     rationale: 'The consumer lives outside this repo.',
@@ -277,6 +283,7 @@ describe('ReviewStore', () =>
                     id,
                     clusterId: cluster.id,
                     createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) as unknown,
+                    source: 'agent',
                     verdict: 'undetermined',
                     rationale: 'The consumer lives outside this repo.',
                     confidence: 'Low; a frontend checkout would settle it.',
@@ -292,10 +299,12 @@ describe('ReviewStore', () =>
 
                 // Act
                 store.saveVerification({
+                    source: 'agent',
                     clusterId: cluster.id, verdict: 'confirmed',
                     rationale: 'First pass.', confidence: 'Medium.', costUsd: 0.1,
                 });
                 store.saveVerification({
+                    source: 'agent',
                     clusterId: cluster.id, verdict: 'undetermined',
                     rationale: 'Second pass.', confidence: 'Low.', costUsd: 0.2,
                 });
@@ -306,12 +315,74 @@ describe('ReviewStore', () =>
                 expect(store.getConsolidation(id)!.clusters[1]?.verificationStatus).toBe('undetermined');
             });
 
+            it('should record a human verdict with no confidence or cost, updating the cluster status', () =>
+            {
+                // Arrange
+                const { consolidationId: id, clusters } = savedClusters();
+                const cluster = clusters[1]!;
+
+                // Act
+                const verificationId = store.saveVerification({
+                    source: 'human',
+                    clusterId: cluster.id,
+                    verdict: 'refuted',
+                    rationale: 'git ls-files -s shows mode 100755; the precondition holds.',
+                });
+
+                // Assert
+                expect(store.getVerifications(cluster.id)).toEqual([{
+                    id: verificationId,
+                    clusterId: cluster.id,
+                    createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) as unknown,
+                    source: 'human',
+                    verdict: 'refuted',
+                    rationale: 'git ls-files -s shows mode 100755; the precondition holds.',
+                }]);
+                expect(store.getConsolidation(id)!.clusters[1]?.verificationStatus).toBe('refuted');
+            });
+
+            it('should let a human overrule an agent verdict by appending, and inherit the overrule', () =>
+            {
+                // Arrange: the agent says undetermined, the human rules.
+                const first = savedClusters();
+                const cluster = first.clusters[1]!;
+                store.saveVerification({
+                    source: 'agent',
+                    clusterId: cluster.id, verdict: 'undetermined',
+                    rationale: 'Needs evidence outside the repo.', confidence: 'Low.', costUsd: 0.3,
+                });
+
+                // Act
+                store.saveVerification({
+                    source: 'human',
+                    clusterId: cluster.id, verdict: 'confirmed',
+                    rationale: 'Checked the external harness myself.',
+                });
+                const again = store.saveConsolidation({
+                    owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+                    runIds: store.getConsolidation(first.consolidationId)!.runIds,
+                    clusters: first.clusters.map(c => ({
+                        memberIds: c.members.map(m => m.id),
+                        representativeId: c.representative.id,
+                        severity: c.severity,
+                        occurrence: c.occurrence,
+                    })),
+                });
+
+                // Assert: both rows survive, the human verdict is the status
+                // and the one a re-clustering of the same member set inherits.
+                expect(store.getVerifications(cluster.id).map(v => v.source)).toEqual(['agent', 'human']);
+                expect(store.getConsolidation(first.consolidationId)!.clusters[1]?.verificationStatus).toBe('confirmed');
+                expect(store.getConsolidation(again)!.clusters[1]?.verificationStatus).toBe('confirmed');
+            });
+
             it('should carry a verdict forward to a re-clustering of the same findings', () =>
             {
                 // Arrange: verify one cluster, then re-consolidate the same runs
                 const first = savedClusters();
                 const verified = first.clusters[1]!;
                 store.saveVerification({
+                    source: 'agent',
                     clusterId: verified.id, verdict: 'confirmed',
                     rationale: 'Earned once.', confidence: 'High.', costUsd: 0.5,
                 });
@@ -341,6 +412,7 @@ describe('ReviewStore', () =>
                 const first = savedClusters();
                 const verified = first.clusters[1]!;
                 store.saveVerification({
+                    source: 'agent',
                     clusterId: verified.id, verdict: 'refuted',
                     rationale: 'Contrary evidence.', confidence: 'High.', costUsd: 0.5,
                 });
@@ -370,6 +442,7 @@ describe('ReviewStore', () =>
                 for (const verdict of ['confirmed', 'undetermined'] as const)
                 {
                     store.saveVerification({
+                        source: 'agent',
                         clusterId: verified.id, verdict,
                         rationale: `Pass for ${verdict}.`, confidence: 'Medium.', costUsd: 0.1,
                     });
@@ -399,10 +472,56 @@ describe('ReviewStore', () =>
 
                 // Act + Assert
                 expect(() => store.saveVerification({
+                    source: 'agent',
                     clusterId: unknown, verdict: 'refuted',
                     rationale: 'n/a', confidence: 'n/a', costUsd: 0,
                 })).toThrow('No cluster #999.');
                 expect(store.getVerifications(unknown)).toEqual([]);
+            });
+
+            it('should migrate a pre-provenance database, branding every existing row agent', () =>
+            {
+                // Arrange: a database written by the old schema, one verdict
+                // recorded before the source column existed.
+                const dir = mkdtempSync(join(tmpdir(), 'store-migration-'));
+                const path = join(dir, 'reviews.db');
+                try
+                {
+                    const legacy = new DatabaseSync(path);
+                    legacy.exec(`
+                        CREATE TABLE clusters (id INTEGER PRIMARY KEY AUTOINCREMENT);
+                        CREATE TABLE verifications (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            cluster_id INTEGER NOT NULL REFERENCES clusters(id),
+                            created_at TEXT NOT NULL,
+                            verdict TEXT NOT NULL,
+                            rationale TEXT NOT NULL,
+                            confidence TEXT NOT NULL,
+                            cost_usd REAL NOT NULL
+                        );
+                        INSERT INTO clusters DEFAULT VALUES;
+                        INSERT INTO verifications (cluster_id, created_at, verdict, rationale, confidence, cost_usd)
+                            VALUES (1, '2026-08-06T00:00:00.000Z', 'confirmed', 'Old row.', 'High.', 0.5);
+                    `);
+                    legacy.close();
+
+                    // Act
+                    const migrated = new ReviewStore(path);
+
+                    // Assert
+                    expect(migrated.getVerifications(clusterId(1))).toEqual([expect.objectContaining({
+                        source: 'agent',
+                        verdict: 'confirmed',
+                        rationale: 'Old row.',
+                        confidence: 'High.',
+                        costUsd: 0.5,
+                    })]);
+                    migrated.close();
+                }
+                finally
+                {
+                    rmSync(dir, { recursive: true, force: true });
+                }
             });
         });
     });

@@ -84,6 +84,23 @@ already produced single-run consolidations after round 1. The path is
 proven: run #14 (target-org/target-repo PR 1909) consolidated alone and
 verified 5/5 clusters — 4 confirmed, 1 undetermined ($3.26).
 
+Chunk-7 (human verdicts — the first write endpoint, deliberately decided):
+`Verification` is now a provenance union — `AgentVerification` (confidence,
+costUsd) | `HumanVerification` (neither), enforced in SQL by a CHECK and in
+TS by the discriminant; the verifications table was rebuilt in place
+(`migrateVerificationProvenance`, prior rows become `agent`). `POST
+/clusters/:id/verdict` takes `{ verdict: confirmed|refuted, rationale }` —
+humans never stamp undetermined (that's the machine's "I don't know"; a
+human who doesn't know abstains), and the rationale is required because
+verdicts inherit across consolidations by member set and a bare stamp would
+propagate with no trace of why. Appends only — overrule, never overwrite;
+the endpoint is a named breach of "the worker owns every write", justified
+because human judgment is the one write the worker cannot produce. Dashboard
+stamps are live in the callout (rationale input gates the buttons); a stamp
+invalidates that rev's forever-cache entry, which verification appends had
+already quietly falsified. "Verify now" stays disabled until a verify job
+kind exists (open item, with a consolidate job kind).
+
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
 auth first). Eventually: read→write promotion (posting findings to PRs)
