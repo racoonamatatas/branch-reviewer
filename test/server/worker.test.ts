@@ -30,7 +30,7 @@ function stats(): ReviewRunStats
 
 function submitted(): ReviewResult
 {
-    return { status: 'submitted', review: { summary: 'clean', findings: [] }, stats: stats() };
+    return { status: 'submitted', review: { summary: 'clean', findings: [] }, filesChanged: 3, stats: stats() };
 }
 
 function reviewJob(overrides: Partial<NewJob> = {}): NewJob
@@ -132,7 +132,7 @@ describe('review jobs', () =>
 
         // Act
         await worker({
-            review: async () => ({ status: 'aborted', reason: 'error_max_turns', stats: stats() }),
+            review: async () => ({ status: 'aborted', reason: 'error_max_turns', filesChanged: 3, stats: stats() }),
         }).notify();
 
         // Assert
@@ -330,5 +330,91 @@ describe('notify', () =>
 
         // Assert
         expect(events).toEqual([`#${id} list_changed_files({})`]);
+    });
+});
+
+describe('verify jobs', () =>
+{
+    const finding = { file: 'a.ts', severity: 'nit' as const, title: 'loose end', detail: 'evidence' };
+
+    function submittedWithFindings(): ReviewResult
+    {
+        return { status: 'submitted', review: { summary: 'one nit', findings: [finding] }, filesChanged: 2, stats: stats() };
+    }
+
+    it('should auto-enqueue a held verify job after a review with findings', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(reviewJob());
+
+        // Act
+        await worker({ review: async () => submittedWithFindings() }).notify();
+
+        // Assert: the review succeeded, and the adversarial pass is proposed
+        // — held, so no further credit moves without a human release.
+        expect(jobs.get(id)?.state).toBe('succeeded');
+        const verify = jobs.list().find(j => j.kind === 'verify');
+        expect(verify).toMatchObject({ state: 'held', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main' });
+    });
+
+    it('should not propose verification when the review found nothing', async () =>
+    {
+        // Arrange: the default submitted() carries zero findings.
+        jobs.enqueue(reviewJob());
+
+        // Act
+        await worker().notify();
+
+        // Assert
+        expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
+    });
+
+    it('should not stack a second verify job while one is already open', async () =>
+    {
+        // Arrange
+        jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} }, { held: true });
+        jobs.enqueue(reviewJob());
+
+        // Act
+        await worker({ review: async () => submittedWithFindings() }).notify();
+
+        // Assert
+        expect(jobs.list().filter(j => j.kind === 'verify')).toHaveLength(1);
+    });
+
+    it('should execute a released verify job and store the consolidation id', async () =>
+    {
+        // Arrange
+        const cid = consolidationId(7);
+        const id = jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} }, { held: true });
+        jobs.release(id);
+
+        // Act
+        await worker({
+            verify: async () => ({ consolidationId: cid, reused: false, summary: { attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)).toMatchObject({ state: 'succeeded', consolidationId: cid });
+    });
+
+    it('should fail a verify job whose target has no submitted runs', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} });
+
+        // Act
+        await worker({
+            verify: async () => 
+            {
+                throw new Error('No submitted runs for this target — nothing to verify.'); 
+            },
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)).toMatchObject({
+            state: 'failed',
+            error: expect.stringContaining('No submitted runs') as string,
+        });
     });
 });

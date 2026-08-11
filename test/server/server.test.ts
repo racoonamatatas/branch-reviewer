@@ -117,10 +117,21 @@ describe('POST /jobs', () =>
         expect(enqueued).toEqual([]);
     });
 
-    it('should reject an unknown kind', async () =>
+    it('should enqueue a verify job with empty params by default', async () =>
     {
         // Act
         const res = await post('/jobs', { ...reviewRequest, kind: 'verify' });
+        const { job } = await res.json() as { job: { state: string; kind: string; params: unknown } };
+
+        // Assert
+        expect(res.status).toBe(201);
+        expect(job).toMatchObject({ kind: 'verify', state: 'held', params: {} });
+    });
+
+    it('should reject an unknown kind', async () =>
+    {
+        // Act: 'verify' used to be the exemplar here, until it became real.
+        const res = await post('/jobs', { ...reviewRequest, kind: 'deploy' });
 
         // Assert
         expect(res.status).toBe(400);

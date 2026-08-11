@@ -15,17 +15,21 @@ export type CalloutSubject =
 <script setup lang="ts">
 // The detail callout under the sheet: one cluster's full content — finding
 // prose, members, and the verification panel. Human stamps are live (the
-// review store's first and only HTTP write); "verify now" stays drawn but
-// disabled until a verify job kind exists.
+// review store's first and only HTTP write), and "verify now" enqueues a
+// verify job for the whole target — the parent owns what that means.
 import { computed, ref } from 'vue';
 import type { RunId } from '@server/types/ids';
 import { usd } from '../../format';
 
 // revRunIds is the displayed rev's runs in round order — it turns raw run
 // ids into R-numbers so the callout speaks the same language as the sheet.
-const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[] }>();
+// canVerify is the parent's call (no base yet, or a job already active).
+const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[]; canVerify: boolean }>();
 
-const emit = defineEmits<{ stamp: [verdict: 'confirmed' | 'refuted', rationale: string] }>();
+const emit = defineEmits<{
+    stamp: [verdict: 'confirmed' | 'refuted', rationale: string];
+    verify: [];
+}>();
 
 // The rationale is required by the endpoint: verdicts inherit across
 // consolidations by member set, so a bare stamp would propagate with no
@@ -111,14 +115,29 @@ function runLabel(id: RunId): string
                         A claim, not a fact: this finding has never faced the adversarial pass, because
                         verification hangs off clusters and no consolidation includes this run yet.
                     </div>
-                    <div class="confidence">Consolidate the run (or start a campaign) to make it verifiable.</div>
+                    <div class="vactions">
+                        <button
+                            class="bp-btn chalk"
+                            :disabled="!canVerify"
+                            :title="canVerify ? 'Consolidates this target\'s runs, then runs the adversarial pass — bills subscription credit.'
+                                : 'Waiting on this target — a job is already active or no base is known.'"
+                            @click="emit('verify')"
+                        >verify now</button>
+                        <span class="note">consolidates first, then one adversarial agent per pending cluster</span>
+                    </div>
                 </template>
                 <template v-else-if="cluster.occurrence === 1">
                     <h3>Adversarial verification</h3>
                     <div class="rationale">Queued — seen by one run only, awaiting the adversarial pass. Running it bills subscription credit.</div>
                     <div class="vactions">
-                        <button class="bp-btn chalk" disabled title="No verify endpoint yet — run npm run verify against this consolidation.">verify now</button>
-                        <span class="note">no verify endpoint yet — use the CLI</span>
+                        <button
+                            class="bp-btn chalk"
+                            :disabled="!canVerify"
+                            :title="canVerify ? 'Runs the adversarial pass over every pending cluster of this target — bills subscription credit.'
+                                : 'Waiting on this target — a job is already active or no base is known.'"
+                            @click="emit('verify')"
+                        >verify now</button>
+                        <span class="note">one adversarial agent per pending cluster · whole target</span>
                     </div>
                 </template>
                 <template v-else>

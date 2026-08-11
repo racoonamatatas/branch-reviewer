@@ -89,6 +89,7 @@ function saveRun(args: CliArgs, model: string, result: ReviewResult): void
             turns: result.stats.turns,
             costUsd: result.stats.costUsd,
             usage: result.stats.usage,
+            filesChanged: result.filesChanged,
         });
         store.close();
         console.log(`saved as run #${id}`);

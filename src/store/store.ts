@@ -30,11 +30,14 @@ export interface Run extends Identified<'Run'>, Created
     turns: number;
     costUsd: number;
     usage: TokenUsage;
+    // How many files the branch diff touched. Absent on rows saved before
+    // the column existed; 0 is the empty-diff tell (merged or stale head).
+    filesChanged?: number;
 }
 
 export type NewRun = New<Run>;
 
-export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 'turns' | 'costUsd'>
+export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 'turns' | 'costUsd' | 'filesChanged'>
 {
     target: string;  // "owner/repo head → base"
     findingsCount: number;
@@ -169,7 +172,8 @@ CREATE TABLE IF NOT EXISTS runs (
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
-    cache_creation_tokens INTEGER NOT NULL
+    cache_creation_tokens INTEGER NOT NULL,
+    files_changed INTEGER
 );
 CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,6 +237,7 @@ interface RunRow
     output_tokens: number;
     cache_read_tokens: number;
     cache_creation_tokens: number;
+    files_changed: number | null;
 }
 
 interface FindingRow
@@ -275,6 +280,19 @@ export class ReviewStore
         this.migrateLegacyMergeTables();
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
+        this.migrateRunFilesChanged();
+    }
+
+    // Databases from before the empty-diff tell existed lack the column; the
+    // nullable ADD COLUMN is the whole migration, and old rows honestly stay
+    // NULL — "unknown", not "zero".
+    private migrateRunFilesChanged(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('runs') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'files_changed'))
+        {
+            this.db.exec('ALTER TABLE runs ADD COLUMN files_changed INTEGER');
+        }
     }
 
     // Databases from before the terminology sweep carry a `merges` table and
@@ -340,14 +358,16 @@ export class ReviewStore
         {
             const result = this.db.prepare(
                 `INSERT INTO runs (created_at, owner, repo, head, base, model, status, reason, summary,
-                                   turns, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                   turns, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                                   files_changed)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ).run(
                 new Date().toISOString(), run.owner, run.repo, run.head, run.base,
                 run.model, run.status, run.reason ?? null, run.review?.summary ?? null,
                 run.turns, run.costUsd,
                 run.usage.inputTokens, run.usage.outputTokens,
                 run.usage.cacheReadInputTokens, run.usage.cacheCreationInputTokens,
+                run.filesChanged ?? null,
             );
             const id = runId(Number(result.lastInsertRowid));
 
@@ -374,7 +394,7 @@ export class ReviewStore
         const where = filter === undefined ? '' : 'WHERE r.owner = ? AND r.repo = ? AND r.head = ?';
         const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
         const rows = this.db.prepare(
-            `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.turns, r.cost_usd,
+            `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.turns, r.cost_usd, r.files_changed,
                     COUNT(f.id) AS findings_count
              FROM runs r LEFT JOIN findings f ON f.run_id = r.id
              ${where}
@@ -390,6 +410,7 @@ export class ReviewStore
             findingsCount: row.findings_count,
             turns: row.turns,
             costUsd: row.cost_usd,
+            ...(row.files_changed !== null ? { filesChanged: row.files_changed } : {}),
         }));
     }
 
@@ -453,6 +474,7 @@ export class ReviewStore
             status: row.status as Run['status'],
             ...(row.reason !== null ? { reason: row.reason } : {}),
             ...(row.summary !== null ? { review: { summary: row.summary, findings } } : {}),
+            ...(row.files_changed !== null ? { filesChanged: row.files_changed } : {}),
             turns: row.turns,
             costUsd: row.cost_usd,
             usage: {

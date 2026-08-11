@@ -171,6 +171,31 @@ the feed fetch degrades independently of the queue fetch, ring-eviction gaps
 render as explicit "N evicted" lines, and stage pulses key on kind per stage
 so the future verify kind cannot light Review.
 
+Chunks 3+4 — verify job kind and coverage honesty. `verifyTarget`
+(src/verify/verify.ts) is the verify job's runner: consolidate the target's
+submitted runs unless the latest rev already covers exactly that set
+(verdicts inherit by member set, so a fresh judge call over the same runs
+buys nothing), then `verifyPending`. The consolidation mechanics moved to
+`src/consolidate/persist.ts` (`submittedRunsFor` + `consolidateRuns`),
+shared with the campaign — campaign keeps its own `< 2` policy at the call
+site. Worker: after a submitted review with findings, a **held** verify job
+is auto-enqueued for the target (deduped via `hasOpenJobFor` — open means
+held/queued/running; finished verify jobs don't block a later pass over new
+runs). A verify job for a target with no submitted runs fails with a named
+error; a target whose runs had no findings succeeds vacuously. UI: "verify
+now" in the callout is live (whole-target, start: true — the chalk click is
+the billing click), form gained the verify kind, stage pulses key by kind
+per stage. Coverage honesty: refuted clusters are excluded from
+`coverageOf`'s input at every call site (server detailOf, campaign baseline
+and rounds) — a disproven claim is not a discovered finding — and the
+margin calc says "N refuted excluded" so the fraction visibly adds up.
+Empty-diff runs: `runReview` measures the compare before spending credit
+(one extra GitHub request), runs store `files_changed` (nullable ADD COLUMN
+migration; old rows stay NULL = "unknown", never zero), and the sheet's run
+line says "empty diff — reviewed nothing" instead of presenting a review of
+nothing as a clean bill of health (the trap R2/R3 fell into after PR #2
+merged out from under campaign #9).
+
 Chunk-9 live test (2026-08-11, ~$5.50): labeled PR #2 on this repo →
 auto-enqueued review of the chunk-9 diff itself (run 18, 4 findings, $2.18)
 → CLI consolidate #11 → CLI verify (3 confirmed, 1 refuted, $3.26). The

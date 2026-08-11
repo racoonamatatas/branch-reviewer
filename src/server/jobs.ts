@@ -38,8 +38,17 @@ export const campaignJobParamsSchema = z.strictObject({
     reverify: z.boolean().optional(),
 });
 
+// Mirrors verifyTarget's option surface: the job consolidates the target's
+// submitted runs when needed, then verifies pending occurrence-1 clusters.
+export const verifyJobParamsSchema = z.strictObject({
+    model: z.string().optional(),
+    maxTurns: z.number().int().positive().optional(),
+    reverify: z.boolean().optional(),
+});
+
 export type ReviewJobParams = z.infer<typeof reviewJobParamsSchema>;
 export type CampaignJobParams = z.infer<typeof campaignJobParamsSchema>;
+export type VerifyJobParams = z.infer<typeof verifyJobParamsSchema>;
 
 export type JobState = 'held' | 'queued' | 'running' | 'succeeded' | 'aborted' | 'failed' | 'cancelled';
 
@@ -72,14 +81,21 @@ export interface CampaignJob extends JobCommon
     params: CampaignJobParams;
 }
 
-export type Job = ReviewJob | CampaignJob;
+export interface VerifyJob extends JobCommon
+{
+    kind: 'verify';
+    params: VerifyJobParams;
+}
+
+export type Job = ReviewJob | CampaignJob | VerifyJob;
 
 // Everything beyond New<T>'s subtraction is lifecycle, assigned by the store
 // as the job progresses; a create call supplies only the request itself.
 type Lifecycle = 'state' | 'startedAt' | 'finishedAt' | 'error' | 'runIds' | 'consolidationId';
 export type NewReviewJob = Omit<New<ReviewJob>, Lifecycle>;
 export type NewCampaignJob = Omit<New<CampaignJob>, Lifecycle>;
-export type NewJob = NewReviewJob | NewCampaignJob;
+export type NewVerifyJob = Omit<New<VerifyJob>, Lifecycle>;
+export type NewJob = NewReviewJob | NewCampaignJob | NewVerifyJob;
 
 export interface JobSummary extends Pick<Job, 'id' | 'createdAt' | 'kind' | 'state' | 'owner' | 'repo' | 'head' | 'base'>
 {
@@ -198,6 +214,16 @@ export class JobStore
         return this.db.prepare(
             'SELECT 1 FROM jobs WHERE owner = ? AND repo = ? AND head = ? LIMIT 1',
         ).get(owner, repo, head) !== undefined;
+    }
+
+    // The auto-enqueue dedupe: is a job of this kind already open (held,
+    // queued, or running) for the target? Finished jobs don't count — a
+    // second verify pass after new runs land is legitimate work.
+    hasOpenJobFor(owner: string, repo: string, head: string, kind: Job['kind']): boolean
+    {
+        return this.db.prepare(
+            "SELECT 1 FROM jobs WHERE owner = ? AND repo = ? AND head = ? AND kind = ? AND state IN ('held', 'queued', 'running') LIMIT 1",
+        ).get(owner, repo, head, kind) !== undefined;
     }
 
     // The single worker's intake: oldest queued job moves to running. The
@@ -325,6 +351,8 @@ function toJob(row: JobRow): Job
             return { ...common, kind: 'review', params: reviewJobParamsSchema.parse(JSON.parse(row.params)) };
         case 'campaign':
             return { ...common, kind: 'campaign', params: campaignJobParamsSchema.parse(JSON.parse(row.params)) };
+        case 'verify':
+            return { ...common, kind: 'verify', params: verifyJobParamsSchema.parse(JSON.parse(row.params)) };
         default:
             throw new Error(`Job #${row.id} has unknown kind '${row.kind}'.`);
     }

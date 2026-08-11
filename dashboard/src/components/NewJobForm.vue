@@ -6,7 +6,7 @@ const emit = defineEmits<{
     enqueue: [job: NewJobRequest];
 }>();
 
-const kind = ref<'review' | 'campaign'>('review');
+const kind = ref<'review' | 'campaign' | 'verify'>('review');
 const owner = ref('');
 const repo = ref('');
 const head = ref('');
@@ -48,6 +48,7 @@ function submit(): void
                 <select v-model="kind">
                     <option value="review">review</option>
                     <option value="campaign">campaign</option>
+                    <option value="verify">verify</option>
                 </select>
                 <input v-model.trim="owner" placeholder="owner" required>
                 <input v-model.trim="repo" placeholder="repo" required>

@@ -8,13 +8,13 @@
 // coverage reports what is probably still unseen while barren rounds decide
 // when to stop.
 
-import { runClustering, distinctRuns, maxSeverity } from '../consolidate/consolidate.js';
+import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
 import { coverageOf, novelClusters, shouldContinue } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
 import { ReviewStore } from '../store/store.js';
-import type { Consolidation, Finding, Run } from '../store/store.js';
+import type { Consolidation } from '../store/store.js';
 import type { ConsolidationId, RunId } from '../types/ids.js';
 import { verifyPending } from '../verify/verify.js';
 import type { VerifyPendingOptions, VerifyPendingSummary } from '../verify/verify.js';
@@ -91,7 +91,7 @@ export async function runCampaign(
     let latest = baseline;
     if (baseline !== undefined)
     {
-        opts.onBaseline?.(baseline.id, coverageOf(baseline.clusters));
+        opts.onBaseline?.(baseline.id, coverageOf(verifiableClusters(baseline)));
     }
 
     for (let round = 1; round <= opts.maxRuns; round++)
@@ -126,6 +126,7 @@ export async function runCampaign(
                 turns: result.stats.turns,
                 costUsd: result.stats.costUsd,
                 usage: result.stats.usage,
+                filesChanged: result.filesChanged,
             });
 
             if (result.status === 'aborted')
@@ -162,7 +163,7 @@ export async function runCampaign(
         {
             latest = consolidation;
             outcome.consolidationId = consolidation.id;
-            outcome.coverage = coverageOf(consolidation.clusters);
+            outcome.coverage = coverageOf(verifiableClusters(consolidation));
             outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
         }
         rounds.push(outcome);
@@ -195,71 +196,30 @@ export async function runCampaign(
     return campaign;
 }
 
-// Every stored submitted run of this target, re-clustered. Undefined when
-// fewer than two are available: occurrence counts — and therefore coverage —
-// only mean something across runs.
+// Refuted clusters leave the estimator's input: a disproven claim is not a
+// discovered finding. Verdicts inherit across consolidations by member set,
+// so mid-campaign refutations from earlier passes still apply here.
+function verifiableClusters(consolidation: Consolidation): Consolidation['clusters']
+{
+    return consolidation.clusters.filter(c => c.verificationStatus !== 'refuted');
+}
+
+// Every stored submitted run of this target, re-clustered (the mechanics
+// live in consolidate/persist). Undefined when fewer than two are available:
+// the campaign's guard, not the mechanism's — occurrence counts, and
+// therefore coverage, only mean something to the loop across runs.
 async function consolidateTarget(
     store: ReviewStore,
     target: CampaignTarget,
     model?: string,
 ): Promise<Consolidation | undefined>
 {
-    const runs = runsForTarget(store, target);
+    const runs = submittedRunsFor(store, target);
     if (runs.length < 2)
     {
         return undefined;
     }
-
-    const findings: Finding[] = runs.flatMap(run => store.getFindings(run.id));
-    if (findings.length === 0)
-    {
-        return undefined;
-    }
-
-    const proposals = await runClustering(findings, { model });
-    const byId = new Map(findings.map(f => [f.id, f]));
-    const id = store.saveConsolidation({
-        owner: target.owner,
-        repo: target.repo,
-        head: target.head,
-        base: target.base,
-        runIds: runs.map(run => run.id),
-        clusters: proposals.map((proposal) =>
-        {
-            const members = proposal.memberIds.map(memberId => byId.get(memberId)!);
-            return {
-                memberIds: proposal.memberIds,
-                representativeId: proposal.representativeId,
-                severity: maxSeverity(members.map(m => m.severity)),
-                occurrence: distinctRuns(members),
-            };
-        }),
-    });
-
-    // Read back rather than trust the in-memory proposal: the stored rows are
-    // what every later step (coverage, verification, the report) sees.
-    return store.getConsolidation(id)!;
-}
-
-function runsForTarget(store: ReviewStore, target: CampaignTarget): Run[]
-{
-    const runs: Run[] = [];
-    for (const summary of store.listRuns())
-    {
-        if (summary.status !== 'submitted')
-        {
-            continue;
-        }
-        const run = store.getRun(summary.id);
-        if (run !== undefined
-            && run.owner === target.owner && run.repo === target.repo
-            && run.head === target.head && run.base === target.base)
-        {
-            runs.push(run);
-        }
-    }
-    // listRuns is newest-first; consolidation reads better in run order.
-    return runs.reverse();
+    return consolidateRuns(store, target, runs, model);
 }
 
 export function clusterGrowth(rounds: RoundOutcome[]): Array<{ round: number; novelClusters: number }>

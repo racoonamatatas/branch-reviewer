@@ -13,7 +13,8 @@ import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
 import type { ReviewStore } from '../store/store.js';
 import type { JobId } from '../types/ids.js';
-import type { CampaignJob, Job, JobStore, ReviewJob } from './jobs.js';
+import { verifyTarget } from '../verify/verify.js';
+import type { CampaignJob, Job, JobStore, ReviewJob, VerifyJob } from './jobs.js';
 
 export interface WorkerDeps
 {
@@ -28,6 +29,7 @@ export interface WorkerDeps
     // burning credit. Production callers omit them.
     review?: typeof runReview;
     campaign?: typeof runCampaign;
+    verify?: typeof verifyTarget;
 }
 
 export class Worker
@@ -39,6 +41,7 @@ export class Worker
     private readonly onEvent: ((id: JobId, event: string) => void) | undefined;
     private readonly review: typeof runReview;
     private readonly campaign: typeof runCampaign;
+    private readonly verify: typeof verifyTarget;
     private tail: Promise<number> = Promise.resolve(0);
 
     constructor(deps: WorkerDeps)
@@ -50,6 +53,7 @@ export class Worker
         this.onEvent = deps.onEvent;
         this.review = deps.review ?? runReview;
         this.campaign = deps.campaign ?? runCampaign;
+        this.verify = deps.verify ?? verifyTarget;
     }
 
     // Kick the worker: drains the queue until empty, one job at a time.
@@ -82,13 +86,17 @@ export class Worker
     {
         try
         {
-            if (job.kind === 'review')
+            switch (job.kind)
             {
-                await this.executeReview(job);
-            }
-            else
-            {
-                await this.executeCampaign(job);
+                case 'review':
+                    await this.executeReview(job);
+                    break;
+                case 'campaign':
+                    await this.executeCampaign(job);
+                    break;
+                case 'verify':
+                    await this.executeVerify(job);
+                    break;
             }
         }
         catch (error)
@@ -128,6 +136,7 @@ export class Worker
             turns: result.stats.turns,
             costUsd: result.stats.costUsd,
             usage: result.stats.usage,
+            filesChanged: result.filesChanged,
         });
         this.jobs.recordRun(job.id, run);
 
@@ -135,6 +144,24 @@ export class Worker
         {
             this.jobs.abort(job.id, result.reason);
             return;
+        }
+
+        // Findings are claims until verified, and this run may be the only
+        // one this target ever gets — propose the adversarial pass as a held
+        // job (a human release bills it). Skipped when one is already open,
+        // and when there is nothing to verify.
+        if (result.review.findings.length > 0
+            && !this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+        {
+            const verifyId = this.jobs.enqueue({
+                kind: 'verify',
+                owner: job.owner,
+                repo: job.repo,
+                head: job.head,
+                base: job.base,
+                params: {},
+            }, { held: true });
+            this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
         }
         this.jobs.succeed(job.id);
     }
@@ -174,6 +201,30 @@ export class Worker
             this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed');
             return;
         }
+        this.jobs.succeed(job.id, {
+            ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
+        });
+    }
+
+    // Consolidate-if-needed + adversarial pass, both inside verifyTarget; a
+    // target with no submitted runs throws there and fails the job with the
+    // named reason. A target whose runs had no findings succeeds vacuously —
+    // "nothing to verify" is a completed verification plan, not an error.
+    private async executeVerify(job: VerifyJob): Promise<void>
+    {
+        const result = await this.verify(
+            this.store,
+            this.clientFor(job.owner, job.repo),
+            { owner: job.owner, repo: job.repo, head: job.head, base: job.base },
+            {
+                model: job.params.model ?? this.defaultModel,
+                ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
+                ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
+                onEvent: event => this.onEvent?.(job.id, event),
+            },
+        );
+        this.onEvent?.(job.id, `verified ${result.summary.verified}/${result.summary.attempted} cluster(s), `
+            + `${result.summary.failures} failure(s), $${result.summary.costUsd.toFixed(2)}`);
         this.jobs.succeed(job.id, {
             ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
         });

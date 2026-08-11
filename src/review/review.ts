@@ -63,9 +63,12 @@ export interface ReviewRunStats
     compactions: number;
 }
 
+// filesChanged rides on both outcomes: a 0-findings run against a 0-file
+// diff is a review of nothing, and downstream displays must be able to say
+// so instead of presenting it as a clean bill of health.
 export type ReviewResult =
-    | { status: 'submitted'; review: Review; stats: ReviewRunStats }
-    | { status: 'aborted'; reason: string; stats: ReviewRunStats };
+    | { status: 'submitted'; review: Review; filesChanged: number; stats: ReviewRunStats }
+    | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats };
 
 // Which credential wins when both an API key and a subscription login are
 // present is undocumented; refuse the ambiguous state so a run can never
@@ -107,6 +110,12 @@ export function throwIfErrorResult(result: SDKResultMessage): void
 export async function runReview(client: RepoClient, target: ReviewTarget, opts: ReviewRunOptions = {}): Promise<ReviewResult>
 {
     assertSubscriptionCredit();
+
+    // The diff's size is measured before any credit moves: one extra GitHub
+    // request (the tools memoize their own comparison lazily), bought so the
+    // stored run can distinguish "found nothing" from "had nothing to look
+    // at" — a merged or stale head produces an empty compare.
+    const filesChanged = (await client.compare(target.base, target.head)).length;
 
     const tools = createReviewTools(client, target);
 
@@ -190,12 +199,12 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
 
     if (result.subtype !== 'success')
     {
-        return { status: 'aborted', reason: result.subtype, stats };
+        return { status: 'aborted', reason: result.subtype, filesChanged, stats };
     }
 
     // The harness already validated against reviewJsonSchema; this parse is
     // the type boundary between `unknown` and Review, not a re-check.
-    return { status: 'submitted', review: reviewSchema.parse(result.structured_output), stats };
+    return { status: 'submitted', review: reviewSchema.parse(result.structured_output), filesChanged, stats };
 }
 
 export function previewArgs(input: unknown): string

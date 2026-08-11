@@ -244,6 +244,10 @@ const groups = computed(() =>
         .filter(g => g.clusters.length > 0));
 const orderedClusters = computed(() => groups.value.flatMap(g => g.clusters));
 const seenOnce = computed(() => orderedClusters.value.filter(c => c.occurrence === 1));
+// The server's coverage excludes these; the margin calc says so, because a
+// fraction whose parts don't visibly add up reads as a bug.
+const refutedCount = computed(() =>
+    (consolidation.value?.clusters ?? []).filter(c => c.verificationStatus === 'refuted').length);
 
 const selectedCluster = computed(() =>
     orderedClusters.value.find(c => c.id === selectedClusterId.value)
@@ -265,6 +269,19 @@ const calloutSubject = computed<CalloutSubject | undefined>(() =>
         : selectedFinding.value !== undefined ? { kind: 'finding', finding: selectedFinding.value }
             : undefined);
 
+// The callout's "verify now": one verify job for the whole target —
+// consolidates the submitted runs if the latest rev doesn't cover them,
+// then runs the adversarial pass over pending clusters. start: true — the
+// button is the billing click.
+function verifyNow(): void
+{
+    if (base.value === undefined)
+    {
+        return;
+    }
+    emit('enqueue', { kind: 'verify', owner: props.owner, repo: props.repo, head: props.head, base: base.value, start: true });
+}
+
 // ── the loop band's inputs ──────────────────────────────
 const campaignJob = computed(() =>
     targetJobs.value.filter(j => j.kind === 'campaign')
@@ -277,6 +294,7 @@ const campaignJob = computed(() =>
 // while the dot blinks: "in motion" and "no verdict yet" are both true.
 const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
 const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign');
+const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify');
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 
 const rounds = computed(() =>
@@ -389,7 +407,11 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                             <span v-if="consolidation" class="id">R{{ i + 1 }}</span>
                             <span class="dbid">run {{ run.id }}</span>
                             <span class="m">{{ run.turns }} turns · {{ usd(run.costUsd) }}</span>
-                            <span class="f">{{ run.status === 'aborted' ? 'aborted' : `${run.findingsCount} findings` }}</span>
+                            <!-- An empty compare is a review of nothing (merged or stale
+                                 head) — it must not read as a clean bill of health. -->
+                            <span class="f">{{ run.status === 'aborted' ? 'aborted'
+                                : run.filesChanged === 0 ? 'empty diff — reviewed nothing'
+                                    : `${run.findingsCount} findings` }}</span>
                         </div>
                         <div v-if="runs.length === 0" class="vnote">no runs recorded for this target yet</div>
                         <div v-if="consolidation && extraRunCount > 0" class="vnote">
@@ -407,7 +429,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">02</span><span class="name">Consolidate</span>
-                        <span v-if="runningKind === 'campaign'" class="pulse" title="a campaign for this target is running">●</span>
+                        <span v-if="verifying" class="pulse" title="a job for this target is running">●</span>
                         <!-- The desc names what the body shows: clusters when a rev
                              exists, raw unclustered findings in the fallback. -->
                         <span class="desc caps">{{ consolidation ? `${orderedClusters.length} clusters · click for detail` : `${sampleFindings.length} findings · unclustered` }}</span>
@@ -460,7 +482,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">03</span><span class="name">Verify</span>
-                        <span v-if="runningKind === 'campaign'" class="pulse" title="a campaign for this target is running">●</span>
+                        <span v-if="verifying" class="pulse" title="a job for this target is running">●</span>
                         <span class="desc caps">adversarial</span>
                     </div>
                     <div class="stage-body">
@@ -506,7 +528,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                                 <template v-if="coverage.f2 > 0">f₁² / 2f₂ = {{ coverage.f1 * coverage.f1 }}/{{ 2 * coverage.f2 }}</template>
                                 <template v-else>f₁(f₁−1) / 2 = {{ coverage.f1 * (coverage.f1 - 1) }}/2</template>
                                 <span class="c">{{ ' ' }}≈ {{ coverage.undiscovered }} unseen</span><br>
-                                <span class="c">capture–recapture</span>
+                                <span class="c">capture–recapture{{ refutedCount > 0 ? ` · ${refutedCount} refuted excluded` : '' }}</span>
                             </div>
                         </template>
                         <div v-else class="vnote">no estimate yet — coverage reads occurrence counts across runs</div>
@@ -533,7 +555,9 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
             :subject="calloutSubject"
             :run-count="runCount"
             :rev-run-ids="consolidation?.runIds"
+            :can-verify="!hasActiveJob && base !== undefined"
             @stamp="stamp"
+            @verify="verifyNow"
         />
     </div>
 </template>

@@ -9,12 +9,15 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
+import type { ConsolidationTarget } from '../consolidate/persist.js';
 import type { RepoClient } from '../github/github.js';
 import { assertSubscriptionCredit, previewArgs, throwIfErrorResult } from '../review/review.js';
 import { ReviewStore } from '../store/store.js';
 import type { Cluster, Consolidation } from '../store/store.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
+import type { ConsolidationId } from '../types/ids.js';
 import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 
@@ -247,4 +250,80 @@ export async function verifyPending(
         }
     }
     return summary;
+}
+
+export interface VerifyTargetOptions extends VerifyRunOptions
+{
+    reverify?: boolean;
+    onEvent?: (event: string) => void;
+}
+
+export interface VerifyTargetResult
+{
+    // Absent only when the target had no findings at all — nothing existed
+    // to consolidate, let alone verify.
+    consolidationId?: ConsolidationId;
+    // True when the latest consolidation already covered every submitted run
+    // and was reused instead of paying for a fresh judge call.
+    reused: boolean;
+    summary: VerifyPendingSummary;
+}
+
+// The verify job's runner: make a target's findings verifiable, then face
+// them with the adversary. Reuses the latest consolidation when it covers
+// exactly the submitted runs — verdicts inherit by member set, so a fresh
+// judge call over the same runs would buy nothing — and consolidates first
+// otherwise. Throwing on a target with no submitted runs is deliberate: a
+// verify job for such a target is a caller mistake, and failing the job
+// names it.
+export async function verifyTarget(
+    store: ReviewStore,
+    client: RepoClient,
+    target: ConsolidationTarget,
+    opts: VerifyTargetOptions = {},
+): Promise<VerifyTargetResult>
+{
+    const runs = submittedRunsFor(store, target);
+    if (runs.length === 0)
+    {
+        throw new Error('No submitted runs for this target — nothing to verify.');
+    }
+
+    const wanted = new Set(runs.map(r => r.id));
+    const latest = store.listConsolidations({ owner: target.owner, repo: target.repo, head: target.head })[0];
+    const covered = latest !== undefined
+        && latest.runIds.length === wanted.size
+        && latest.runIds.every(id => wanted.has(id));
+
+    let consolidation: Consolidation | undefined;
+    if (covered)
+    {
+        consolidation = store.getConsolidation(latest.id);
+        opts.onEvent?.(`reusing consolidation #${latest.id} — it already covers all ${runs.length} submitted run(s)`);
+    }
+    else
+    {
+        opts.onEvent?.(`consolidating ${runs.length} run(s)`);
+        consolidation = await consolidateRuns(store, target, runs, opts.model);
+        if (consolidation !== undefined)
+        {
+            opts.onEvent?.(`consolidation #${consolidation.id}: ${consolidation.clusters.length} cluster(s)`);
+        }
+    }
+    if (consolidation === undefined)
+    {
+        opts.onEvent?.('no findings on any submitted run — nothing to verify');
+        return { reused: false, summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+    }
+
+    const summary = await verifyPending(store, client, consolidation, {
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
+        ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+        onCluster: cluster => opts.onEvent?.(`verifying cluster #${cluster.id}: ${cluster.representative.title}`),
+        onVerdict: (cluster, response, stats) =>
+            opts.onEvent?.(`cluster #${cluster.id}: ${response.verdict} ($${stats.costUsd.toFixed(2)})`),
+        onFailure: (cluster, reason) => opts.onEvent?.(`cluster #${cluster.id} failed: ${reason}`),
+    });
+    return { consolidationId: consolidation.id, reused: covered, summary };
 }

@@ -29,7 +29,7 @@ const jobStateSchema = z.enum(['held', 'queued', 'running', 'succeeded', 'aborte
 export const jobSummarySchema = z.object({
     id: toTypedId(jobId),
     createdAt: z.string(),
-    kind: z.enum(['review', 'campaign']),
+    kind: z.enum(['review', 'campaign', 'verify']),
     state: jobStateSchema,
     owner: z.string(),
     repo: z.string(),
@@ -77,6 +77,15 @@ export const jobSchema = z.discriminatedUnion('kind', [
             reverify: z.boolean().optional(),
         }),
     }),
+    z.object({
+        ...jobCommon,
+        kind: z.literal('verify'),
+        params: z.object({
+            model: z.string().optional(),
+            maxTurns: z.number().int().optional(),
+            reverify: z.boolean().optional(),
+        }),
+    }),
 ]) satisfies z.ZodType<Job>;
 
 export const watchSchema = z.object({
@@ -106,6 +115,8 @@ export const runSummarySchema = z.object({
     costUsd: z.number(),
     target: z.string(),
     findingsCount: z.number().int(),
+    // Absent on runs saved before the column existed; 0 is the empty-diff tell.
+    filesChanged: z.number().int().optional(),
 }) satisfies z.ZodType<RunSummary>;
 
 export const consolidationSummarySchema = z.object({
