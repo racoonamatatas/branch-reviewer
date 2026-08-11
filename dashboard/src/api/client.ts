@@ -7,8 +7,8 @@ import type { humanVerdictRequestSchema, newJobRequestSchema, newWatchRequestSch
 import type { TargetFilter } from '@server/store/store';
 import type { ClusterId, ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
 import {
-    consolidationDetailSchema, consolidationSummarySchema, coverageSchema, findingSchema,
-    jobSchema, jobSummarySchema, runSummarySchema, targetSummarySchema, verificationSchema, watchSchema,
+    activityEventSchema, consolidationDetailSchema, consolidationSummarySchema, coverageSchema, findingSchema,
+    jobSchema, jobSummarySchema, pollStatusSchema, runSummarySchema, targetSummarySchema, verificationSchema, watchSchema,
 } from './schemas';
 
 // The request types are the server's own schemas, imported as types: what the
@@ -97,6 +97,15 @@ export const api = {
 
     stampVerdict: async (id: ClusterId, verdict: HumanVerdictRequest) =>
         (await request(`/clusters/${id}/verdict`, z.object({ verifications: z.array(verificationSchema) }), post(verdict))).verifications,
+
+    // The tail past a cursor; 0 (or omitted) fetches the whole ring. The
+    // caller detects a server restart by an overlap: a returned seq at or
+    // below its own cursor means "start over", not "append".
+    listEvents: async (after = 0) =>
+        await request(`/events${after > 0 ? `?after=${after}` : ''}`, z.object({
+            events: z.array(activityEventSchema),
+            poll: pollStatusSchema,
+        })),
 
     getConsolidation: async (id: ConsolidationId) =>
         await request(`/consolidations/${id}`, z.object({

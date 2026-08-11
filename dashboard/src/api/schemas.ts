@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import type { Coverage } from '@server/coverage/coverage';
 import type { Severity } from '@server/schema/schema';
+import type { ActivityEvent, PollStatus } from '@server/server/events';
 import type { Job, JobState, JobSummary } from '@server/server/jobs';
 import type { ClusterDetail, ConsolidationDetail } from '@server/server/server';
 import type { Watch } from '@server/server/trigger';
@@ -170,6 +171,22 @@ export const consolidationDetailSchema = z.object({
     runIds: z.array(toTypedId(runId)),
     clusters: z.array(clusterDetailSchema),
 }) satisfies z.ZodType<ConsolidationDetail>;
+
+export const activityEventSchema = z.object({
+    seq: z.number().int(),
+    at: z.string(),
+    source: z.enum(['server', 'worker', 'trigger']),
+    text: z.string(),
+}) satisfies z.ZodType<ActivityEvent>;
+
+export const pollStatusSchema = z.discriminatedUnion('polling', [
+    z.object({ polling: z.literal(false) }),
+    z.object({
+        polling: z.literal(true),
+        intervalMs: z.number(),
+        lastAt: z.string().optional(),
+    }),
+]) satisfies z.ZodType<PollStatus>;
 
 export const coverageSchema = z.object({
     observed: z.number().int(),

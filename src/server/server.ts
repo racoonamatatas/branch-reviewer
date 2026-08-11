@@ -10,6 +10,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { coverageOf } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
+import type { EventLog, PollStatus } from './events.js';
 import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
 import type { Id } from '../types/common.js';
 import { clusterId, consolidationId, jobId, runId, watchId } from '../types/ids.js';
@@ -89,6 +90,13 @@ export interface ServerDeps
     // The worker kick — called after every successful enqueue. The server
     // does not know the worker; the wiring entry point ties them together.
     onEnqueued?: (id: JobId) => void;
+    // The liveness feed and the poller's heartbeat, owned by the wiring entry
+    // point. Required: a server that can't say whether it's alive shouldn't
+    // exist — a pollerless wiring (fixture, tests) says { polling: false }.
+    activity: {
+        log: EventLog;
+        poll: () => PollStatus;
+    };
     // Absolute path to the built dashboard (dashboard/dist). When set, GETs
     // that miss every API route are served from it; when not, the server is
     // API-only and those misses stay JSON 404s.
@@ -156,6 +164,19 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         return id === undefined
             ? json(res, 404, { error: 'No such watch.' })
             : deleteWatch(deps, id, res);
+    }
+
+    // The liveness tail: ?after=seq returns only what the client hasn't seen,
+    // so the 3-second dashboard poll usually carries an empty array.
+    if (path === '/events' && req.method === 'GET')
+    {
+        const raw = url.searchParams.get('after');
+        const after = raw === null ? 0 : Number(raw);
+        if (!Number.isInteger(after) || after < 0)
+        {
+            return json(res, 400, { error: 'after must be a non-negative integer.' });
+        }
+        return json(res, 200, { events: deps.activity.log.since(after), poll: deps.activity.poll() });
     }
 
     if (path === '/targets' && req.method === 'GET')

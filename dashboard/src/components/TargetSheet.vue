@@ -268,6 +268,13 @@ const calloutSubject = computed<CalloutSubject | undefined>(() =>
 const campaignJob = computed(() =>
     targetJobs.value.filter(j => j.kind === 'campaign')
         .reduce<JobSummary | undefined>((latest, j) => latest === undefined || j.id > latest.id ? j : latest, undefined));
+
+// Liveness pulses on the stage heads: a running review touches stage 01; a
+// running campaign loops through review, consolidate, and verify, so all
+// three pulse — per-stage precision needs job kinds the server doesn't have
+// yet. Stamps stay PENDING while the dot blinks: "in motion" and "no verdict
+// yet" are both true.
+const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 
 const rounds = computed(() =>
@@ -361,6 +368,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">01</span><span class="name">Review</span>
+                        <span v-if="runningKind" class="pulse" title="a job for this target is running">●</span>
                         <span class="desc caps">{{ consolidation ? `${runCount} runs` : `${runs.length} runs` }}</span>
                     </div>
                     <div class="stage-body">
@@ -389,6 +397,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">02</span><span class="name">Consolidate</span>
+                        <span v-if="runningKind === 'campaign'" class="pulse" title="a campaign for this target is running">●</span>
                         <!-- The desc names what the body shows: clusters when a rev
                              exists, raw unclustered findings in the fallback. -->
                         <span class="desc caps">{{ consolidation ? `${orderedClusters.length} clusters · click for detail` : `${sampleFindings.length} findings · unclustered` }}</span>
@@ -441,6 +450,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">03</span><span class="name">Verify</span>
+                        <span v-if="runningKind === 'campaign'" class="pulse" title="a campaign for this target is running">●</span>
                         <span class="desc caps">adversarial</span>
                     </div>
                     <div class="stage-body">
@@ -559,6 +569,19 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
 }
 
 .close { margin-left: auto; }
+
+.pulse
+{
+    color: var(--chalk);
+    font-size: 0.7rem;
+    animation: bp-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bp-pulse
+{
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
+}
 
 /* ── the flow ───────────────────────────────────────── */
 .flowwrap { overflow-x: auto; padding-bottom: 0.5rem; }

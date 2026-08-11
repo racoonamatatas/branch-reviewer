@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 // Dev-only wiring: the app talks same-origin paths and Vite forwards them to
 // the job server, so no CORS layer exists anywhere — in production the job
 // server serves the built app itself and the paths are literally same-origin.
-const API_PATHS = ['/jobs', '/watches', '/targets', '/runs', '/consolidations'];
+const API_PATHS = ['/jobs', '/watches', '/targets', '/runs', '/consolidations', '/clusters', '/events'];
 
 export default defineConfig({
     plugins: [vue()],

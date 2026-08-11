@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EventLog } from '../../src/server/events.js';
 import { JobStore } from '../../src/server/jobs.js';
 import { createServer } from '../../src/server/server.js';
 import { WatchStore } from '../../src/server/trigger.js';
@@ -35,7 +36,10 @@ beforeEach(async () =>
     jobs = new JobStore(':memory:');
     watches = new WatchStore(':memory:');
     store = new ReviewStore(':memory:');
-    server = createServer({ jobs, watches, store, staticRoot: root });
+    server = createServer({
+        jobs, watches, store, staticRoot: root,
+        activity: { log: new EventLog(), poll: () => ({ polling: false }) },
+    });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });

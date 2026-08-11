@@ -5,12 +5,14 @@
 // sheet open, so refresh, back, and deep links all keep working.
 import { computed, nextTick, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import type { ActivityEvent, PollStatus } from '@server/server/events';
 import type { JobSummary } from '@server/server/jobs';
 import type { Watch } from '@server/server/trigger';
 import type { TargetSummary } from '@server/store/store';
 import type { JobId, WatchId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest, NewWatchRequest } from '../api/client';
+import ActivityPanel from '../components/ActivityPanel.vue';
 import NewJobForm from '../components/NewJobForm.vue';
 import QueuePanel from '../components/QueuePanel.vue';
 import TargetSheet from '../components/TargetSheet.vue';
@@ -63,6 +65,17 @@ function describe(e: unknown): string
     return e instanceof Error ? e.message : String(e);
 }
 
+// The activity feed accumulates by cursor: each cycle fetches only the tail
+// past the last seq we hold. An overlap in the numbering means the server
+// restarted and renumbered — start over instead of appending.
+const events = ref<ActivityEvent[]>([]);
+const pollStatus = ref<PollStatus>();
+const cursor = computed(() => events.value.at(-1)?.seq ?? 0);
+
+// The heartbeat's clock ticks once per refresh — "ago" values move at poll
+// granularity, which is exactly the liveness they are meant to prove.
+const refreshedAtMs = ref<number>();
+
 // One poller for the whole page: the open sheet's target-specific lists
 // refresh in the same cycle, concurrently. The sheet catches its own errors,
 // so awaiting it can't throw into ours.
@@ -73,11 +86,22 @@ async function refresh(): Promise<void>
     const sheetRefresh = sheet.value?.refresh();
     try
     {
-        [jobs.value, watches.value, targets.value] = await Promise.all([
+        const [jobList, watchList, targetList, feed] = await Promise.all([
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
+            api.listEvents(cursor.value),
         ]);
+        jobs.value = jobList;
+        watches.value = watchList;
+        targets.value = targetList;
+        pollStatus.value = feed.poll;
+        if (feed.events.length > 0)
+        {
+            const restarted = feed.events[0]!.seq <= cursor.value;
+            events.value = restarted ? feed.events : [...events.value, ...feed.events].slice(-200);
+        }
+        refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
     }
     catch (e)
@@ -86,6 +110,29 @@ async function refresh(): Promise<void>
     }
     await sheetRefresh;
 }
+
+const updatedLabel = computed(() =>
+    refreshedAtMs.value === undefined ? '…' : new Date(refreshedAtMs.value).toTimeString().slice(0, 8));
+
+const pollLabel = computed(() =>
+{
+    const poll = pollStatus.value;
+    if (poll === undefined || refreshedAtMs.value === undefined)
+    {
+        return '…';
+    }
+    if (!poll.polling)
+    {
+        return 'off';
+    }
+    const every = `every ${Math.round(poll.intervalMs / 1000)}s`;
+    if (poll.lastAt === undefined)
+    {
+        return `starting · ${every}`;
+    }
+    const ago = Math.max(0, Math.round((refreshedAtMs.value - Date.parse(poll.lastAt)) / 1000));
+    return `${ago}s ago · ${every}`;
+});
 
 usePolling(refresh, 3000);
 
@@ -134,6 +181,8 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
                         <b v-else class="mono">idle</b>
                     </span>
                     <span class="kv caps">queued <b class="mono">{{ queuedCount }}</b></span>
+                    <span class="kv caps">poll <b class="mono">{{ pollLabel }}</b></span>
+                    <span class="kv caps">updated <b class="mono">{{ updatedLabel }}</b></span>
                 </template>
             </div>
         </div>
@@ -170,6 +219,12 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
                 @promote="promote"
                 @enqueue="enqueue"
             />
+        </div>
+
+        <!-- Below the sheet on purpose: the feed's height breathes as lines
+             arrive, and nothing being read should shift under the reader. -->
+        <div class="activitywrap">
+            <ActivityPanel :events="events" />
         </div>
 
         <div class="titleblockwrap">
@@ -218,6 +273,8 @@ main
 .col.side { flex: none; width: 360px; }
 
 .sheetwrap { scroll-margin-top: 1rem; }
+
+.activitywrap { margin-top: 1.2rem; }
 
 @media (max-width: 900px)
 {

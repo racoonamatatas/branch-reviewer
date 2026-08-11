@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { NewFinding } from '../../src/schema/schema.js';
+import { EventLog } from '../../src/server/events.js';
 import { JobStore } from '../../src/server/jobs.js';
 import { createServer } from '../../src/server/server.js';
 import { WatchStore } from '../../src/server/trigger.js';
@@ -15,6 +16,7 @@ let store: ReviewStore;
 let server: Server;
 let base: string;
 let enqueued: JobId[];
+let activityLog: EventLog;
 
 beforeEach(async () =>
 {
@@ -22,7 +24,12 @@ beforeEach(async () =>
     watches = new WatchStore(':memory:');
     store = new ReviewStore(':memory:');
     enqueued = [];
-    server = createServer({ jobs, watches, store, onEnqueued: id => enqueued.push(id) });
+    activityLog = new EventLog();
+    server = createServer({
+        jobs, watches, store,
+        onEnqueued: id => enqueued.push(id),
+        activity: { log: activityLog, poll: () => ({ polling: false }) },
+    });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -563,6 +570,41 @@ describe('POST /clusters/:id/verdict', () =>
         // Act + Assert
         expect((await post('/clusters/999/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
         expect((await post('/clusters/0/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
+    });
+});
+
+describe('GET /events', () =>
+{
+    it('should return the feed and the poll status', async () =>
+    {
+        activityLog.push('worker', 'job #1: claimed');
+        activityLog.push('trigger', 'poll pass: 1 watch(es) — 0 enqueued, 0 seen before, 0 deferred');
+
+        const res = await fetch(`${base}/events`);
+        expect(res.status).toBe(200);
+        const body = await res.json() as { events: Array<{ seq: number; source: string; text: string }>; poll: { polling: boolean } };
+        expect(body.events.map(e => e.source)).toEqual(['worker', 'trigger']);
+        expect(body.poll).toEqual({ polling: false });
+    });
+
+    it('should tail from a cursor so a caught-up client gets nothing', async () =>
+    {
+        activityLog.push('server', 'one');
+        const two = activityLog.push('server', 'two');
+
+        const tail = await fetch(`${base}/events?after=1`);
+        const body = await tail.json() as { events: Array<{ seq: number; text: string }> };
+        expect(body.events.map(e => e.text)).toEqual(['two']);
+
+        const caughtUp = await fetch(`${base}/events?after=${two.seq}`);
+        expect(((await caughtUp.json()) as { events: unknown[] }).events).toEqual([]);
+    });
+
+    it('should reject a cursor that is not a non-negative integer', async () =>
+    {
+        expect((await fetch(`${base}/events?after=abc`)).status).toBe(400);
+        expect((await fetch(`${base}/events?after=-1`)).status).toBe(400);
+        expect((await fetch(`${base}/events?after=1.5`)).status).toBe(400);
     });
 });
 

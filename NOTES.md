@@ -13,7 +13,8 @@ Slices 1–10 shipped. **Slice 10 (Vue TS dashboard) complete** — read API,
 Vue scaffold, mission control view + fixture server, blueprint view, static
 serving from the job server; chunk 9 merged the two views into one
 blueprint-styled page (target sheet expands in place, route still carries
-the selection). Next up per the roadmap below: deploy.
+the selection). **Slice 11 (mission-control operations) in progress** —
+see below. After that, per the roadmap: deploy.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -124,6 +125,29 @@ per-cell dashed `td` borders restart the dash pattern at every column (put
 the border on `tr`); `display: flex` on a `td` un-table-cells it and breaks
 border painting; the native `<option>` popup is OS-drawn and needs an
 explicit dark background or it's white-on-white.
+
+**Slice 11 (mission-control operations), in progress.** Chunk 1 — activity
+feed + heartbeat, built because the live test left the user unable to tell
+"working" from "frozen". `EventLog` (`src/server/events.ts`) is a ring of
+200 in process memory, deliberately not a table: a liveness signal, not a
+record — everything worth keeping is already a row elsewhere, and it dying
+with the process is correct. `GET /events?after=seq` tails by cursor (the
+3s dashboard poll usually carries zero events); a cursor from a previous
+process life overlaps the new numbering and the client starts over instead
+of appending — restart never looks like silence. `PollStatus` discriminates
+`{ polling: false }` (fixture/tests have no poller — a different fact from
+"hasn't polled yet"). serve tees every console line into the ring and adds
+one line per poll pass even when quiet, because a quiet pass and a dead
+poller must not look identical. Dashboard: activity panel (newest first,
+bottom of mission control), header heartbeat (`poll Ns ago · every 300s` +
+`updated HH:MM:SS`), chalk pulses on sheet stage heads while a target's job
+runs (campaign pulses 01–03 — per-stage precision waits for job kinds).
+Found in passing: the Vite dev proxy lacked `/clusters`, so human stamps
+from the dev server had always been broken — only ever exercised via :4780.
+Agreed next chunks: `held` job state (trigger enqueues held; form gets
+Enqueue-held vs Start-now buttons; ▶ release transition), a verify job kind
+auto-enqueued held after each review, coverage honesty (exclude refuted
+clusters from the estimator, flag empty-diff runs).
 
 Chunk-9 live test (2026-08-11, ~$5.50): labeled PR #2 on this repo →
 auto-enqueued review of the chunk-9 diff itself (run 18, 4 findings, $2.18)

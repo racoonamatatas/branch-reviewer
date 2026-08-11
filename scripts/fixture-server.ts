@@ -5,6 +5,7 @@
 //
 //   npm run dashboard:fixture   (then npm run dashboard:dev beside it)
 
+import { EventLog } from '../src/server/events.js';
 import { JobStore } from '../src/server/jobs.js';
 import { createServer } from '../src/server/server.js';
 import { WatchStore } from '../src/server/trigger.js';
@@ -163,7 +164,13 @@ jobs.enqueue({ kind: 'review', owner: 'acme', repo: 'gadgets', head: 'feature/up
 jobs.enqueue({ kind: 'review', owner: 'acme', repo: 'widgets', head: 'slice-9-trigger', base: 'main', params: {} });
 
 // ── serve ───────────────────────────────────────────────
-const server = createServer({ jobs, watches, store });
+// A pollerless activity feed with a few staged lines, so the panel has
+// something to render during UI work.
+const activityLog = new EventLog();
+activityLog.push('server', 'fixture server started — in-memory, no worker, no trigger');
+activityLog.push('trigger', 'poll pass: 1 watch(es) — 0 enqueued, 2 seen before, 0 deferred');
+activityLog.push('worker', 'job #3: run saved as #2 (submitted, 5 findings)');
+const server = createServer({ jobs, watches, store, activity: { log: activityLog, poll: () => ({ polling: false }) } });
 server.listen(PORT, '127.0.0.1', () =>
 {
     console.log(`fixture server on http://127.0.0.1:${PORT} — in-memory, no worker, no trigger, no credit`);

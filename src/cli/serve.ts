@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubClient } from '../github/github.js';
 import { assertSubscriptionCredit } from '../review/review.js';
+import { EventLog } from '../server/events.js';
 import { JobStore } from '../server/jobs.js';
 import { createServer } from '../server/server.js';
 import { pollOnce, WatchStore } from '../server/trigger.js';
@@ -74,9 +75,15 @@ function main(): void
     const store = new ReviewStore(DEFAULT_DB_PATH);
     const watches = new WatchStore(DEFAULT_DB_PATH);
 
+    // Everything the console sees also lands in the activity ring, so the
+    // dashboard can answer "is anything actually happening" without a
+    // terminal. A liveness feed, not a record — it dies with the process.
+    const activityLog = new EventLog();
+
     for (const id of jobs.recoverInterrupted())
     {
         console.error(`job #${id} was running when the server last stopped; marked failed — re-enqueue to re-run (bills credit)`);
+        activityLog.push('server', `job #${id} was running at the last shutdown — marked failed`);
     }
 
     const worker = new Worker({
@@ -87,6 +94,7 @@ function main(): void
         onEvent: (id, event) =>
         {
             console.log(`  job #${id}: ${event}`);
+            activityLog.push('worker', `job #${id}: ${event}`);
         },
     });
 
@@ -104,6 +112,7 @@ function main(): void
     // Overlapping passes are skipped rather than queued — two concurrent
     // passes could both see a head SHA as unseen and enqueue it twice.
     let polling = false;
+    let lastPollAt: string | undefined;
     const poll = async (): Promise<void> =>
     {
         if (polling)
@@ -120,16 +129,22 @@ function main(): void
                 onEvent: (event) =>
                 {
                     console.log(`  trigger: ${event}`);
+                    activityLog.push('trigger', event);
                 },
             });
             for (const error of report.errors)
             {
                 console.error(`  trigger: ${error}`);
+                activityLog.push('trigger', error);
             }
             if (report.capped > 0)
             {
                 console.log(`  trigger: ${report.capped} PR(s) deferred to the next cycle by the per-cycle cap`);
             }
+            // One line per cycle even when nothing happened — a quiet pass and
+            // a dead poller look identical without it.
+            activityLog.push('trigger', `poll pass: ${watches.list().length} watch(es) — `
+                + `${report.enqueued.length} enqueued, ${report.skipped} seen before, ${report.capped} deferred`);
             if (report.enqueued.length > 0)
             {
                 kick();
@@ -137,16 +152,33 @@ function main(): void
         }
         catch (error)
         {
-            console.error(`trigger crashed: ${error instanceof Error ? error.message : String(error)}`);
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`trigger crashed: ${message}`);
+            activityLog.push('trigger', `poll pass crashed: ${message}`);
         }
         finally
         {
+            lastPollAt = new Date().toISOString();
             polling = false;
         }
     };
 
     const staticRoot = dashboardRoot();
-    const server = createServer({ jobs, watches, store, onEnqueued: kick, ...(staticRoot !== undefined ? { staticRoot } : {}) });
+    const server = createServer({
+        jobs,
+        watches,
+        store,
+        onEnqueued: (id) =>
+        {
+            activityLog.push('server', `job #${id} enqueued over HTTP`);
+            kick();
+        },
+        activity: {
+            log: activityLog,
+            poll: () => ({ polling: true, intervalMs: args.pollIntervalMs, ...(lastPollAt !== undefined ? { lastAt: lastPollAt } : {}) }),
+        },
+        ...(staticRoot !== undefined ? { staticRoot } : {}),
+    });
     server.listen(args.port, HOST, () =>
     {
         console.log(`branch-reviewer serving on http://${HOST}:${args.port} `
@@ -154,6 +186,7 @@ function main(): void
         console.log(staticRoot !== undefined
             ? `  dashboard: http://${HOST}:${args.port}/`
             : '  dashboard: not built — API only (npm run dashboard:build to add it)');
+        activityLog.push('server', `server started — model ${model}, polling every ${args.pollIntervalMs / 1000}s`);
     });
 
     setInterval(() =>
