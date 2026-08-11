@@ -24,7 +24,7 @@ CLI entry points (all tsx, `--env-file-if-exists=.env` for `GITHUB_TOKEN` / `REV
 ```
 npm run review -- <owner>/<repo> <branch> [--base main] [--max-turns N] [--verbose] [--no-save]
 npm run history [-- <run-id>]
-npm run consolidate -- <run-id> <run-id> [...] | --show <consolidation-id>
+npm run consolidate -- <run-id> [...] | --show <consolidation-id>   # a single run is valid: clustering is what makes findings verifiable
 npm run verify -- <consolidation-id> [--max-turns N] [--reverify]
 npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]
 npm run serve [-- --port N] [--poll-interval seconds]   # job server on 127.0.0.1:4780; enqueued jobs bill like the CLI commands; polls watches for labeled PRs; serves dashboard/dist when built

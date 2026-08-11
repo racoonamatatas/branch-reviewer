@@ -68,6 +68,22 @@ the test exercises both via raw `node:http` requests, since `fetch`
 normalizes traversals away client-side and never sends them. Vite's hashed
 `/assets/` serve immutable cache headers; `index.html` is no-cache.
 
+Chunk-6 (single-run visibility) decisions, user-driven ("before I tell
+someone I found something, I want to know if it is real"): findings shown to
+a human must carry verification state — a single-run finding is a claim, not
+a fact, and the UI says so. `GET /runs/:id/findings` exposes a run's own
+findings; the blueprint falls back to the latest submitted run's findings
+when the target has no consolidation, each row stamped UNVERIFIED. The
+callout takes a discriminated union (cluster | finding) rather than a fake
+one-member cluster, so unverified claims can't borrow the verified path's
+rendering. The start-campaign CTA moved out of the coverage gate — a one-run
+target is exactly when a campaign is most wanted. The consolidate CLI now
+accepts a single run (`< 2` guard relaxed): verification hangs off clusters,
+so clustering one run is how its findings become verifiable — campaign
+already produced single-run consolidations after round 1. The path is
+proven: run #14 (target-org/target-repo PR 1909) consolidated alone and
+verified 5/5 clusters — 4 confirmed, 1 undetermined ($3.26).
+
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
 auth first). Eventually: read→write promotion (posting findings to PRs)

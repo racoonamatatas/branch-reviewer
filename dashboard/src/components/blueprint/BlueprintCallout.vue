@@ -1,3 +1,17 @@
+<script lang="ts">
+// What the callout details: a consolidated cluster, or a bare finding from a
+// run no consolidation has absorbed yet. A discriminated union rather than
+// two optional props — a finding is not a degenerate cluster (it has no
+// occurrence, no verdict, no members), and pretending otherwise would
+// launder an unverified claim into the shapes the verified path renders.
+import type { ClusterDetail } from '@server/server/server';
+import type { Finding } from '@server/store/store';
+
+export type CalloutSubject =
+    | { kind: 'cluster'; cluster: ClusterDetail }
+    | { kind: 'finding'; finding: Finding };
+</script>
+
 <script setup lang="ts">
 // The detail callout under the sheet: one cluster's full content — finding
 // prose, members, and the verification panel. The write actions (verify now,
@@ -5,13 +19,15 @@
 // server has no verify endpoint and no human-verdict path yet, and the first
 // write endpoint is its own decision, not a dashboard side effect.
 import { computed } from 'vue';
-import type { ClusterDetail } from '@server/server/server';
 import { usd } from '../../format';
 
-const props = defineProps<{ cluster: ClusterDetail; runCount: number }>();
+const props = defineProps<{ subject: CalloutSubject; runCount: number }>();
+
+const cluster = computed(() => props.subject.kind === 'cluster' ? props.subject.cluster : undefined);
+const finding = computed(() => props.subject.kind === 'cluster' ? props.subject.cluster.representative : props.subject.finding);
 
 // Append-only history: the last row is the verdict the cluster shows.
-const latest = computed(() => props.cluster.verifications[props.cluster.verifications.length - 1]);
+const latest = computed(() => cluster.value?.verifications[cluster.value.verifications.length - 1]);
 
 const VERDICT_CLASS = { confirmed: 'ok', refuted: 'no', undetermined: 'und' } as const;
 
@@ -24,25 +40,35 @@ function location(file: string, line?: number): string
 <template>
     <div class="callout">
         <div class="callout-head">
-            <span class="k">DETAIL — CLUSTER Nº {{ cluster.id }}</span>
-            <span class="t">{{ cluster.representative.title }}</span>
+            <span class="k">{{ cluster ? `DETAIL — CLUSTER Nº ${cluster.id}` : `DETAIL — FINDING #${finding.id}` }}</span>
+            <span class="t">{{ finding.title }}</span>
             <span class="meta caps">
-                {{ cluster.severity }} · seen in {{ cluster.occurrence }} of {{ runCount }} runs ·
-                {{ location(cluster.representative.file, cluster.representative.line) }}
+                {{ finding.severity }} ·
+                {{ cluster ? `seen in ${cluster.occurrence} of ${runCount} runs` : 'single run · unverified' }} ·
+                {{ location(finding.file, finding.line) }}
             </span>
         </div>
         <div class="callout-body">
             <div class="left">
                 <h3>Finding</h3>
-                <div class="prose"><p>{{ cluster.representative.detail }}</p></div>
-                <div v-if="cluster.representative.suggestion" class="sugg">
-                    SUGGESTION — {{ cluster.representative.suggestion }}
+                <div class="prose"><p>{{ finding.detail }}</p></div>
+                <div v-if="finding.suggestion" class="sugg">
+                    SUGGESTION — {{ finding.suggestion }}
                 </div>
-                <h3 class="members-head">Members</h3>
-                <div v-for="member in cluster.members" :key="member.id" class="member">
-                    <span class="rid">run #{{ member.runId }}</span>
-                    <span class="mono">{{ location(member.file, member.line) }}</span>
-                </div>
+                <template v-if="cluster">
+                    <h3 class="members-head">Members</h3>
+                    <div v-for="member in cluster.members" :key="member.id" class="member">
+                        <span class="rid">run #{{ member.runId }}</span>
+                        <span class="mono">{{ location(member.file, member.line) }}</span>
+                    </div>
+                </template>
+                <template v-else>
+                    <h3 class="members-head">Provenance</h3>
+                    <div class="member">
+                        <span class="rid">run #{{ finding.runId }}</span>
+                        <span class="mono">{{ location(finding.file, finding.line) }}</span>
+                    </div>
+                </template>
             </div>
             <div class="right">
                 <template v-if="latest">
@@ -50,7 +76,7 @@ function location(file: string, line?: number): string
                     <span class="bigstamp" :class="VERDICT_CLASS[latest.verdict]">{{ latest.verdict.toUpperCase() }}</span>
                     <div class="rationale">{{ latest.rationale }}</div>
                     <div class="confidence">{{ latest.confidence }}</div>
-                    <div v-if="cluster.verifications.length > 1" class="confidence">
+                    <div v-if="cluster && cluster.verifications.length > 1" class="confidence">
                         {{ cluster.verifications.length - 1 }} earlier verdict(s) in the append-only history.
                     </div>
                     <div class="vactions">
@@ -58,6 +84,15 @@ function location(file: string, line?: number): string
                         <button class="bp-btn no" disabled title="No human-verdict endpoint yet — the first write path is its own decision.">stamp: refute</button>
                         <span class="note">human verdicts append — overrule, never overwrite · write path not built yet</span>
                     </div>
+                </template>
+                <template v-else-if="cluster === undefined">
+                    <h3>Verification</h3>
+                    <span class="bigstamp und">UNVERIFIED</span>
+                    <div class="rationale">
+                        A claim, not a fact: this finding has never faced the adversarial pass, because
+                        verification hangs off clusters and no consolidation includes this run yet.
+                    </div>
+                    <div class="confidence">Consolidate the run (or start a campaign) to make it verifiable.</div>
                 </template>
                 <template v-else-if="cluster.occurrence === 1">
                     <h3>Adversarial verification</h3>

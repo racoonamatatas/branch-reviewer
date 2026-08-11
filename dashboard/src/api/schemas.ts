@@ -115,7 +115,7 @@ export const consolidationSummarySchema = z.object({
     clusterCount: z.number().int(),
 }) satisfies z.ZodType<ConsolidationSummary>;
 
-const findingSchema = z.object({
+export const findingSchema = z.object({
     id: toTypedId(findingId),
     runId: toTypedId(runId),
     file: z.string(),

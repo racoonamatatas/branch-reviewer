@@ -8,12 +8,13 @@ import { computed, ref, watch } from 'vue';
 import type { Coverage } from '@server/coverage/coverage';
 import type { Severity } from '@server/schema/schema';
 import type { JobSummary } from '@server/server/jobs';
-import type { ClusterDetail, ConsolidationDetail } from '@server/server/server';
+import type { ConsolidationDetail } from '@server/server/server';
 import type { Watch } from '@server/server/trigger';
-import type { ConsolidationSummary, RunSummary } from '@server/store/store';
-import type { ClusterId, ConsolidationId, JobId } from '@server/types/ids';
+import type { ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
+import type { ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import BlueprintCallout from '../components/blueprint/BlueprintCallout.vue';
+import type { CalloutSubject } from '../components/blueprint/BlueprintCallout.vue';
 import BlueprintIntake from '../components/blueprint/BlueprintIntake.vue';
 import LoopBand from '../components/blueprint/LoopBand.vue';
 import { usePolling } from '../composables/usePolling';
@@ -38,6 +39,7 @@ const actionError = ref<string>();
 const selectedRevId = ref<ConsolidationId>();
 const pinned = ref(false);
 const selectedClusterId = ref<ClusterId>();
+const selectedFindingId = ref<FindingId>();
 
 function describe(e: unknown): string
 {
@@ -78,8 +80,11 @@ watch(() => [props.owner, props.repo, props.head], () =>
     detail.value = undefined;
     selectedRevId.value = undefined;
     selectedClusterId.value = undefined;
+    selectedFindingId.value = undefined;
+    sampleFindings.value = [];
     pinned.value = false;
     detailCache.clear();
+    findingsCache.clear();
     void refresh();
 });
 
@@ -138,6 +143,43 @@ watch(selectedRevId, async (id) =>
 const consolidation = computed(() => detail.value?.consolidation);
 const coverage = computed(() => detail.value?.coverage);
 
+// The single-run fallback: with no consolidation to display, the sheet shows
+// the latest submitted run's own findings — labeled unverified, because
+// verification hangs off clusters and these rows have never faced the
+// adversarial pass. Findings are immutable once written, so they cache by
+// run id exactly like consolidation details do.
+const sampleFindings = ref<Finding[]>([]);
+const findingsCache = new Map<RunId, Finding[]>();
+const sampleRunId = computed(() =>
+    consolidations.value.length > 0 ? undefined : runs.value.find(r => r.status === 'submitted')?.id);
+watch(sampleRunId, async (id) =>
+{
+    if (id === undefined)
+    {
+        sampleFindings.value = [];
+        return;
+    }
+    const cached = findingsCache.get(id);
+    if (cached !== undefined)
+    {
+        sampleFindings.value = cached;
+        return;
+    }
+    try
+    {
+        const fetched = await api.getRunFindings(id);
+        findingsCache.set(id, fetched);
+        if (sampleRunId.value === id)
+        {
+            sampleFindings.value = fetched;
+        }
+    }
+    catch (e)
+    {
+        connectionError.value = describe(e);
+    }
+}, { immediate: true });
+
 const targetJobs = computed(() =>
     jobs.value.filter(j => j.owner === props.owner && j.repo === props.repo && j.head === props.head));
 const targetWatches = computed(() =>
@@ -179,6 +221,21 @@ const selectedCluster = computed(() =>
     orderedClusters.value.find(c => c.id === selectedClusterId.value)
     ?? orderedClusters.value.find(c => c.verifications.length > 0)
     ?? orderedClusters.value[0]);
+
+// Fallback groups mirror the cluster grouping; no occurrence sort because
+// occurrence does not exist at n = 1.
+const findingGroups = computed(() =>
+    SEVERITIES
+        .map(severity => ({ severity, findings: sampleFindings.value.filter(f => f.severity === severity) }))
+        .filter(g => g.findings.length > 0));
+
+const selectedFinding = computed(() =>
+    sampleFindings.value.find(f => f.id === selectedFindingId.value) ?? sampleFindings.value[0]);
+
+const calloutSubject = computed<CalloutSubject | undefined>(() =>
+    selectedCluster.value !== undefined ? { kind: 'cluster', cluster: selectedCluster.value }
+        : selectedFinding.value !== undefined ? { kind: 'finding', finding: selectedFinding.value }
+            : undefined);
 
 // ── the loop band's inputs ──────────────────────────────
 const campaignJob = computed(() =>
@@ -307,7 +364,25 @@ const resumeCampaign = (): Promise<void> => act(() =>
                                 <span v-else class="occ">{{ cluster.occurrence }}/{{ runCount }}</span>
                             </button>
                         </div>
-                        <div v-if="!consolidation" class="vnote">no consolidation yet — occurrence needs at least two submitted runs</div>
+                        <template v-if="!consolidation">
+                            <div v-for="group in findingGroups" :key="group.severity" class="sevgroup">
+                                <div class="caps">{{ group.severity }} · {{ group.findings.length }}</div>
+                                <button
+                                    v-for="f in group.findings"
+                                    :key="f.id"
+                                    class="cl"
+                                    :aria-current="f.id === selectedFinding?.id"
+                                    @click="selectedFindingId = f.id"
+                                >
+                                    <span class="t">{{ f.title }}</span>
+                                    <span class="stamp stamp-pend">UNVERIFIED</span>
+                                </button>
+                            </div>
+                            <div v-if="sampleFindings.length > 0" class="vnote">
+                                no consolidation yet — run #{{ sampleRunId }}'s findings shown raw: claims, not facts
+                            </div>
+                            <div v-else class="vnote">no consolidation yet — no submitted run to sample</div>
+                        </template>
                     </div>
                 </div>
 
@@ -338,7 +413,10 @@ const resumeCampaign = (): Promise<void> => act(() =>
                             only occurrence-1 clusters are queued — recurrence corroborates the other
                             {{ orderedClusters.length - seenOnce.length }}.<br>undetermined ≠ refuted: it means human eyes.
                         </div>
-                        <div v-else class="vnote">nothing to verify yet</div>
+                        <div v-else class="vnote">
+                            verification hangs off clusters — consolidate the run (or start a campaign)
+                            to put its findings through the adversarial pass
+                        </div>
                     </div>
                 </div>
 
@@ -363,23 +441,27 @@ const resumeCampaign = (): Promise<void> => act(() =>
                                 <span class="c">{{ ' ' }}≈ {{ coverage.undiscovered }} unseen</span><br>
                                 <span class="c">capture–recapture</span>
                             </div>
-                            <div v-if="campaignJob" class="verdictline">campaign #{{ campaignJob.id }}: {{ campaignJob.state }}</div>
-                            <div class="cta">
-                                <button
-                                    class="bp-btn chalk"
-                                    :disabled="hasActiveJob || base === undefined"
-                                    :title="hasActiveJob ? 'A job for this target is already queued or running.' : 'Enqueue a campaign for this target — bills subscription credit.'"
-                                    @click="resumeCampaign"
-                                >↺ {{ campaignJob ? 'resume' : 'start' }} campaign</button>
-                            </div>
                         </template>
                         <div v-else class="vnote">no estimate yet — coverage reads occurrence counts across runs</div>
+                        <!-- Outside the coverage gate on purpose: the moment a campaign is most
+                             wanted is a one-run target, which has no coverage to show yet. -->
+                        <div v-if="campaignJob" class="verdictline">campaign #{{ campaignJob.id }}: {{ campaignJob.state }}</div>
+                        <div class="cta">
+                            <button
+                                class="bp-btn chalk"
+                                :disabled="hasActiveJob || base === undefined"
+                                :title="hasActiveJob ? 'A job for this target is already queued or running.'
+                                    : base === undefined ? 'No base known for this target yet.'
+                                        : 'Enqueue a campaign for this target — bills subscription credit.'"
+                                @click="resumeCampaign"
+                            >↺ {{ campaignJob ? 'resume' : 'start' }} campaign</button>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <BlueprintCallout v-if="selectedCluster" :cluster="selectedCluster as ClusterDetail" :run-count="runCount" />
+        <BlueprintCallout v-if="calloutSubject" :subject="calloutSubject" :run-count="runCount" />
 
         <div class="titleblockwrap">
             <div class="titleblock">

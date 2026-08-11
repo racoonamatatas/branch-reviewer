@@ -387,6 +387,30 @@ describe('GET /runs', () =>
     });
 });
 
+describe('GET /runs/:id/findings', () =>
+{
+    it('should return the run\'s findings with ids and provenance', async () =>
+    {
+        // Arrange
+        const id = seedRun('feature/x', [finding('one'), finding('two')]);
+
+        // Act
+        const res = await fetch(`${base}/runs/${id}/findings`);
+        const body = await res.json() as { findings: Array<{ id: number; runId: number; title: string }> };
+
+        // Assert
+        expect(res.status).toBe(200);
+        expect(body.findings).toHaveLength(2);
+        expect(body.findings[0]).toMatchObject({ runId: id, title: 'one' });
+    });
+
+    it('should 404 a run that does not exist', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/runs/999/findings`)).status).toBe(404);
+    });
+});
+
 describe('GET /consolidations', () =>
 {
     it('should list summaries filtered by target', async () =>

@@ -9,7 +9,7 @@ import { consolidationId, runId } from '../types/ids.js';
 import type { ConsolidationId, RunId } from '../types/ids.js';
 import { printConsolidation } from './render.js';
 
-const USAGE = 'Usage: npm run consolidate -- <run-id> <run-id> [...] | npm run consolidate | npm run consolidate -- --show <consolidation-id>';
+const USAGE = 'Usage: npm run consolidate -- <run-id> [<run-id> ...] | npm run consolidate | npm run consolidate -- --show <consolidation-id>';
 
 async function main(): Promise<number>
 {
@@ -30,8 +30,11 @@ async function main(): Promise<number>
             }
             return show(store, consolidationId(raw));
         }
+        // A single run is a valid consolidation: verification hangs off
+        // clusters, so clustering one run is how its findings become
+        // verifiable at all — campaign already does this after round 1.
         const raw = args.map(Number);
-        if (raw.length < 2 || raw.some(id => !Number.isInteger(id)))
+        if (raw.length < 1 || raw.some(id => !Number.isInteger(id)))
         {
             throw new Error(USAGE);
         }

@@ -5,9 +5,9 @@
 import { z } from 'zod';
 import type { newJobRequestSchema, newWatchRequestSchema } from '@server/server/server';
 import type { TargetFilter } from '@server/store/store';
-import type { ConsolidationId, JobId, WatchId } from '@server/types/ids';
+import type { ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
 import {
-    consolidationDetailSchema, consolidationSummarySchema, coverageSchema,
+    consolidationDetailSchema, consolidationSummarySchema, coverageSchema, findingSchema,
     jobSchema, jobSummarySchema, runSummarySchema, targetSummarySchema, watchSchema,
 } from './schemas';
 
@@ -87,6 +87,9 @@ export const api = {
 
     listRuns: async (filter?: TargetFilter) =>
         (await request(`/runs${targetQuery(filter)}`, z.object({ runs: z.array(runSummarySchema) }))).runs,
+
+    getRunFindings: async (id: RunId) =>
+        (await request(`/runs/${id}/findings`, z.object({ findings: z.array(findingSchema) }))).findings,
 
     listConsolidations: async (filter?: TargetFilter) =>
         (await request(`/consolidations${targetQuery(filter)}`, z.object({ consolidations: z.array(consolidationSummarySchema) }))).consolidations,

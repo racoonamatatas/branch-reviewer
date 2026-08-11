@@ -12,7 +12,7 @@ import { coverageOf } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
 import type { Id } from '../types/common.js';
-import { consolidationId, jobId, watchId } from '../types/ids.js';
+import { consolidationId, jobId, runId, watchId } from '../types/ids.js';
 import type { JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
@@ -160,6 +160,19 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         return query.ok
             ? json(res, 200, { runs: deps.store.listRuns(query.filter) })
             : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+    }
+
+    // A run's own findings, ids and provenance included — the dashboard's
+    // window onto a run no consolidation has absorbed yet. Unverified by
+    // definition: verification hangs off clusters, so these rows carry no
+    // verdict and the UI must present them as claims, not facts.
+    const runDetail = /^\/runs\/(\d+)\/findings$/.exec(path);
+    if (runDetail !== null && req.method === 'GET')
+    {
+        const id = parseId(runDetail[1], runId);
+        return id === undefined || deps.store.getRun(id) === undefined
+            ? json(res, 404, { error: 'No such run.' })
+            : json(res, 200, { findings: deps.store.getFindings(id) });
     }
 
     if (path === '/consolidations' && req.method === 'GET')
