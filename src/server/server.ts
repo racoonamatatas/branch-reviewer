@@ -16,6 +16,7 @@ import { consolidationId, jobId, watchId } from '../types/ids.js';
 import type { JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
+import { serveStatic } from './static.js';
 import { DEFAULT_TRIGGER_LABEL } from './trigger.js';
 import type { WatchStore } from './trigger.js';
 
@@ -79,6 +80,10 @@ export interface ServerDeps
     // The worker kick — called after every successful enqueue. The server
     // does not know the worker; the wiring entry point ties them together.
     onEnqueued?: (id: JobId) => void;
+    // Absolute path to the built dashboard (dashboard/dist). When set, GETs
+    // that miss every API route are served from it; when not, the server is
+    // API-only and those misses stay JSON 404s.
+    staticRoot?: string;
 }
 
 export function createServer(deps: ServerDeps): Server
@@ -173,6 +178,13 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         return consolidation === undefined
             ? json(res, 404, { error: 'No such consolidation.' })
             : json(res, 200, detailOf(deps.store, consolidation));
+    }
+
+    // API routes always win — the static handler only ever sees their
+    // misses, so a dist file named "jobs" could never shadow the queue.
+    if (deps.staticRoot !== undefined && req.method === 'GET')
+    {
+        return serveStatic(deps.staticRoot, path, res);
     }
 
     json(res, 404, { error: 'No such route.' });

@@ -7,11 +7,11 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
-## Status (2026-08-07)
+## Status (2026-08-11)
 
-Slices 1–9 shipped. **Slice 10 (Vue TS dashboard) in progress: chunks 1–4 of
-5 done** — read API, Vue scaffold, mission control view + fixture server,
-blueprint view. Remaining: chunk 5 (static serving from the job server).
+Slices 1–10 shipped. **Slice 10 (Vue TS dashboard) complete** — read API,
+Vue scaffold, mission control view + fixture server, blueprint view, static
+serving from the job server. Next up per the roadmap below: deploy.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -52,6 +52,21 @@ shape while the first write endpoint stays its own decision. Verified against
 the fixture server with headless Firefox via geckodriver + raw WebDriver curl
 (snap Firefox single-instance blocks `--headless --screenshot` while the
 desktop browser runs; geckodriver sidesteps it).
+
+Chunk-5 (static serving) decisions: `serveStatic` (`src/server/static.ts`)
+hangs off `ServerDeps.staticRoot` — API routes always win, unknown GETs fall
+through to the dist tree, and `npm run serve` enables it only when
+`dashboard/dist/index.html` exists (API-only with a build hint otherwise), so
+the same-origin paths the Vite dev proxy fakes are real in production. The
+SPA fallback is deliberately extension-blind outside `/assets/` because
+client routes embed branch names and those contain dots (`release/v1.2`); a
+miss under `/assets/` stays 404 so a broken build can't feed HTML to a
+script tag. Traversal has two layers: the WHATWG URL parse in `route()`
+collapses `../` and `%2e%2e/` before the handler sees them, and the
+handler's own decode-then-prefix check catches what survives (`..%2f`) —
+the test exercises both via raw `node:http` requests, since `fetch`
+normalizes traversals away client-side and never sends them. Vite's hashed
+`/assets/` serve immutable cache headers; `index.html` is no-cache.
 
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server

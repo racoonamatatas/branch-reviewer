@@ -27,7 +27,7 @@ npm run history [-- <run-id>]
 npm run consolidate -- <run-id> <run-id> [...] | --show <consolidation-id>
 npm run verify -- <consolidation-id> [--max-turns N] [--reverify]
 npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]
-npm run serve [-- --port N] [--poll-interval seconds]   # job server on 127.0.0.1:4780; enqueued jobs bill like the CLI commands; polls watches for labeled PRs
+npm run serve [-- --port N] [--poll-interval seconds]   # job server on 127.0.0.1:4780; enqueued jobs bill like the CLI commands; polls watches for labeled PRs; serves dashboard/dist when built
 npm run eval:freeze -- <consolidation-id>   # freeze a consolidation as the judge's golden fixture
 npm run eval:judge                          # stochastic judge eval — run on demand, NOT part of the unit suite
 ```

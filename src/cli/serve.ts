@@ -3,6 +3,9 @@
 // decision, not a default. Credit is asserted before listening: a server
 // that would bill pay-as-you-go on its first job should not start at all.
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { GitHubClient } from '../github/github.js';
 import { assertSubscriptionCredit } from '../review/review.js';
 import { JobStore } from '../server/jobs.js';
@@ -18,6 +21,15 @@ const HOST = '127.0.0.1';
 // labeled push rarely needs a sub-5-minute pickup.
 const DEFAULT_POLL_INTERVAL_S = 300;
 const MIN_POLL_INTERVAL_S = 10;
+
+// The built dashboard, located relative to this module so the server finds
+// it from any working directory. index.html is the tell for "built": serving
+// a half-empty dist would look like a broken app, not a missing build.
+function dashboardRoot(): string | undefined
+{
+    const dist = fileURLToPath(new URL('../../dashboard/dist', import.meta.url));
+    return existsSync(join(dist, 'index.html')) ? dist : undefined;
+}
 
 interface ServeArgs
 {
@@ -133,11 +145,15 @@ function main(): void
         }
     };
 
-    const server = createServer({ jobs, watches, store, onEnqueued: kick });
+    const staticRoot = dashboardRoot();
+    const server = createServer({ jobs, watches, store, onEnqueued: kick, ...(staticRoot !== undefined ? { staticRoot } : {}) });
     server.listen(args.port, HOST, () =>
     {
         console.log(`branch-reviewer serving on http://${HOST}:${args.port} `
             + `(model ${model}, db ${DEFAULT_DB_PATH}, polling ${watches.list().length} watch(es) every ${args.pollIntervalMs / 1000}s)`);
+        console.log(staticRoot !== undefined
+            ? `  dashboard: http://${HOST}:${args.port}/`
+            : '  dashboard: not built — API only (npm run dashboard:build to add it)');
     });
 
     setInterval(() =>
