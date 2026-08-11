@@ -18,9 +18,12 @@ export type CalloutSubject =
 // review store's first and only HTTP write); "verify now" stays drawn but
 // disabled until a verify job kind exists.
 import { computed, ref } from 'vue';
+import type { RunId } from '@server/types/ids';
 import { usd } from '../../format';
 
-const props = defineProps<{ subject: CalloutSubject; runCount: number }>();
+// revRunIds is the displayed rev's runs in round order — it turns raw run
+// ids into R-numbers so the callout speaks the same language as the sheet.
+const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[] }>();
 
 const emit = defineEmits<{ stamp: [verdict: 'confirmed' | 'refuted', rationale: string] }>();
 
@@ -47,12 +50,21 @@ function location(file: string, line?: number): string
 {
     return line === undefined ? file : `${file}:${line}`;
 }
+
+function runLabel(id: RunId): string
+{
+    const round = props.revRunIds?.indexOf(id) ?? -1;
+    return round >= 0 ? `R${round + 1} · run ${id}` : `run ${id}`;
+}
 </script>
 
 <template>
     <div class="callout">
+        <!-- No cluster number in the header: cluster ids are one judge call's
+             bookkeeping and change on every re-consolidation. The title IS the
+             identity a human tracks; the db id survives in the tooltip. -->
         <div class="callout-head">
-            <span class="k">{{ cluster ? `DETAIL — CLUSTER Nº ${cluster.id}` : `DETAIL — FINDING #${finding.id}` }}</span>
+            <span class="k" :title="cluster ? `cluster id ${cluster.id}` : `finding id ${finding.id}`">DETAIL</span>
             <span class="t">{{ finding.title }}</span>
             <span class="meta caps">
                 {{ finding.severity }} ·
@@ -70,14 +82,14 @@ function location(file: string, line?: number): string
                 <template v-if="cluster">
                     <h3 class="members-head">Members</h3>
                     <div v-for="member in cluster.members" :key="member.id" class="member">
-                        <span class="rid">run #{{ member.runId }}</span>
+                        <span class="rid">{{ runLabel(member.runId) }}</span>
                         <span class="mono">{{ location(member.file, member.line) }}</span>
                     </div>
                 </template>
                 <template v-else>
                     <h3 class="members-head">Provenance</h3>
                     <div class="member">
-                        <span class="rid">run #{{ finding.runId }}</span>
+                        <span class="rid">{{ runLabel(finding.runId) }}</span>
                         <span class="mono">{{ location(finding.file, finding.line) }}</span>
                     </div>
                 </template>

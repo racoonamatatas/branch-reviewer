@@ -307,10 +307,12 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
             <div class="subrow">
                 <span class="sub caps">{{ props.owner }}/{{ props.repo }} — {{ props.head }} → {{ base ?? '?' }}</span>
                 <label class="revlabel caps" for="revpick">rev</label>
+                <!-- Story first, db id last: "which snapshot" is the question the
+                     picker answers; Nº survives because the CLI addresses revs by it. -->
                 <select id="revpick" v-model="revModel" class="revpick" :disabled="consolidations.length === 0">
                     <option v-if="consolidations.length === 0" :value="undefined">none yet</option>
                     <option v-for="c in consolidations" :key="c.id" :value="c.id">
-                        Nº {{ c.id }} · {{ c.runIds.length }} runs · {{ c.clusterCount }} clusters{{ c.id === latestId ? ' · latest' : '' }}
+                        {{ c.runIds.length }} {{ c.runIds.length === 1 ? 'run' : 'runs' }} · {{ c.clusterCount }} clusters{{ c.id === latestId ? ' · latest' : '' }} · Nº {{ c.id }}
                     </option>
                 </select>
                 <RouterLink class="back mono" to="/">← mission control</RouterLink>
@@ -343,8 +345,12 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
                         <span class="desc caps">{{ consolidation ? `${runCount} runs` : `${runs.length} runs` }}</span>
                     </div>
                     <div class="stage-body">
-                        <div v-for="run in (consolidation ? revRuns : runs)" :key="run.id" class="run">
-                            <span class="id">#{{ run.id }}</span>
+                        <!-- Round ordinals answer "when in the campaign"; the db id is
+                             demoted to small print because only the CLI needs it. Rounds
+                             exist only inside a rev — the fallback list has no R numbers. -->
+                        <div v-for="(run, i) in (consolidation ? revRuns : runs)" :key="run.id" class="run">
+                            <span v-if="consolidation" class="id">R{{ i + 1 }}</span>
+                            <span class="dbid">run {{ run.id }}</span>
                             <span class="m">{{ run.turns }} turns · {{ usd(run.costUsd) }}</span>
                             <span class="f">{{ run.status === 'aborted' ? 'aborted' : `${run.findingsCount} findings` }}</span>
                         </div>
@@ -397,7 +403,7 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
                                 </button>
                             </div>
                             <div v-if="sampleFindings.length > 0" class="vnote">
-                                no consolidation yet — run #{{ sampleRunId }}'s findings shown raw: claims, not facts
+                                no consolidation yet — run {{ sampleRunId }}'s findings shown raw: claims, not facts
                             </div>
                             <div v-else class="vnote">no consolidation yet — no submitted run to sample</div>
                         </template>
@@ -479,7 +485,13 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
             </div>
         </div>
 
-        <BlueprintCallout v-if="calloutSubject" :subject="calloutSubject" :run-count="runCount" @stamp="stamp" />
+        <BlueprintCallout
+            v-if="calloutSubject"
+            :subject="calloutSubject"
+            :run-count="runCount"
+            :rev-run-ids="consolidation?.runIds"
+            @stamp="stamp"
+        />
 
         <div class="titleblockwrap">
             <div class="titleblock">
@@ -726,7 +738,8 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
 }
 
 .run:last-of-type { border-bottom: 0; }
-.run .id { color: var(--bright); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.run .id { color: var(--chalk); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.run .dbid { color: var(--faint); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.78rem; }
 .run .m { color: var(--muted); }
 .run .f { margin-left: auto; color: var(--ink); }
 

@@ -37,7 +37,7 @@ const stampClass = computed(() => props.campaign === undefined ? undefined : STA
             <div class="m caps">sole-source clusters per run · in this rev</div>
         </div>
         <div class="rounds">
-            <div v-for="(round, i) in rounds" :key="round.runId" class="round" :class="{ barren: round.novel === 0 }" :title="`run #${round.runId}`">
+            <div v-for="(round, i) in rounds" :key="round.runId" class="round" :class="{ barren: round.novel === 0 }" :title="`run ${round.runId}`">
                 <span class="r">r{{ i + 1 }}</span><span class="v">{{ round.novel }}</span>
             </div>
         </div>
