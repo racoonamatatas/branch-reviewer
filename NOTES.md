@@ -125,6 +125,21 @@ the border on `tr`); `display: flex` on a `td` un-table-cells it and breaks
 border painting; the native `<option>` popup is OS-drawn and needs an
 explicit dark background or it's white-on-white.
 
+Chunk-9 live test (2026-08-11, ~$5.50): labeled PR #2 on this repo →
+auto-enqueued review of the chunk-9 diff itself (run 18, 4 findings, $2.18)
+→ CLI consolidate #11 → CLI verify (3 confirmed, 1 refuted, $3.26). The
+verifier's refutation read the router config and vue-router 4 semantics to
+prove the claimed rejection impossible — three-valued verdicts earning
+their keep. The test caught three display bugs the fixture never could
+(connector/desc labels were rev-derived while the body showed the
+no-consolidation fallback; the detail forever-cache went stale on screen
+when CLI verify appended verdicts — details now refetch each poll cycle,
+the cache only smooths rev switches). All three confirmed findings fixed;
+sheet no longer self-fetches on mount (parent's first tick or the
+target-switch watcher fills it). Stage titles are fixed station names on
+purpose — the desc/body carry the data state. UI still can't consolidate
+or verify; that's the job-kinds open item, now user-felt.
+
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
 auth first). Eventually: read→write promotion (posting findings to PRs)

@@ -30,13 +30,20 @@ const selectedTarget = computed(() =>
 const closeSheet = (): Promise<unknown> => router.push('/');
 
 // Selecting a target lands the sheet in view; nextTick because on a fresh
-// page load the wrapper only exists after the first render.
+// page load the wrapper only exists after the first render. A target
+// *switch* also kicks the remounted sheet's first fill — on initial load
+// that's the poller's job (its first tick fires right after mount), and
+// kicking here too would duplicate the requests.
 const sheetWrap = ref<HTMLElement>();
-watch(selectedTarget, async (target) =>
+watch(selectedTarget, async (target, previous) =>
 {
     if (target !== undefined)
     {
         await nextTick();
+        if (previous !== undefined)
+        {
+            void sheet.value?.refresh();
+        }
         sheetWrap.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }, { immediate: true });
@@ -146,7 +153,9 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
         </main>
 
         <!-- Keyed by target: switching targets remounts the sheet, so caches
-             and selections from the old target can't leak into the new one. -->
+             and selections from the old target can't leak into the new one.
+             The key must cover all of owner/repo/head — the sheet does not
+             reset itself on prop changes; the remount IS the reset. -->
         <div v-if="selectedTarget" ref="sheetWrap" class="sheetwrap">
             <TargetSheet
                 ref="sheet"

@@ -3,7 +3,10 @@
 // verify → coverage as one engineering sheet, the campaign as the loop band
 // above stages 01↔02 (design reference: docs/prototypes/blueprint.html).
 // Embedded beneath the mission-control grid; the parent keys this component
-// by target, so a target switch remounts it with fresh state. The parent
+// by target, so a target switch remounts it with fresh state. That key MUST
+// cover all of owner/repo/head — nothing in here resets on a prop change, so
+// a partial key would show one target's cached revs under another's heading
+// (run 18 finding, confirmed). The parent
 // also owns the poll: jobs and watches arrive as props, and the parent
 // drives the exposed refresh() for the target-specific lists — one poller,
 // no duplicate requests. Job actions are emitted up for the same reason:
@@ -70,12 +73,28 @@ function describe(e: unknown): string
 async function refresh(): Promise<void>
 {
     const filter = { owner: props.owner, repo: props.repo, head: props.head };
+    // The selected rev's detail re-fetches every cycle: a consolidation row is
+    // immutable but its verification history is not — agent verdicts and human
+    // stamps both append after the fact, so a cached detail goes stale while
+    // it's on screen. The cache only smooths rev switches now.
+    const revId = selectedRevId.value;
     try
     {
-        [runs.value, consolidations.value] = await Promise.all([
+        const [runList, revList, revDetail] = await Promise.all([
             api.listRuns(filter),
             api.listConsolidations(filter),
+            revId !== undefined ? api.getConsolidation(revId) : undefined,
         ]);
+        runs.value = runList;
+        consolidations.value = revList;
+        if (revId !== undefined && revDetail !== undefined)
+        {
+            detailCache.set(revId, revDetail);
+            if (selectedRevId.value === revId)
+            {
+                detail.value = revDetail;
+            }
+        }
         connectionError.value = undefined;
     }
     catch (e)
@@ -84,8 +103,10 @@ async function refresh(): Promise<void>
     }
 }
 
-// First fill on mount; every later cycle is the parent's poller calling in.
-void refresh();
+// No self-fetch on mount: the parent's poller fires its first tick right
+// after this component mounts (usePolling's onMounted), and its target-switch
+// watcher kicks refresh() on remounts between ticks — a setup fetch here
+// would duplicate both (run 18 finding, confirmed).
 defineExpose({ refresh });
 
 // Follow the newest rev until the user pins an older one from the picker.
@@ -107,9 +128,10 @@ const revModel = computed({
     },
 });
 
-// Consolidations are immutable rows, so details cache forever; the guard
-// keeps a slow response for a rev the user already left from clobbering
-// the current one.
+// The cache makes switching back to a seen rev instant; refresh() keeps the
+// selected entry current (verifications append, so "immutable" only covers
+// the partition itself). The guard keeps a slow response for a rev the user
+// already left from clobbering the current one.
 const detailCache = new Map<ConsolidationId, Detail>();
 watch(selectedRevId, async (id) =>
 {
@@ -202,7 +224,12 @@ const extraRunCount = computed(() =>
     const inRev = new Set(consolidation.value?.runIds ?? []);
     return runs.value.filter(r => !inRev.has(r.id)).length;
 });
-const totalFindings = computed(() => revRuns.value.reduce((sum, r) => sum + r.findingsCount, 0));
+// Connector labels follow what the sheet displays: rev totals when a rev is
+// selected, the sample run's findings in the no-consolidation fallback.
+const totalFindings = computed(() =>
+    consolidation.value !== undefined
+        ? revRuns.value.reduce((sum, r) => sum + r.findingsCount, 0)
+        : sampleFindings.value.length);
 
 const SEVERITIES: Severity[] = ['critical', 'warning', 'nit'];
 const groups = computed(() =>
@@ -362,7 +389,9 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">02</span><span class="name">Consolidate</span>
-                        <span class="desc caps">{{ orderedClusters.length }} clusters · click for detail</span>
+                        <!-- The desc names what the body shows: clusters when a rev
+                             exists, raw unclustered findings in the fallback. -->
+                        <span class="desc caps">{{ consolidation ? `${orderedClusters.length} clusters · click for detail` : `${sampleFindings.length} findings · unclustered` }}</span>
                     </div>
                     <div class="stage-body">
                         <div v-for="group in groups" :key="group.severity" class="sevgroup">
@@ -404,7 +433,9 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
 
                 <div class="connector">
                     <div class="arrow"></div>
-                    <span class="n">{{ seenOnce.length }} seen once</span>
+                    <!-- "0 seen once" would be a rev-derived claim; without a rev
+                         nothing flows to verify at all, and the dash says so. -->
+                    <span class="n">{{ consolidation ? `${seenOnce.length} seen once` : '—' }}</span>
                 </div>
 
                 <div class="stage">

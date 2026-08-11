@@ -23,7 +23,10 @@ function isSelected(job: JobSummary): boolean
 const ACTIVE = new Set<JobSummary['state']>(['running', 'queued']);
 const active = computed(() =>
     props.jobs.filter(j => ACTIVE.has(j.state)).sort((a, b) => a.id - b.id));
-const recent = computed(() => props.jobs.filter(j => !ACTIVE.has(j.state)));
+// Newest-first sorted here, not trusted from the API — the tail is truncated
+// to 8, and truncating an arbitrary order would misreport "+N older".
+const recent = computed(() =>
+    props.jobs.filter(j => !ACTIVE.has(j.state)).sort((a, b) => b.id - a.id));
 
 const RECENT_SHOWN = 8;
 const recentShown = computed(() => recent.value.slice(0, RECENT_SHOWN));
