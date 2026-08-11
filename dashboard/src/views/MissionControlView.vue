@@ -1,7 +1,10 @@
 <script setup lang="ts">
-// The server-wide screen: queue, watches, targets — what is the machine
-// doing right now. Per-target depth lives in the blueprint view.
-import { computed, ref } from 'vue';
+// The one screen: queue, watches, targets — what is the machine doing right
+// now — with per-target depth as a pipeline sheet expanding beneath the grid.
+// The route is the selection: /target/... renders this same view with the
+// sheet open, so refresh, back, and deep links all keep working.
+import { computed, nextTick, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import type { JobSummary } from '@server/server/jobs';
 import type { Watch } from '@server/server/trigger';
 import type { TargetSummary } from '@server/store/store';
@@ -10,9 +13,33 @@ import { api, ApiError } from '../api/client';
 import type { NewJobRequest, NewWatchRequest } from '../api/client';
 import NewJobForm from '../components/NewJobForm.vue';
 import QueuePanel from '../components/QueuePanel.vue';
+import TargetSheet from '../components/TargetSheet.vue';
 import TargetsPanel from '../components/TargetsPanel.vue';
 import WatchesPanel from '../components/WatchesPanel.vue';
 import { usePolling } from '../composables/usePolling';
+
+const props = defineProps<{ owner?: string; repo?: string; head?: string }>();
+
+const router = useRouter();
+
+const selectedTarget = computed(() =>
+    props.owner !== undefined && props.repo !== undefined && props.head !== undefined
+        ? { owner: props.owner, repo: props.repo, head: props.head }
+        : undefined);
+
+const closeSheet = (): Promise<unknown> => router.push('/');
+
+// Selecting a target lands the sheet in view; nextTick because on a fresh
+// page load the wrapper only exists after the first render.
+const sheetWrap = ref<HTMLElement>();
+watch(selectedTarget, async (target) =>
+{
+    if (target !== undefined)
+    {
+        await nextTick();
+        sheetWrap.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}, { immediate: true });
 
 const jobs = ref<JobSummary[]>([]);
 const watches = ref<Watch[]>([]);
@@ -29,8 +56,14 @@ function describe(e: unknown): string
     return e instanceof Error ? e.message : String(e);
 }
 
+// One poller for the whole page: the open sheet's target-specific lists
+// refresh in the same cycle, concurrently. The sheet catches its own errors,
+// so awaiting it can't throw into ours.
+const sheet = ref<InstanceType<typeof TargetSheet>>();
+
 async function refresh(): Promise<void>
 {
+    const sheetRefresh = sheet.value?.refresh();
     try
     {
         [jobs.value, watches.value, targets.value] = await Promise.all([
@@ -44,6 +77,7 @@ async function refresh(): Promise<void>
     {
         connectionError.value = describe(e);
     }
+    await sheetRefresh;
 }
 
 usePolling(refresh, 3000);
@@ -82,162 +116,103 @@ const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').
 </script>
 
 <template>
-    <div class="mc">
-        <header>
-            <span class="brand">BRANCH-REVIEWER//SERVE</span>
-            <span class="sep">│</span>
-            <template v-if="connectionError === undefined">
-                <span class="kv">
-                    worker
-                    <b v-if="running" class="busy">RUNNING #{{ running.id }}</b>
-                    <b v-else>IDLE</b>
-                </span>
-                <span class="sep">│</span>
-                <span class="kv">queued <b>{{ queuedCount }}</b></span>
-                <span class="sep">│</span>
-                <span class="kv">watches <b>{{ watches.length }}</b></span>
-            </template>
-            <span v-else class="offline">OFFLINE — {{ connectionError }}</span>
-        </header>
+    <div class="bp mc">
+        <div class="caption">
+            <h1>Mission Control</h1>
+            <div class="subrow">
+                <span class="sub caps">branch-reviewer // serve — queue · watches · targets</span>
+                <template v-if="connectionError === undefined">
+                    <span class="kv caps">worker
+                        <b v-if="running" class="busy mono">running #{{ running.id }}</b>
+                        <b v-else class="mono">idle</b>
+                    </span>
+                    <span class="kv caps">queued <b class="mono">{{ queuedCount }}</b></span>
+                </template>
+            </div>
+        </div>
 
-        <p v-if="actionError" class="action-error">{{ actionError }}</p>
+        <p v-if="connectionError" class="msg offline">OFFLINE — {{ connectionError }}</p>
+        <p v-if="actionError" class="msg action-error">{{ actionError }}</p>
 
         <main>
             <div class="col">
-                <QueuePanel :jobs="jobs" @cancel="cancel" @promote="promote" />
+                <QueuePanel :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" />
                 <NewJobForm @enqueue="enqueue" />
             </div>
-            <div class="col">
+            <div class="col side">
                 <WatchesPanel :watches="watches" @add="addWatch" @remove="removeWatch" />
-                <TargetsPanel :targets="targets" />
+                <TargetsPanel :targets="targets" :selected="selectedTarget" />
             </div>
         </main>
+
+        <!-- Keyed by target: switching targets remounts the sheet, so caches
+             and selections from the old target can't leak into the new one. -->
+        <div v-if="selectedTarget" ref="sheetWrap" class="sheetwrap">
+            <TargetSheet
+                ref="sheet"
+                :key="`${selectedTarget.owner}/${selectedTarget.repo}/${selectedTarget.head}`"
+                :owner="selectedTarget.owner"
+                :repo="selectedTarget.repo"
+                :head="selectedTarget.head"
+                :jobs="jobs"
+                :watches="watches"
+                @close="closeSheet"
+                @cancel="cancel"
+                @promote="promote"
+                @enqueue="enqueue"
+            />
+        </div>
+
+        <div class="titleblockwrap">
+            <div class="titleblock">
+                <div class="cell"><span class="k">Server</span><span class="v">branch-reviewer//serve</span></div>
+                <div class="cell"><span class="k">Worker</span><span class="v">{{ running ? `running #${running.id}` : 'idle' }}</span></div>
+                <div class="cell"><span class="k">Queued</span><span class="v">{{ queuedCount }}</span></div>
+                <div class="cell"><span class="k">Watches</span><span class="v">{{ watches.length }}</span></div>
+                <div class="cell"><span class="k">Targets</span><span class="v">{{ targets.length }}</span></div>
+                <div class="cell"><span class="k">Sheet</span><span class="v">1 / 1</span></div>
+            </div>
+        </div>
     </div>
 </template>
 
+<!-- Blueprint tokens and primitives come from src/blueprint.css; the panels
+     render themselves as .stage boxes. Only this sheet's grid lives here. -->
 <style scoped>
-/* The mission-control theme. Custom properties cascade into the child
-   components, which style themselves against --mc-* only. */
 .mc
 {
-    --mc-ground:  #0b0f14;
-    --mc-panel:   #10151c;
-    --mc-panel-2: #0d1218;
-    --mc-line:    #1d2733;
-    --mc-ink:     #c9d4de;
-    --mc-muted:   #5f7182;
-    --mc-faint:   #3a4756;
-    --mc-amber:   #e3a542;
-    --mc-ok:      #4cc272;
-    --mc-fail:    #e06060;
-    --mc-queued:  #5fb4d9;
-
-    min-height: 100vh;
-    background: var(--mc-ground);
-    color: var(--mc-ink);
-    font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
-    font-size: 13px;
-    line-height: 1.55;
     display: flex;
     flex-direction: column;
 }
 
-header
-{
-    display: flex;
-    align-items: center;
-    gap: 1.2rem;
-    padding: 0.55rem 1rem;
-    border-bottom: 1px solid var(--mc-line);
-    background: var(--mc-panel-2);
-    white-space: nowrap;
-    overflow-x: auto;
-}
-
-.brand
-{
-    color: var(--mc-amber);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-}
-
-.sep
-{
-    color: var(--mc-faint);
-}
-
-.kv
-{
-    color: var(--mc-muted);
-}
-
-.kv b
-{
-    color: var(--mc-ink);
-    font-weight: 400;
-}
-
-.kv b.busy
-{
-    color: var(--mc-amber);
-}
-
-.offline
-{
-    color: var(--mc-fail);
-}
-
-.action-error
-{
-    margin: 0;
-    padding: 0.4rem 1rem;
-    color: var(--mc-fail);
-    border-bottom: 1px solid var(--mc-line);
-}
+.kv { color: var(--faint); font-size: 0.75rem; }
+.kv b { font-weight: 400; color: var(--bright); font-size: 0.78rem; }
+.kv b.busy { color: var(--chalk); }
 
 main
 {
     flex: 1;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    gap: 1px;
-    background: var(--mc-line);
+    display: flex;
+    align-items: flex-start;
+    gap: 1.2rem;
 }
 
 .col
 {
-    background: var(--mc-ground);
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    min-width: 0;
+    gap: 1.2rem;
 }
 
-.col > :deep(section)
-{
-    background: var(--mc-panel);
-    padding: 0.7rem 1rem 0.9rem;
-}
+.col.side { flex: none; width: 360px; }
 
-.col > :deep(section h2)
-{
-    margin: 0 0 0.6rem;
-    font-size: 0.85em;
-    font-weight: 700;
-    letter-spacing: 0.18em;
-    color: var(--mc-muted);
-}
-
-.col > :deep(section h2 .count)
-{
-    color: var(--mc-amber);
-}
+.sheetwrap { scroll-margin-top: 1rem; }
 
 @media (max-width: 900px)
 {
-    main
-    {
-        grid-template-columns: minmax(0, 1fr);
-    }
+    main { flex-direction: column; align-items: stretch; }
+    .col.side { width: auto; }
 }
 </style>

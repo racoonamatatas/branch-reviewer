@@ -11,7 +11,9 @@ finding *labels* used below are fine.
 
 Slices 1–10 shipped. **Slice 10 (Vue TS dashboard) complete** — read API,
 Vue scaffold, mission control view + fixture server, blueprint view, static
-serving from the job server. Next up per the roadmap below: deploy.
+serving from the job server; chunk 9 merged the two views into one
+blueprint-styled page (target sheet expands in place, route still carries
+the selection). Next up per the roadmap below: deploy.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -100,6 +102,28 @@ stamps are live in the callout (rationale input gates the buttons); a stamp
 invalidates that rev's forever-cache entry, which verification appends had
 already quietly falsified. "Verify now" stays disabled until a verify job
 kind exists (open item, with a consolidate job kind).
+
+Chunk-9 (one page, user-decided): the two-view split is retired — mission
+control's dark-ops theme is gone and the whole dashboard is one
+blueprint-styled page. Tokens and primitives (`--sheet`/`--chalk`, `.stage`,
+`.bp-btn`, title block) live once in `dashboard/src/blueprint.css`; the
+per-target pipeline became `components/TargetSheet.vue`, expanding beneath
+the mission-control grid instead of navigating away. The route is still the
+selection — `/` and `/target/:owner/:repo/:head` render the same view, the
+latter with the sheet open — so refresh/back/deep links survive (the
+two-machine "send myself a link" habit). The sheet is keyed by target:
+remount replaces the old view's hand-rolled eleven-ref reset. One poller for
+the page: mission control owns the 3s cycle, the sheet gets jobs/watches as
+props and exposes `refresh()` for its runs/consolidations; job actions
+(cancel/promote/enqueue) emit up to the parent's `act()`, stamping stays in
+the sheet. Queue panel shows active (queued+running, execution order) with
+a recent tail capped at 8 — display filtered, ledger intact, because the
+jobs table in any state is the trigger's idempotency memory and pruning it
+would re-arm auto-enqueue for seen SHAs. Rendering gotchas worth keeping:
+per-cell dashed `td` borders restart the dash pattern at every column (put
+the border on `tr`); `display: flex` on a `td` un-table-cells it and breaks
+border painting; the native `<option>` popup is OS-drawn and needs an
+explicit dark background or it's white-on-white.
 
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server

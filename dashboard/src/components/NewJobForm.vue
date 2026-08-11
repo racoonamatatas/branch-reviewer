@@ -31,20 +31,25 @@ function submit(): void
 </script>
 
 <template>
-    <section>
-        <h2>NEW JOB</h2>
-        <form @submit.prevent="submit">
-            <select v-model="kind">
-                <option value="review">review</option>
-                <option value="campaign">campaign</option>
-            </select>
-            <input v-model.trim="owner" placeholder="owner" required>
-            <input v-model.trim="repo" placeholder="repo" required>
-            <input v-model.trim="head" placeholder="branch or SHA" required class="wide">
-            <input v-model.trim="base" placeholder="base (main)">
-            <button type="submit">enqueue ▶</button>
-        </form>
-        <p class="note">a job bills subscription credit when the worker picks it up — cancel is only possible while queued</p>
+    <section class="stage">
+        <div class="stage-head">
+            <span class="name">New Job</span>
+            <span class="desc caps">manual enqueue</span>
+        </div>
+        <div class="stage-body">
+            <form @submit.prevent="submit">
+                <select v-model="kind">
+                    <option value="review">review</option>
+                    <option value="campaign">campaign</option>
+                </select>
+                <input v-model.trim="owner" placeholder="owner" required>
+                <input v-model.trim="repo" placeholder="repo" required>
+                <input v-model.trim="head" placeholder="branch or SHA" required class="wide">
+                <input v-model.trim="base" placeholder="base (main)">
+                <button type="submit" class="bp-btn chalk">enqueue ▶</button>
+            </form>
+            <p class="note">a job bills subscription credit when the worker picks it up — cancel is only possible while queued</p>
+        </div>
     </section>
 </template>
 
@@ -58,11 +63,6 @@ form
 
 select, input
 {
-    background: var(--mc-panel-2);
-    border: 1px solid var(--mc-line);
-    color: var(--mc-ink);
-    font: inherit;
-    padding: 0.25rem 0.5rem;
     width: 8.5em;
     min-width: 0;
 }
@@ -72,31 +72,11 @@ select, input
     width: 14em;
 }
 
-input::placeholder
-{
-    color: var(--mc-faint);
-}
-
-button
-{
-    background: none;
-    border: 1px solid var(--mc-amber);
-    color: var(--mc-amber);
-    font: inherit;
-    padding: 0.25rem 0.7rem;
-    cursor: pointer;
-}
-
-button:hover
-{
-    background: var(--mc-amber);
-    color: var(--mc-ground);
-}
-
 .note
 {
-    color: var(--mc-faint);
-    font-size: 0.85em;
+    color: var(--faint);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
     margin: 0.6rem 0 0;
 }
 </style>

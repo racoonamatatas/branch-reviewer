@@ -1,0 +1,197 @@
+/* The blueprint sheet — shared by every view (design reference:
+   docs/prototypes/blueprint.html). Tokens and primitives live here once;
+   views and their child components style themselves against these only.
+   View-specific structure (the pipeline flow, the mission-control grid)
+   stays scoped in the owning view. */
+
+.bp
+{
+    color-scheme: dark;
+    --sheet:  #123058;
+    --sheet-2:#0e2949;
+    --grid-1: rgba(220, 232, 248, 0.055);
+    --grid-2: rgba(220, 232, 248, 0.11);
+    --ink:    #dbe7f5;
+    --bright: #ffffff;
+    --muted:  #8fa8c8;
+    --faint:  #5b779e;
+    --chalk:  #f2d479;
+    --stamp-ok:  #b7e4c7;
+    --stamp-no:  #ffa3a3;
+    --stamp-und: #f2d479;
+    --rule: rgba(219, 231, 245, 0.75);
+    --rule-soft: rgba(219, 231, 245, 0.35);
+
+    min-height: 100vh;
+    color: var(--ink);
+    background:
+        repeating-linear-gradient(0deg,   transparent 0 23px, var(--grid-1) 23px 24px),
+        repeating-linear-gradient(90deg,  transparent 0 23px, var(--grid-1) 23px 24px),
+        repeating-linear-gradient(0deg,   transparent 0 119px, var(--grid-2) 119px 120px),
+        repeating-linear-gradient(90deg,  transparent 0 119px, var(--grid-2) 119px 120px),
+        var(--sheet);
+    font-family: 'Avenir Next', Avenir, 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.5;
+    padding: 1.5rem 1.5rem 2rem;
+}
+
+.bp .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.bp .caps { text-transform: uppercase; letter-spacing: 0.16em; }
+.bp button { font: inherit; cursor: pointer; }
+.bp button:disabled { cursor: not-allowed; opacity: 0.45; }
+.bp :focus-visible { outline: 2px solid var(--chalk); outline-offset: 1px; }
+
+.bp .bp-btn
+{
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--bright);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 0.28rem 0.7rem;
+}
+.bp .bp-btn:hover:not(:disabled) { background: var(--bright); color: var(--sheet); }
+.bp .bp-btn.chalk { border-color: var(--chalk); color: var(--chalk); }
+.bp .bp-btn.chalk:hover:not(:disabled) { background: var(--chalk); color: var(--sheet); }
+.bp .bp-btn.ok { border-color: var(--stamp-ok); color: var(--stamp-ok); }
+.bp .bp-btn.ok:hover:not(:disabled) { background: var(--stamp-ok); color: var(--sheet); }
+.bp .bp-btn.no { border-color: var(--stamp-no); color: var(--stamp-no); }
+.bp .bp-btn.no:hover:not(:disabled) { background: var(--stamp-no); color: var(--sheet); }
+.bp .bp-btn.mini { padding: 0.05rem 0.4rem; font-size: 0.62rem; }
+
+/* Pencilled-in form fields: same look everywhere something is typed. */
+.bp input, .bp select
+{
+    background: transparent;
+    border: 1px solid var(--rule-soft);
+    color: var(--bright);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    padding: 0.25rem 0.5rem;
+}
+.bp input::placeholder { color: var(--faint); }
+
+/* The dropdown popup is OS-drawn and ignores the transparent select styling:
+   without an explicit dark background it renders bright text on white. */
+.bp option
+{
+    background: var(--sheet-2);
+    color: var(--ink);
+}
+
+/* ── sheet caption ──────────────────────────────────── */
+.bp .caption { margin-bottom: 1.2rem; }
+
+.bp .caption h1
+{
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--bright);
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+}
+
+.bp .subrow
+{
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+}
+
+.bp .sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.08em; }
+
+.bp .msg { margin: 0 0 0.8rem; font-size: 0.85rem; }
+.bp .offline { color: var(--stamp-no); }
+.bp .action-error { color: var(--stamp-no); }
+
+/* ── the drawn box: every ruled panel on a sheet ────── */
+.bp .stage
+{
+    border: 1px solid var(--rule);
+    background: rgba(14, 41, 73, 0.55);
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.bp .stage-head
+{
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+    padding: 0.5rem 0.8rem;
+}
+
+.bp .stage-head .no
+{
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    color: var(--chalk);
+    font-size: 0.85rem;
+}
+
+.bp .stage-head .name
+{
+    color: var(--bright);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+}
+
+.bp .stage-head .desc
+{
+    margin-left: auto;
+    color: var(--faint);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+}
+
+.bp .stage-body
+{
+    padding: 0.7rem 0.8rem 0.9rem;
+    flex: 1;
+}
+
+/* ── title block, bottom-right like a drawing frame ─── */
+.bp .titleblockwrap
+{
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 1.4rem;
+}
+
+.bp .titleblock
+{
+    border: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: auto auto auto;
+    background: rgba(14, 41, 73, 0.7);
+    font-size: 0.75rem;
+}
+
+.bp .titleblock .cell
+{
+    border: 1px solid var(--rule-soft);
+    padding: 0.35rem 0.9rem 0.4rem;
+}
+
+.bp .titleblock .k
+{
+    display: block;
+    color: var(--faint);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+}
+
+.bp .titleblock .v
+{
+    color: var(--bright);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}

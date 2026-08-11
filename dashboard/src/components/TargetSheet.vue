@@ -1,7 +1,13 @@
 <script setup lang="ts">
-// The per-target view, drawn as the pipeline itself: review → consolidate →
+// The per-target sheet, drawn as the pipeline itself: review → consolidate →
 // verify → coverage as one engineering sheet, the campaign as the loop band
 // above stages 01↔02 (design reference: docs/prototypes/blueprint.html).
+// Embedded beneath the mission-control grid; the parent keys this component
+// by target, so a target switch remounts it with fresh state. The parent
+// also owns the poll: jobs and watches arrive as props, and the parent
+// drives the exposed refresh() for the target-specific lists — one poller,
+// no duplicate requests. Job actions are emitted up for the same reason:
+// they mutate the parent's data.
 // A rev is a consolidation: clusters are one judge call's opinion, so the
 // picker switches whole partitions rather than pretending they compose.
 import { computed, ref, watch } from 'vue';
@@ -13,14 +19,27 @@ import type { Watch } from '@server/server/trigger';
 import type { ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
 import type { ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
-import BlueprintCallout from '../components/blueprint/BlueprintCallout.vue';
-import type { CalloutSubject } from '../components/blueprint/BlueprintCallout.vue';
-import BlueprintIntake from '../components/blueprint/BlueprintIntake.vue';
-import LoopBand from '../components/blueprint/LoopBand.vue';
-import { usePolling } from '../composables/usePolling';
+import type { NewJobRequest } from '../api/client';
 import { usd } from '../format';
+import BlueprintCallout from './blueprint/BlueprintCallout.vue';
+import type { CalloutSubject } from './blueprint/BlueprintCallout.vue';
+import BlueprintIntake from './blueprint/BlueprintIntake.vue';
+import LoopBand from './blueprint/LoopBand.vue';
 
-const props = defineProps<{ owner: string; repo: string; head: string }>();
+const props = defineProps<{
+    owner: string;
+    repo: string;
+    head: string;
+    jobs: JobSummary[];
+    watches: Watch[];
+}>();
+
+const emit = defineEmits<{
+    close: [];
+    cancel: [id: JobId];
+    promote: [job: JobSummary];
+    enqueue: [job: NewJobRequest];
+}>();
 
 interface Detail
 {
@@ -30,8 +49,6 @@ interface Detail
 
 const runs = ref<RunSummary[]>([]);
 const consolidations = ref<ConsolidationSummary[]>([]);
-const jobs = ref<JobSummary[]>([]);
-const watches = ref<Watch[]>([]);
 const detail = ref<Detail>();
 const connectionError = ref<string>();
 const actionError = ref<string>();
@@ -55,11 +72,9 @@ async function refresh(): Promise<void>
     const filter = { owner: props.owner, repo: props.repo, head: props.head };
     try
     {
-        [runs.value, consolidations.value, jobs.value, watches.value] = await Promise.all([
+        [runs.value, consolidations.value] = await Promise.all([
             api.listRuns(filter),
             api.listConsolidations(filter),
-            api.listJobs(),
-            api.listWatches(),
         ]);
         connectionError.value = undefined;
     }
@@ -69,24 +84,9 @@ async function refresh(): Promise<void>
     }
 }
 
-usePolling(refresh, 3000);
-
-// The route reuses this component across targets; a target switch resets
-// every selection the old target justified.
-watch(() => [props.owner, props.repo, props.head], () =>
-{
-    runs.value = [];
-    consolidations.value = [];
-    detail.value = undefined;
-    selectedRevId.value = undefined;
-    selectedClusterId.value = undefined;
-    selectedFindingId.value = undefined;
-    sampleFindings.value = [];
-    pinned.value = false;
-    detailCache.clear();
-    findingsCache.clear();
-    void refresh();
-});
+// First fill on mount; every later cycle is the parent's poller calling in.
+void refresh();
+defineExpose({ refresh });
 
 // Follow the newest rev until the user pins an older one from the picker.
 const latestId = computed(() => consolidations.value[0]?.id);
@@ -181,9 +181,9 @@ watch(sampleRunId, async (id) =>
 }, { immediate: true });
 
 const targetJobs = computed(() =>
-    jobs.value.filter(j => j.owner === props.owner && j.repo === props.repo && j.head === props.head));
+    props.jobs.filter(j => j.owner === props.owner && j.repo === props.repo && j.head === props.head));
 const targetWatches = computed(() =>
-    watches.value.filter(w => w.owner === props.owner && w.repo === props.repo));
+    props.watches.filter(w => w.owner === props.owner && w.repo === props.repo));
 
 // Base comes from the rev when there is one; a fresh target only has jobs.
 const base = computed(() => consolidation.value?.base ?? targetJobs.value[0]?.base);
@@ -253,38 +253,24 @@ const verifyCostUsd = computed(() =>
     (consolidation.value?.clusters ?? []).reduce(
         (sum, c) => sum + c.verifications.reduce((s, v) => s + (v.source === 'agent' ? v.costUsd : 0), 0), 0));
 
-// ── actions (same shape as mission control) ─────────────
-async function act(action: () => Promise<unknown>): Promise<void>
+// ── actions ─────────────────────────────────────────────
+// Job actions (cancel, promote, enqueue) are emitted to the parent, whose
+// act() owns the API call, the error display, and the immediate refresh.
+// Stamping stays here: it touches the rev's verification history, which is
+// this sheet's data, nobody else's.
+function resumeCampaign(): void
 {
-    actionError.value = undefined;
-    try
+    if (base.value === undefined)
     {
-        await action();
+        return;
     }
-    catch (e)
-    {
-        actionError.value = describe(e);
-    }
-    await refresh();
+    emit('enqueue', { kind: 'campaign', owner: props.owner, repo: props.repo, head: props.head, base: base.value });
 }
-
-const cancel = (id: JobId): Promise<void> => act(() => api.cancelJob(id));
-
-// Cancel first: if the review started running in the race window, the 409
-// stops the promotion before a duplicate campaign is enqueued.
-const promote = (job: JobSummary): Promise<void> => act(async () =>
-{
-    await api.cancelJob(job.id);
-    await api.enqueueJob({ kind: 'campaign', owner: job.owner, repo: job.repo, head: job.head, base: job.base });
-});
-
-const resumeCampaign = (): Promise<void> => act(() =>
-    api.enqueueJob({ kind: 'campaign', owner: props.owner, repo: props.repo, head: props.head, base: base.value! }));
 
 // A stamp appends to the one thing the forever-cache assumed immutable — the
 // rev's verification history — so the cached detail is invalidated and
 // refetched in place. Same-id refetch: the selection survives.
-const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<void> => act(async () =>
+async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promise<void>
 {
     const cluster = selectedCluster.value;
     const revId = selectedRevId.value;
@@ -292,31 +278,37 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
     {
         return;
     }
-    await api.stampVerdict(cluster.id, { verdict, rationale });
-    detailCache.delete(revId);
-    const fetched = await api.getConsolidation(revId);
-    detailCache.set(revId, fetched);
-    detail.value = fetched;
-});
+    actionError.value = undefined;
+    try
+    {
+        await api.stampVerdict(cluster.id, { verdict, rationale });
+        detailCache.delete(revId);
+        const fetched = await api.getConsolidation(revId);
+        detailCache.set(revId, fetched);
+        detail.value = fetched;
+    }
+    catch (e)
+    {
+        actionError.value = describe(e);
+    }
+}
 </script>
 
 <template>
-    <div class="bp">
-        <div class="caption">
-            <h1>Branch Review Pipeline</h1>
-            <div class="subrow">
-                <span class="sub caps">{{ props.owner }}/{{ props.repo }} — {{ props.head }} → {{ base ?? '?' }}</span>
-                <label class="revlabel caps" for="revpick">rev</label>
-                <!-- Story first, db id last: "which snapshot" is the question the
-                     picker answers; Nº survives because the CLI addresses revs by it. -->
-                <select id="revpick" v-model="revModel" class="revpick" :disabled="consolidations.length === 0">
-                    <option v-if="consolidations.length === 0" :value="undefined">none yet</option>
-                    <option v-for="c in consolidations" :key="c.id" :value="c.id">
-                        {{ c.runIds.length }} {{ c.runIds.length === 1 ? 'run' : 'runs' }} · {{ c.clusterCount }} clusters{{ c.id === latestId ? ' · latest' : '' }} · Nº {{ c.id }}
-                    </option>
-                </select>
-                <RouterLink class="back mono" to="/">← mission control</RouterLink>
-            </div>
+    <div class="sheet">
+        <div class="strip">
+            <span class="label caps">Pipeline</span>
+            <span class="sub caps">{{ props.owner }}/{{ props.repo }} — {{ props.head }} → {{ base ?? '?' }}</span>
+            <label class="revlabel caps" for="revpick">rev</label>
+            <!-- Story first, db id last: "which snapshot" is the question the
+                 picker answers; Nº survives because the CLI addresses revs by it. -->
+            <select id="revpick" v-model="revModel" class="revpick" :disabled="consolidations.length === 0">
+                <option v-if="consolidations.length === 0" :value="undefined">none yet</option>
+                <option v-for="c in consolidations" :key="c.id" :value="c.id">
+                    {{ c.runIds.length }} {{ c.runIds.length === 1 ? 'run' : 'runs' }} · {{ c.clusterCount }} clusters{{ c.id === latestId ? ' · latest' : '' }} · Nº {{ c.id }}
+                </option>
+            </select>
+            <button class="bp-btn mini close" @click="emit('close')">✕ close</button>
         </div>
 
         <p v-if="connectionError" class="msg offline">OFFLINE — {{ connectionError }}</p>
@@ -332,7 +324,7 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
 
         <div class="flowwrap">
             <div class="flow">
-                <BlueprintIntake :watches="targetWatches" :jobs="targetJobs" @cancel="cancel" @promote="promote" />
+                <BlueprintIntake :watches="targetWatches" :jobs="targetJobs" @cancel="emit('cancel', $event)" @promote="emit('promote', $event)" />
 
                 <div class="connector">
                     <div class="arrow"></div>
@@ -492,107 +484,36 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
             :rev-run-ids="consolidation?.runIds"
             @stamp="stamp"
         />
-
-        <div class="titleblockwrap">
-            <div class="titleblock">
-                <div class="cell"><span class="k">Project</span><span class="v">{{ props.owner }}/{{ props.repo }}</span></div>
-                <div class="cell"><span class="k">Target</span><span class="v">{{ props.head }} → {{ base ?? '?' }}</span></div>
-                <div class="cell"><span class="k">Rev</span><span class="v">{{ consolidation ? `consolidation ${consolidation.id}` : '—' }}</span></div>
-                <div class="cell"><span class="k">Runs</span><span class="v">{{ runCount }}</span></div>
-                <div class="cell"><span class="k">Date</span><span class="v">{{ consolidation ? consolidation.createdAt.slice(0, 10) : '—' }}</span></div>
-                <div class="cell"><span class="k">Sheet</span><span class="v">1 / 1</span></div>
-            </div>
-        </div>
     </div>
 </template>
 
-<!-- Shared blueprint primitives: unscoped on purpose (all under .bp) so the
-     child components can use .bp-btn/.caps/.mono without redefining them. -->
-<style>
-.bp
-{
-    color-scheme: dark;
-    --sheet:  #123058;
-    --sheet-2:#0e2949;
-    --grid-1: rgba(220, 232, 248, 0.055);
-    --grid-2: rgba(220, 232, 248, 0.11);
-    --ink:    #dbe7f5;
-    --bright: #ffffff;
-    --muted:  #8fa8c8;
-    --faint:  #5b779e;
-    --chalk:  #f2d479;
-    --stamp-ok:  #b7e4c7;
-    --stamp-no:  #ffa3a3;
-    --stamp-und: #f2d479;
-    --rule: rgba(219, 231, 245, 0.75);
-    --rule-soft: rgba(219, 231, 245, 0.35);
-}
-
-.bp .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
-.bp .caps { text-transform: uppercase; letter-spacing: 0.16em; }
-.bp button { font: inherit; cursor: pointer; }
-.bp button:disabled { cursor: not-allowed; opacity: 0.45; }
-.bp :focus-visible { outline: 2px solid var(--chalk); outline-offset: 1px; }
-
-.bp .bp-btn
-{
-    background: transparent;
-    border: 1px solid var(--rule);
-    color: var(--bright);
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 0.7rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    padding: 0.28rem 0.7rem;
-}
-.bp .bp-btn:hover:not(:disabled) { background: var(--bright); color: var(--sheet); }
-.bp .bp-btn.chalk { border-color: var(--chalk); color: var(--chalk); }
-.bp .bp-btn.chalk:hover:not(:disabled) { background: var(--chalk); color: var(--sheet); }
-.bp .bp-btn.ok { border-color: var(--stamp-ok); color: var(--stamp-ok); }
-.bp .bp-btn.ok:hover:not(:disabled) { background: var(--stamp-ok); color: var(--sheet); }
-.bp .bp-btn.no { border-color: var(--stamp-no); color: var(--stamp-no); }
-.bp .bp-btn.no:hover:not(:disabled) { background: var(--stamp-no); color: var(--sheet); }
-.bp .bp-btn.mini { padding: 0.05rem 0.4rem; font-size: 0.62rem; }
-</style>
-
+<!-- Blueprint tokens and primitives come from src/blueprint.css; only this
+     sheet's own structure — the strip, flow, connectors, stamps — lives here. -->
 <style scoped>
-.bp
+.sheet
 {
-    min-height: 100vh;
-    color: var(--ink);
-    background:
-        repeating-linear-gradient(0deg,   transparent 0 23px, var(--grid-1) 23px 24px),
-        repeating-linear-gradient(90deg,  transparent 0 23px, var(--grid-1) 23px 24px),
-        repeating-linear-gradient(0deg,   transparent 0 119px, var(--grid-2) 119px 120px),
-        repeating-linear-gradient(90deg,  transparent 0 119px, var(--grid-2) 119px 120px),
-        var(--sheet);
-    font-family: 'Avenir Next', Avenir, 'Segoe UI', system-ui, sans-serif;
-    line-height: 1.5;
-    padding: 1.5rem 1.5rem 2rem;
+    margin-top: 1.4rem;
+    border-top: 2px solid var(--rule);
+    padding-top: 0.8rem;
 }
 
-/* ── caption + rev picker ───────────────────────────── */
-.caption { margin-bottom: 1.2rem; }
-
-.caption h1
-{
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--bright);
-    text-transform: uppercase;
-    letter-spacing: 0.22em;
-}
-
-.subrow
+/* ── header strip + rev picker ──────────────────────── */
+.strip
 {
     display: flex;
     align-items: baseline;
     gap: 0.8rem;
     flex-wrap: wrap;
+    margin-bottom: 1rem;
 }
 
-.sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.08em; }
+.strip .label
+{
+    color: var(--bright);
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.22em;
+}
 
 .revlabel { color: var(--faint); font-size: 0.7rem; }
 
@@ -606,18 +527,7 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
     padding: 0.15rem 0.4rem;
 }
 
-.back
-{
-    margin-left: auto;
-    color: var(--chalk);
-    font-size: 0.75rem;
-    text-decoration: none;
-    border-bottom: 1px dotted var(--chalk);
-}
-
-.msg { margin: 0 0 0.8rem; font-size: 0.85rem; }
-.offline { color: var(--stamp-no); }
-.action-error { color: var(--stamp-no); }
+.close { margin-left: auto; }
 
 /* ── the flow ───────────────────────────────────────── */
 .flowwrap { overflow-x: auto; padding-bottom: 0.5rem; }
@@ -630,56 +540,7 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
     min-width: 1180px;
 }
 
-.stage
-{
-    border: 1px solid var(--rule);
-    background: rgba(14, 41, 73, 0.55);
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-}
-
 .coverage-stage { max-width: 280px; }
-
-.stage-head
-{
-    display: flex;
-    align-items: baseline;
-    gap: 0.6rem;
-    border-bottom: 1px solid var(--rule);
-    padding: 0.5rem 0.8rem;
-}
-
-.stage-head .no
-{
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    color: var(--chalk);
-    font-size: 0.85rem;
-}
-
-.stage-head .name
-{
-    color: var(--bright);
-    font-weight: 600;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-}
-
-.stage-head .desc
-{
-    margin-left: auto;
-    color: var(--faint);
-    font-size: 0.75rem;
-    letter-spacing: 0.06em;
-}
-
-.stage-body
-{
-    padding: 0.7rem 0.8rem 0.9rem;
-    flex: 1;
-}
 
 .connector
 {
@@ -850,42 +711,4 @@ const stamp = (verdict: 'confirmed' | 'refuted', rationale: string): Promise<voi
 }
 
 .cta { margin-top: 0.9rem; }
-
-/* title block */
-.titleblockwrap
-{
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 1.4rem;
-}
-
-.titleblock
-{
-    border: 1px solid var(--rule);
-    display: grid;
-    grid-template-columns: auto auto auto;
-    background: rgba(14, 41, 73, 0.7);
-    font-size: 0.75rem;
-}
-
-.titleblock .cell
-{
-    border: 1px solid var(--rule-soft);
-    padding: 0.35rem 0.9rem 0.4rem;
-}
-
-.titleblock .k
-{
-    display: block;
-    color: var(--faint);
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-}
-
-.titleblock .v
-{
-    color: var(--bright);
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-}
 </style>
