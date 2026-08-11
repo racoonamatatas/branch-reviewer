@@ -448,6 +448,45 @@ here.
 
 ## Open items
 
+**Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
+15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
+CLI: review job → auto-proposed held verify job → release → verdicts. In
+priority order:
+
+1. **Worker ordering bug (warning, #135):** the held verify job is enqueued
+   *before* `jobs.succeed()`, so a write failure there marks a review that
+   ran, billed, and saved as failed — breaching "persistence never changes
+   an outcome". Succeed first; propose the verify job in its own try/catch
+   that only reports via onEvent.
+2. **Concurrent refresh duplicates feed events (warning, #133):** nothing
+   serialises `refresh()` (3s poll + visibilitychange + every `act()`), and
+   the tail is appended blind from a cursor both racers read. Filter on
+   append (`e.seq > cursor.value`) and/or add an in-flight guard to
+   `usePolling` (also stops duplicate queue requests).
+3. **`verifyTarget` is untested (warning, #134):** the only gate deciding
+   whether a judge call gets paid for has no test. Cover: zero submitted
+   runs throws; no findings → vacuous success, nothing written; exact-set
+   reuse → `runClustering` never called; newer run → re-consolidates.
+4. **"verify now" ignores held verify jobs (nit, #139):** `hasActiveJob`
+   only counts queued/running, so the auto-proposed held job leaves the
+   button live and a click stacks a second job. Count held for `canVerify`
+   (and point the user at the held job's ▶) or release the held one.
+5. **Reuse lookup filters triple, runs filter quad (nit, #140):**
+   `listConsolidations` has no base filter, so `covered` could match a
+   different-base rev of the same head; the runIds equality saves it today.
+   Pin with a base check.
+6. **Compare fetched twice per review (nit, #136):** the pre-flight count
+   duplicates the tools' memoized compare (full patch bodies, paginated).
+   Expose the memoized accessor from `createReviewTools`; consider
+   short-circuiting a review when `filesChanged === 0` — turn the empty-diff
+   tell into a cost fuse instead of a label.
+7. **Dead kick in serve's poll (nit, #137):** trigger enqueues are all held
+   now, so `if (report.enqueued.length > 0) kick()` never finds work.
+   Delete it with a comment.
+
+(#138 — refuted clusters still counting as novel in the campaign stop rule —
+was itself REFUTED by the adversary; no action.)
+
 - "Needs human eyes" has no answer path — a human-verdict row on top of agent
   verdicts (append-only makes overrule natural).
 - Server has no graceful shutdown — an in-flight run dies with the process
