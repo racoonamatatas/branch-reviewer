@@ -103,26 +103,6 @@ function runLabel(id: RunId): string
                     <div v-if="cluster && cluster.verifications.length > 1" class="confidence">
                         {{ cluster.verifications.length - 1 }} earlier verdict(s) in the append-only history.
                     </div>
-                    <div class="vactions">
-                        <input
-                            v-model="rationale"
-                            class="rationale-input mono"
-                            placeholder="your rationale — required, it inherits with the verdict"
-                        >
-                        <button
-                            class="bp-btn ok"
-                            :disabled="rationale.trim() === ''"
-                            :title="rationale.trim() === '' ? 'A verdict needs a rationale.' : 'Append a human CONFIRMED verdict.'"
-                            @click="stamp('confirmed')"
-                        >stamp: confirm</button>
-                        <button
-                            class="bp-btn no"
-                            :disabled="rationale.trim() === ''"
-                            :title="rationale.trim() === '' ? 'A verdict needs a rationale.' : 'Append a human REFUTED verdict.'"
-                            @click="stamp('refuted')"
-                        >stamp: refute</button>
-                        <span class="note">human verdicts append — overrule, never overwrite</span>
-                    </div>
                 </template>
                 <template v-else-if="cluster === undefined">
                     <h3>Verification</h3>
@@ -149,6 +129,32 @@ function runLabel(id: RunId): string
                     </div>
                     <div class="confidence">Occurrence is confidence, never a filter.</div>
                 </template>
+
+                <!-- Every cluster is stampable, verified or not: recurrence only
+                     certifies against independent error, and a correlated model
+                     bias recurs in every run — human overrule is the sole
+                     correction for that case, so it cannot be gated on a
+                     verification history existing. -->
+                <div v-if="cluster" class="vactions">
+                    <input
+                        v-model="rationale"
+                        class="rationale-input mono"
+                        placeholder="your rationale — required, it inherits with the verdict"
+                    >
+                    <button
+                        class="bp-btn ok"
+                        :disabled="rationale.trim() === ''"
+                        :title="rationale.trim() === '' ? 'A verdict needs a rationale.' : 'Append a human CONFIRMED verdict.'"
+                        @click="stamp('confirmed')"
+                    >stamp: confirm</button>
+                    <button
+                        class="bp-btn no"
+                        :disabled="rationale.trim() === ''"
+                        :title="rationale.trim() === '' ? 'A verdict needs a rationale.' : 'Append a human REFUTED verdict.'"
+                        @click="stamp('refuted')"
+                    >stamp: refute</button>
+                    <span class="note">human verdicts append — overrule, never overwrite</span>
+                </div>
             </div>
         </div>
     </div>
