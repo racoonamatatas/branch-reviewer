@@ -174,7 +174,12 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Clust
         options: {
             systemPrompt: JUDGE_SYSTEM_PROMPT,
             model: opts.model ?? judgeModel(),
-            maxTurns: 1,
+            // Not 1: Sonnet answers and then hands back structured output in
+            // a second round-trip, so a cap of 1 aborted every judge call the
+            // moment the judge moved off Opus (caught live by the first
+            // rotating campaign; deterministic in the CLI). tools: [] is
+            // what bounds this loop — the cap is just a backstop.
+            maxTurns: 4,
             tools: [],
             outputFormat: { type: 'json_schema', schema: clusterResponseJsonSchema },
         },

@@ -225,6 +225,26 @@ export class Worker
                     {
                         this.jobs.recordRun(job.id, outcome.runId);
                     }
+                    // An unusable round otherwise vanishes: the campaign
+                    // abort only says "no-usable-runs", and whoever is
+                    // watching the feed deserves the actual error (found
+                    // live: two instant 404s read as a silent 0.8s abort).
+                    if (outcome.failed !== undefined)
+                    {
+                        this.onEvent?.(job.id, `round ${outcome.round} failed: ${outcome.failed}`);
+                    }
+                    else if (outcome.aborted !== undefined)
+                    {
+                        this.onEvent?.(job.id, `round ${outcome.round} aborted: ${outcome.aborted}`);
+                    }
+                    // Same silence, judge-shaped: the run is saved and the
+                    // round moves on, but a campaign whose every judge call
+                    // dies otherwise ends "succeeded" with no consolidation
+                    // and no trace (lived experience, not hypothesis).
+                    if (outcome.consolidationFailed !== undefined)
+                    {
+                        this.onEvent?.(job.id, `round ${outcome.round} consolidation failed: ${outcome.consolidationFailed}`);
+                    }
                 },
                 onRoundStart: (round, of, lens) =>
                     this.onEvent?.(job.id, `round ${round}/${of}${lens !== undefined ? ` (${lens} lens)` : ''}`),
