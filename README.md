@@ -45,8 +45,22 @@ If runs are samples, three things follow, and each is a pipeline stage:
    after every round, and stops when rounds stop yielding novel defects —
    with a capture-recapture estimate (Chao1 over occurrence counts) reported
    alongside as an *optimistic ceiling* on what remains unseen. See
-   [limitations](#known-limitations) for why it's a ceiling and why it never
-   gates the loop.
+   [design boundaries](#design-boundaries-and-next-experiments) for why it's
+   a ceiling and why it never gates the loop.
+
+4. **Diversity is designed, not hoped for.** Building the estimator exposed
+   the deepest problem with repeated sampling, and it wasn't cost — it was
+   correlation. Identically-prompted rounds of the same model walk the same
+   files in the same order and miss the same things: Chao1's independence
+   assumption breaks, and recurrence inflates into false confidence (the
+   errors a correlated ensemble repeats most consistently are its systematic
+   ones). So campaign rounds are rotated apart: a reviewer *lens* cycles
+   per round (generalist first, then security → concurrency →
+   config-and-deploy → tests — each redirects where the round looks first,
+   never what it may report), and the review model can cycle too
+   (`--models a,b`), which upgrades an occurrence count from "one model
+   repeating itself" to **cross-model agreement**. Both are recorded on
+   every run, so the union knows which lens and which model saw what.
 
 Verdicts are earned by *defects*, not by cluster rows: they inherit across
 re-clusterings by exact member set, and when a re-clustering merges an
@@ -72,8 +86,9 @@ pipeline treats money as a first-class output:
 - **One model per role.** The reviewer and verifier do evidence work and
   default to Opus; the clustering judge solves a matching problem over short
   texts and defaults to Sonnet. `REVIEW_MODEL` / `JUDGE_MODEL` /
-  `VERIFY_MODEL` override each independently, and no call ever falls through
-  to an SDK default.
+  `VERIFY_MODEL` override each independently (`REVIEW_MODELS` opts campaigns
+  into per-round rotation), and no call ever falls through to an SDK
+  default.
 - **Automation proposes, humans dispose.** PR-label triggers and
   post-review verification proposals enqueue jobs *held* — releasing one is
   the explicit billing click. An empty diff aborts a review before any
@@ -97,8 +112,9 @@ verify      the settlement agent, the verification queue, verdict
             inheritance and lapsed-verdict re-testing
 coverage    Chao1 estimator + the barren-rounds stopping rule + the
             refuted-clusters filter, pure and structurally typed
-campaign    the loop: review → consolidate → measure novelty → stop on
-            patience or two consecutive unusable rounds → verify pending
+campaign    the loop: rotate lens/model → review → consolidate → measure
+            novelty → stop on patience or two consecutive unusable rounds
+            → verify pending
 server      durable job queue (guarded state machine), one sequential
             worker with injectable runners, hand-rolled node:http surface
 trigger     label-gated PR polling; enqueues held review jobs with the PR
@@ -125,7 +141,7 @@ prompt cache, so parallelism would cost more, not less.
 
 ## What the tests cover
 
-`npm test` (fast, no network, no model calls) runs ~250 tests: the store
+`npm test` (fast, no network, no model calls) runs ~260 tests: the store
 against real in-memory SQLite including migration tests on hand-built legacy
 databases, the HTTP surface over real sockets (including path-traversal and
 Host-spoofing attempts that `fetch` would normalize away), the job state
@@ -137,39 +153,56 @@ the unit suite spends credit.
 
 The clustering judge has its own regression harness (`eval/`), separate from
 the unit suite because the judge is stochastic. `eval:freeze` snapshots a
-human-verified consolidation as a golden set; `eval:judge` replays it and
-scores *co-membership pairs* (which findings ended up together) rather than
-exact partition equality — the right metric for a stochastic partitioner —
-and prints split-apart / falsely-lumped diffs on failure. A fail is a signal
-to inspect and rerun, not a hard fact.
+human-verified consolidation as a golden set; `eval:judge --trials N`
+replays it N times and reports a pass rate with *co-membership pair*
+precision/recall (which findings ended up together) — the right metrics for
+a stochastic partitioner, where one exact-match trial is a coin flip — and
+prints split-apart / falsely-lumped diffs on every miss. A sub-perfect rate
+is a signal to inspect, not a hard fact.
 
-## Known limitations
+## Design boundaries and next experiments
 
-Owned here rather than discovered later:
+Each boundary is owned here with the direction it points, rather than
+discovered later:
 
-- **The samples are correlated.** Every run is the same model, same prompt,
-  same diff, often sharing a prompt cache. Chao1 assumes independent
-  detection, and correlation inflates singleton counts relative to
-  doubletons, biasing the unseen-tail estimate upward — which is why every
-  surface labels it "at most ~N unseen (optimistic ceiling)" and why the
-  stopping rule is barren rounds, never the estimate.
-- **Recurrence is weaker evidence than it looks, for the same reason.**
-  Correlated runs are exactly the ones that repeat systematic, plausible
-  errors, so occurrence ≥ 2 findings — which skip adversarial verification
-  by default — are not independently confirmed, just consistently claimed.
-  `--reverify` exists for deliberate re-testing; sampling across different
-  models per run would attack the root cause and is the natural next
-  experiment.
-- **The judge eval has one fixture and no pass-rate.** A single stochastic
-  trial against a single golden set is a smoke signal, not a measurement;
-  it grows as human-verified consolidations accumulate.
-- **The verifier has no eval at all**, and its three-valued verdict is the
-  highest-stakes model output in the system.
-- **The server is a localhost tool.** No auth, no TLS, no graceful shutdown
-  (an in-flight run dies with the process, credit spent, and is marked
-  failed on restart). The browser-facing hardening exists (content-type
-  gate, Host allowlist, generic 500s); actual deployment would need the
-  rest.
+- **Rotation reduces correlation; it does not prove independence.** Lens and
+  model rotation exist because identical rounds broke Chao1's assumptions
+  (see thesis §4), but rotated rounds still read the same diff with
+  overlapping instructions, so every surface keeps labeling the estimate
+  "at most ~N unseen (optimistic ceiling)" and the stopping rule stays
+  barren rounds, never the estimate. *Next experiment:* re-run the reference
+  target with a two-model roster and compare its singleton/doubleton curve
+  against the recorded single-model campaigns — the per-run `lens` and
+  `model` columns exist so that comparison is a query, not archaeology.
+- **Occurrence under a single model is still self-agreement.** Findings seen
+  twice skip adversarial verification by default, which is only as sound as
+  the samples are independent; with one model in the roster, "seen twice"
+  can mean "systematically claimed twice". `--models` is the fix when spend
+  allows; `--reverify` re-tests deliberately either way. *Next experiment:*
+  compare verification outcomes of occurrence-≥2 clusters sampled
+  cross-model versus same-model — cross-model recurrence should survive
+  verification at a measurably higher rate.
+- **The judge eval is one fixture deep.** `eval:judge --trials N` turned the
+  verdict from a coin flip into a pass rate with pair precision/recall, but
+  a rate against a single golden set still measures one clustering problem.
+  It grows by accretion: every human-verified consolidation is a candidate
+  `eval:freeze`. *Next:* freeze the second fixture, then make the eval walk
+  all of them.
+- **The verifier has no eval, and its verdict is the highest-stakes model
+  output in the system.** The ground truth it needs is accumulating on its
+  own: human verdicts are append-only rows that overrule agent verdicts, so
+  every overrule is a labeled disagreement. *The sketch:* when enough exist,
+  replay adjudicated clusters through the verifier and score verdict
+  agreement against the human labels — same freeze-and-replay shape as the
+  judge eval. Deliberately not built at n≈dozens; the harness would outweigh
+  its dataset.
+- **The server is a localhost tool, by decision.** No auth, no TLS: it binds
+  127.0.0.1 and treats exposure as a separate slice with its own risk
+  profile (auth lands first, webhooks may replace polling). The
+  browser-facing hardening exists now (content-type gate, loopback Host
+  allowlist, generic 500s), and shutdown is graceful — SIGINT/SIGTERM stops
+  claiming, lets the in-flight job record its outcome, then closes the
+  stores; a second signal abandons the job to startup recovery.
 
 ## Setup
 
@@ -190,6 +223,7 @@ Optional `.env` vars:
 
 - `GITHUB_TOKEN` — raises GitHub's rate limit; required for private repos.
 - `REVIEW_MODEL` — reviewer model, default `claude-opus-5`.
+- `REVIEW_MODELS` — comma list; campaigns rotate the review model per round.
 - `JUDGE_MODEL` — clustering judge, default `claude-sonnet-5`.
 - `VERIFY_MODEL` — verifier, defaults to the reviewer's model.
 
@@ -247,7 +281,7 @@ have a verdict. Reprints the consolidation with verdicts attached.
 ### `npm run campaign`
 
 ```
-npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]
+npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify] [--models a,b] [--no-lenses]
 ```
 
 Repeats review rounds on one target until discovery dries up (`--patience`
@@ -255,6 +289,15 @@ rounds in a row with no new finding, default 2), the run cap is hit
 (`--max-runs`, default 3), or two consecutive rounds are unusable.
 Consolidates after every round; verifies the pending queue at the end unless
 `--no-verify`. The summary itemizes review, judge, and verification spend.
+
+Rounds are diversity-sampled by default: round 1 reviews generalist (the
+comparable baseline), later rounds cycle a lens — security, concurrency,
+config-and-deploy, tests — that redirects attention without narrowing what
+may be reported (`--no-lenses` disables). `--models a,b` additionally cycles
+the review model per round, making recurrence cross-model agreement; it
+deliberately trades away cross-round cache sharing, because cache-warm
+repetition is the correlation being removed. Lens and model are recorded on
+each run.
 
 ### `npm run serve`
 
@@ -286,8 +329,11 @@ POST /clusters/<id>/verdict a human verdict: {"verdict": "confirmed"|"refuted", 
 
 Jobs end `succeeded`, `aborted` (turn cap, empty diff, or a campaign with
 two consecutive unusable rounds), or `failed` (the error is stored on the
-job). A job found `running` at startup was interrupted and is marked
-failed — never silently re-run; re-enqueue it deliberately. After a review
+job). Shutdown is graceful: SIGINT/SIGTERM stops the poller and the claim
+loop, lets the in-flight job finish recording (its credit is already spent),
+then closes the stores; a second signal abandons the job. A job found
+`running` at startup was interrupted and is marked failed — never silently
+re-run; re-enqueue it deliberately. After a review
 with findings, the worker proposes a held verify job for the target — the
 release is the human's call.
 
@@ -308,12 +354,15 @@ because the judge is stochastic.
 
 ```
 npm run eval:freeze -- <consolidation-id>
-npm run eval:judge
+npm run eval:judge [-- --trials N]
 ```
 
 `eval:freeze` snapshots a human-verified consolidation into `eval/fixtures/`
 (gitignored — finding text contains repo internals, so a fresh clone must
 freeze its own) as the judge's golden set. `eval:judge` replays it through
-the judge, reports the judge's cost, and scores the resulting partition
-against the frozen answer by co-membership pairs — a fail is a signal to
+the judge `--trials` times (default 1; each trial bills a judge call, and
+back-to-back trials ride the prompt cache), scoring each partition against
+the frozen answer by co-membership pairs. The summary reports the exact-match
+pass rate with mean pair precision/recall, and every miss prints its
+split-apart / falsely-lumped pairs — a sub-perfect rate is a signal to
 inspect, not a hard failure.

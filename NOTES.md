@@ -36,9 +36,22 @@ function of round number alone (an aborted round consumes its slot). Model
 rotation forfeits cross-model cache sharing on purpose — cache-warm
 repetition is the correlation being fixed. Worker campaign jobs keep a
 single model (params carry one); a job-level roster is a later decision.
-Remaining, in order: graceful shutdown, `eval:judge --trials N`, README
-reframe (limitations → design boundaries + the correlated-sampling insight
-promoted into the thesis), visual pass, paid smoke campaign.
+The rest of the finishing plan landed the same day: **graceful shutdown**
+(`Worker.stop()` stops claiming and resolves when the in-flight job has
+recorded; serve traps SIGINT/SIGTERM — stop polling, close the listener,
+await the worker, close stores; a second signal abandons the job to startup
+recovery; under Ctrl-C the SDK subprocess shares the terminal's SIGINT and
+may die first, which surfaces as the job failing through the normal catch —
+recorded, not lost), **`eval:judge --trials N`** (sequential trials riding
+the prompt cache; per-trial exact-match + pair precision/recall, summary
+pass rate; exit 0 only on N/N, sub-perfect is a signal to inspect), and the
+**README reframe** (correlated-sampling insight promoted to thesis §4 as
+what motivated the rotation ensemble; "Known limitations" became "Design
+boundaries and next experiments", each with a trajectory; verifier eval
+stays a stated gap with the freeze-and-replay sketch over accumulated human
+verdicts; localhost/no-auth stays a decision). Still open: visual pass
+(lens/model per run reach the store but not the dashboard), paid smoke
+campaign (2–3 runs, small branch, exercising rotation live).
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -514,9 +527,8 @@ was itself REFUTED by the adversary; no action.)
 
 - "Needs human eyes" has no answer path — a human-verdict row on top of agent
   verdicts (append-only makes overrule natural).
-- Server has no graceful shutdown — an in-flight run dies with the process
-  (credit spent, result lost) and is marked failed on next start. Fine while
-  local; revisit before deploy.
+- ~~Server has no graceful shutdown~~ — fixed in the finishing pass:
+  SIGINT/SIGTERM drains gracefully, second signal abandons.
 - Server has no auth of its own — safe only because it binds 127.0.0.1;
   auth must land before any exposure (deploy slice, where webhooks may also
   replace polling).

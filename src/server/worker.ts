@@ -43,6 +43,7 @@ export class Worker
     private readonly campaign: typeof runCampaign;
     private readonly verify: typeof verifyTarget;
     private tail: Promise<number> = Promise.resolve(0);
+    private stopping = false;
 
     constructor(deps: WorkerDeps)
     {
@@ -73,11 +74,27 @@ export class Worker
         return pass;
     }
 
+    // Graceful shutdown: stop claiming, let the in-flight job finish. Its
+    // credit is committed the moment query() starts — abandoning it is the
+    // "credit spent, result lost" bug this exists to delete — while a job
+    // still queued has spent nothing and is owed a run at the next start.
+    // Resolves when the in-flight job (if any) has recorded its outcome.
+    stop(): Promise<void>
+    {
+        this.stopping = true;
+        return this.tail.then(() => undefined);
+    }
+
     private async drain(): Promise<number>
     {
         let processed = 0;
-        for (let job = this.jobs.claimNext(); job !== undefined; job = this.jobs.claimNext())
+        while (!this.stopping)
         {
+            const job = this.jobs.claimNext();
+            if (job === undefined)
+            {
+                break;
+            }
             await this.execute(job);
             processed++;
         }

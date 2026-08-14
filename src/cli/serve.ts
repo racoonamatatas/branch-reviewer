@@ -186,10 +186,42 @@ function main(): void
         activityLog.push('server', `server started — model ${model}, polling every ${args.pollIntervalMs / 1000}s`);
     });
 
-    setInterval(() =>
+    const pollTimer = setInterval(() =>
     {
         void poll();
     }, args.pollIntervalMs);
+
+    // Graceful shutdown: stop polling and claiming, let the in-flight job
+    // record its outcome (the credit is already spent — killing the process
+    // under it is the "credit spent, result lost" bug), then close the
+    // sockets and stores. A second signal abandons the wait: the job dies
+    // with the process and recovery marks it failed at the next start. Under
+    // Ctrl-C the SDK's subprocess shares the terminal's SIGINT and may die
+    // first; that surfaces as the job failing through the worker's normal
+    // catch — an honest recorded outcome, not a silent loss.
+    let shuttingDown = false;
+    const shutdown = (signal: string): void =>
+    {
+        if (shuttingDown)
+        {
+            console.error('second signal — abandoning the in-flight job; it will be marked failed at the next start');
+            process.exit(130);
+        }
+        shuttingDown = true;
+        console.log(`${signal}: no new jobs will start; waiting for any in-flight job (signal again to abandon it)`);
+        clearInterval(pollTimer);
+        server.close();
+        void worker.stop().then(() =>
+        {
+            jobs.close();
+            store.close();
+            watches.close();
+            console.log('shutdown complete');
+            process.exit(0);
+        });
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
 
     // Jobs queued before a restart are still owed a run, and watches are
     // owed a pass without waiting out the first interval.

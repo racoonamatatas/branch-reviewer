@@ -349,6 +349,51 @@ describe('notify', () =>
         expect(jobs.get(second)?.state).toBe('succeeded');
     });
 
+    it('should stop claiming after stop(), letting the in-flight job record its outcome', async () =>
+    {
+        // Arrange: two queued jobs; the first blocks until released, and
+        // stop() lands while it is mid-flight.
+        const first = jobs.enqueue(reviewJob());
+        const second = jobs.enqueue(reviewJob({ head: 'feature/y' }));
+        let release!: () => void;
+        const gate = new Promise<void>(resolve =>
+        {
+            release = resolve;
+        });
+        let started!: () => void;
+        const firstStarted = new Promise<void>(resolve =>
+        {
+            started = resolve;
+        });
+        const w = worker({
+            review: async () =>
+            {
+                started();
+                await gate;
+                return submitted();
+            },
+        });
+
+        // Act
+        const pass = w.notify();
+        await firstStarted;
+        const stopped = w.stop();
+        release();
+        await stopped;
+
+        // Assert: the paid job finished and recorded; the unstarted one
+        // spent nothing and stays queued, owed a run at the next start.
+        expect(await pass).toBe(1);
+        expect(jobs.get(first)?.state).toBe('succeeded');
+        expect(jobs.get(second)?.state).toBe('queued');
+    });
+
+    it('should resolve stop() immediately on an idle worker', async () =>
+    {
+        // Act & Assert
+        await expect(worker().stop()).resolves.toBeUndefined();
+    });
+
     it('should report progress events against the job id', async () =>
     {
         // Arrange
