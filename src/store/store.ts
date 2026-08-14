@@ -309,6 +309,11 @@ export class ReviewStore
         // REFERENCES in the schema is decorative and an orphan row is found
         // at read time instead of refused at write time.
         this.db.exec('PRAGMA foreign_keys = ON');
+        // A merges→consolidations rename migration used to run first here;
+        // removed deliberately in slice C after every known database (both
+        // machines and the age-encrypted copy) was verified on the new
+        // schema. A pre-rename database would now fail on its NOT NULL
+        // merge_id at the first save — acceptable, since none exist.
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
         this.migrateRunFilesChanged();

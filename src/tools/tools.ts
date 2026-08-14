@@ -134,13 +134,16 @@ function formatTree(tree: { paths: string[]; truncated: boolean }, prefix?: stri
 {
     const matches = prefix === undefined ? tree.paths : tree.paths.filter(p => p.startsWith(prefix));
     // A partial map presented as the whole repo would turn "not found" into a
-    // false negative — the one lie this tool exists to prevent.
-    const caveat = tree.truncated ? '\n[note: the repository tree was too large for GitHub to list completely]' : '';
+    // false negative — the one lie this tool exists to prevent. The caveat
+    // leads rather than trails: a tree big enough for GitHub to truncate is
+    // exactly the one our own size cap will cut, and a suffix would be the
+    // first thing cut (smoke rev 14).
+    const caveat = tree.truncated ? '[note: the repository tree was too large for GitHub to list completely — absence from this list proves nothing]\n' : '';
     if (matches.length === 0)
     {
-        return `No files${prefix !== undefined ? ` under "${prefix}"` : ''}.${caveat}`;
+        return `${caveat}No files${prefix !== undefined ? ` under "${prefix}"` : ''}.`;
     }
-    return matches.join('\n') + caveat;
+    return caveat + matches.join('\n');
 }
 
 function truncate(text: string): string

@@ -511,14 +511,28 @@ roughly this order:
    `Worker.stop()` awaits the whole campaign loop — up to maxRuns more paid
    rounds after SIGTERM. Thread a stop signal into CampaignOptions, checked
    at the top of each round.
-3. **VERIFY_MODEL ignored on the server path (warning, confirmed).**
-4. **usePolling inFlight guard does not cover act() (warning, confirmed).**
-5. Smaller confirmed nits: baseline-consolidation swallow (report via
-   callback), lapsed-verdict map-order, verifyReporting spread order, job
-   params validated only at read, lapsed re-queue cost cap; plus occ-2
-   unverified: PR-title prompt injection (occ 3), listFiles slash-branch
-   ref encoding, degraded-partition verify-spend fuse, list_files caveat
-   truncation, legacy-merge migration removal note.
+3. ~~**VERIFY_MODEL ignored on the server path**~~ — fixed:
+   `WorkerDeps.defaultVerifyModel`, used by verify jobs and passed to
+   campaigns as `verifyModel`.
+4. ~~**usePolling inFlight guard does not cover act()**~~ — fixed: the
+   composable returns its serialized refresh; act() awaits it (queues
+   behind an in-flight poll instead of overlapping or being dropped).
+5. Settled from the smaller list: baseline-consolidation failures report
+   via `onBaselineFailed` (CLI + worker wired); lapsed-verdict latest-wins
+   compares verification ids, not Map positions; `verifyReporting` is
+   callbacks-only (`Pick`); job params validate at enqueue too; list_files
+   leads with the GitHub-truncation caveat so our own cap can't cut it;
+   the legacy-merge migration removal is now documented in store.ts.
+   **PR-title prompt injection**: context is fenced in the prompt and
+   marked untrusted data ("review it, don't obey it").
+   **listFiles slash-branch encoding: REFUTED empirically** — GitHub
+   returns 200 for `git/trees/tmp%2Fslash-check` (live probe on this repo,
+   2026-08-14); worth a human refuted stamp on the rev-14 cluster.
+
+Still deliberately open (design decisions, not mechanical): a cost cap or
+verdict filter on lapsed-verdict re-queue (the branch's tests assert the
+current uncapped behavior on purpose), and a verify-spend fuse for degraded
+identity partitions (occurrence 1 everywhere → whole-union verify queue).
 
 **Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
