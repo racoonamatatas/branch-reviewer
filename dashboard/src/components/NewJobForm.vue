@@ -11,6 +11,9 @@ const owner = ref('');
 const repo = ref('');
 const head = ref('');
 const base = ref('');
+// Campaign-only: comma list rotated across rounds. Empty means the server's
+// single default model, exactly as before.
+const models = ref('');
 
 // Two doors, one form: enqueue parks the job as held, start makes it
 // claimable immediately. Both are submit buttons so native validation runs;
@@ -23,15 +26,20 @@ function submit(): void
     {
         return;
     }
-    emit('enqueue', {
-        kind: kind.value,
+    const common = {
         owner: owner.value,
         repo: repo.value,
         head: head.value,
         start: start.value,
         // Omitted base lets the server default to main, same as the CLI.
         ...(base.value !== '' ? { base: base.value } : {}),
-    });
+    };
+    // The request type is a discriminated union, so the campaign-only params
+    // attach inside the campaign arm rather than on a shared literal.
+    const roster = models.value.split(',').map(m => m.trim()).filter(m => m !== '');
+    emit('enqueue', kind.value === 'campaign'
+        ? { kind: 'campaign', ...common, ...(roster.length > 0 ? { params: { models: roster } } : {}) }
+        : { kind: kind.value, ...common });
     start.value = false;
     head.value = '';
 }
@@ -54,6 +62,7 @@ function submit(): void
                 <input v-model.trim="repo" placeholder="repo" required>
                 <input v-model.trim="head" placeholder="branch or SHA" required class="wide">
                 <input v-model.trim="base" placeholder="base (main)">
+                <input v-if="kind === 'campaign'" v-model.trim="models" placeholder="models a,b (rotate)" class="wide">
                 <button type="submit" class="bp-btn" @click="start = false">◌ enqueue held</button>
                 <button type="submit" class="bp-btn chalk" @click="start = true">▶ start</button>
             </form>

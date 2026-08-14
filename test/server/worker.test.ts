@@ -240,7 +240,10 @@ describe('campaign jobs', () =>
     {
         // Arrange
         let received: CampaignOptions | undefined;
-        jobs.enqueue(campaignJob({ params: { maxRuns: 5, patience: 2, verify: false, maxTurns: 24 } }));
+        jobs.enqueue(campaignJob({ params: {
+            maxRuns: 5, patience: 2, verify: false, maxTurns: 24,
+            models: ['model-a', 'model-b'], rotateLenses: false,
+        } }));
 
         // Act
         await worker({
@@ -251,8 +254,12 @@ describe('campaign jobs', () =>
             },
         }).notify();
 
-        // Assert
-        expect(received).toMatchObject({ maxRuns: 5, patience: 2, verify: false, maxTurns: 24, model: 'claude-opus-5' });
+        // Assert: the rotation knobs ride along; `model` still resolves so
+        // the verify fallback has an anchor even when a roster is given.
+        expect(received).toMatchObject({
+            maxRuns: 5, patience: 2, verify: false, maxTurns: 24, model: 'claude-opus-5',
+            models: ['model-a', 'model-b'], rotateLenses: false,
+        });
     });
 
     it('should abort when the campaign stops with no usable runs', async () =>

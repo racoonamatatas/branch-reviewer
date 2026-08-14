@@ -34,6 +34,11 @@ export const reviewJobParamsSchema = z.strictObject({
 
 export const campaignJobParamsSchema = z.strictObject({
     model: z.string().optional(),
+    // Per-round model rotation; overrides `model` for the review rounds
+    // (`model` still anchors the verify fallback). Never empty: an empty
+    // roster would leave rounds with no model anybody chose.
+    models: z.array(z.string().min(1)).min(1).optional(),
+    rotateLenses: z.boolean().optional(),
     maxTurns: z.number().int().positive().optional(),
     maxRuns: z.number().int().positive(),
     patience: z.number().int().positive().optional(),

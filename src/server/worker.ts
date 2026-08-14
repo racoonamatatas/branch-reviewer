@@ -211,6 +211,8 @@ export class Worker
                 maxRuns: job.params.maxRuns,
                 verify: job.params.verify,
                 model: job.params.model ?? this.defaultModel,
+                ...(job.params.models !== undefined ? { models: job.params.models } : {}),
+                ...(job.params.rotateLenses !== undefined ? { rotateLenses: job.params.rotateLenses } : {}),
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.patience !== undefined ? { patience: job.params.patience } : {}),
                 ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
