@@ -289,8 +289,11 @@ export async function verifyTarget(
         throw new Error('No submitted runs for this target — nothing to verify.');
     }
 
+    // The quad filter matters here: the runs above are filtered by base, so a
+    // consolidation of the same head against a different base must not be
+    // mistaken for coverage.
     const wanted = new Set(runs.map(r => r.id));
-    const latest = store.listConsolidations({ owner: target.owner, repo: target.repo, head: target.head })[0];
+    const latest = store.listConsolidations({ owner: target.owner, repo: target.repo, head: target.head, base: target.base })[0];
     const covered = latest !== undefined
         && latest.runIds.length === wanted.size
         && latest.runIds.every(id => wanted.has(id));
@@ -304,7 +307,11 @@ export async function verifyTarget(
     else
     {
         opts.onEvent?.(`consolidating ${runs.length} run(s)`);
-        consolidation = await consolidateRuns(store, target, runs, opts.model);
+        consolidation = await consolidateRuns(store, target, runs, {
+            ...(opts.model !== undefined ? { model: opts.model } : {}),
+            onDegraded: violation => opts.onEvent?.(
+                `clustering degraded (${violation}) — proceeding with one cluster per finding`),
+        });
         if (consolidation !== undefined)
         {
             opts.onEvent?.(`consolidation #${consolidation.id}: ${consolidation.clusters.length} cluster(s)`);

@@ -38,6 +38,9 @@ export interface ReviewTools
     server: McpSdkServerConfigWithInstance;
     // Exposed for tests: handlers are directly callable without a harness.
     defs: RegisteredTool[];
+    // The memoized comparison the tools share — exposed so a runner can
+    // measure the diff without buying a second paginated compare.
+    changedFiles: () => Promise<ChangedFile[]>;
 }
 
 export function createReviewTools(client: RepoClient, target: ReviewTarget): ReviewTools
@@ -76,7 +79,7 @@ export function createReviewTools(client: RepoClient, target: ReviewTarget): Rev
         ),
     ];
 
-    return { server: createSdkMcpServer({ name: SERVER_NAME, tools: defs }), defs };
+    return { server: createSdkMcpServer({ name: SERVER_NAME, tools: defs }), defs, changedFiles };
 }
 
 function text(content: string): CallToolResult

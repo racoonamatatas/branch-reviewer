@@ -7,9 +7,22 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): vo
 {
     let timer: number | undefined;
 
+    // One refresh at a time: the interval, visibilitychange, and callers'
+    // own act() paths can all fire while a slow response is still in
+    // flight, and two concurrent refreshes double-append the event tail.
+    let inFlight = false;
+
     function tick(): void
     {
-        void refresh();
+        if (inFlight)
+        {
+            return;
+        }
+        inFlight = true;
+        void refresh().finally(() =>
+        {
+            inFlight = false;
+        });
     }
 
     function start(): void

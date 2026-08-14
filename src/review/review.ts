@@ -111,13 +111,25 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
 {
     assertSubscriptionCredit();
 
-    // The diff's size is measured before any credit moves: one extra GitHub
-    // request (the tools memoize their own comparison lazily), bought so the
-    // stored run can distinguish "found nothing" from "had nothing to look
-    // at" — a merged or stale head produces an empty compare.
-    const filesChanged = (await client.compare(target.base, target.head)).length;
-
+    // The diff's size is measured before any credit moves — through the
+    // tools' own memoized comparison, so the agent's snapshot is the one
+    // that was measured and the paginated compare is bought exactly once.
     const tools = createReviewTools(client, target);
+    const filesChanged = (await tools.changedFiles()).length;
+
+    // The empty diff is a cost fuse, not just a label: a merged or stale
+    // head produces an empty compare, and a full agent run over nothing
+    // would bill real credit to report that nothing was there.
+    if (filesChanged === 0)
+    {
+        const zero = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        return {
+            status: 'aborted',
+            reason: 'empty-diff',
+            filesChanged,
+            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, streamed: zero, turnUsage: [], compactions: 0 },
+        };
+    }
 
     const stream = query({
         prompt: `Review branch "${target.head}" against "${target.base}".`,

@@ -77,7 +77,11 @@ export class WatchStore
         }
         catch (error)
         {
-            if (error instanceof Error && error.message.includes('UNIQUE'))
+            // errcode 2067 is SQLITE_CONSTRAINT_UNIQUE; the message check is
+            // the fallback for node:sqlite versions that don't attach it.
+            const unique = error instanceof Error
+                && ((error as { errcode?: number }).errcode === 2067 || error.message.includes('UNIQUE'));
+            if (unique)
             {
                 throw new Error(`Already watching ${watch.owner}/${watch.repo} for label "${watch.label}".`, { cause: error });
             }

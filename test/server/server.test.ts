@@ -1,3 +1,4 @@
+import { request } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -149,12 +150,31 @@ describe('POST /jobs', () =>
     it('should reject malformed JSON without crashing', async () =>
     {
         // Act
-        const res = await fetch(`${base}/jobs`, { method: 'POST', body: '{not json' });
+        const res = await fetch(`${base}/jobs`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{not json',
+        });
         const body = await res.json() as { error: string };
 
         // Assert
         expect(res.status).toBe(400);
         expect(body.error).toContain('not valid JSON');
+    });
+
+    it('should refuse a body that is not declared application/json: a cross-origin page can send text/plain without a preflight', async () =>
+    {
+        // Act: fetch defaults the content-type to text/plain — exactly the
+        // shape a hostile page's no-cors POST arrives in.
+        const res = await fetch(`${base}/jobs`, {
+            method: 'POST',
+            body: JSON.stringify({ ...reviewRequest, start: true }),
+        });
+
+        // Assert: refused before the body is even parsed, nothing enqueued.
+        expect(res.status).toBe(415);
+        expect(jobs.list()).toEqual([]);
+        expect(enqueued).toEqual([]);
     });
 
     it('should refuse an oversized body', async () =>
@@ -164,6 +184,39 @@ describe('POST /jobs', () =>
 
         // Assert
         expect(res.status).toBe(413);
+    });
+});
+
+describe('host validation', () =>
+{
+    // fetch refuses to override Host, so spoof it with a raw request — the
+    // same reason the traversal tests use node:http directly.
+    async function statusWithHost(host: string): Promise<number | undefined>
+    {
+        return new Promise((resolve, reject) =>
+        {
+            const port = (server.address() as AddressInfo).port;
+            request({ host: '127.0.0.1', port, path: '/jobs', headers: { host } }, res =>
+            {
+                res.resume();
+                res.on('end', () => resolve(res.statusCode));
+            }).on('error', reject).end();
+        });
+    }
+
+    it('should refuse a request addressed by a non-loopback name: DNS rebinding arrives with the public Host', async () =>
+    {
+        // Act + Assert
+        expect(await statusWithHost('evil.example')).toBe(403);
+        expect(await statusWithHost('evil.example:4780')).toBe(403);
+    });
+
+    it('should accept loopback names with or without a port', async () =>
+    {
+        // Act + Assert
+        expect(await statusWithHost('localhost:4780')).toBe(200);
+        expect(await statusWithHost('127.0.0.1')).toBe(200);
+        expect(await statusWithHost('[::1]:4780')).toBe(200);
     });
 });
 
@@ -594,6 +647,35 @@ describe('POST /clusters/:id/verdict', () =>
         // Act + Assert
         expect((await post('/clusters/999/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
         expect((await post('/clusters/0/verdict', { verdict: 'confirmed', rationale: 'x' })).status).toBe(404);
+    });
+
+    it('should surface a store failure as a 500 with a generic body, not launder it into 404', async () =>
+    {
+        // Arrange: only the store's named "No cluster" error means not-found;
+        // everything else is the server's problem, and its detail belongs in
+        // the operator's feed, not on the wire.
+        const clusterId = seedCluster();
+        const broken = store as unknown as { saveVerification: () => never };
+        const original = broken.saveVerification;
+        broken.saveVerification = () =>
+        {
+            throw new Error('disk I/O error at /home/operator/data/reviews.db');
+        };
+        try
+        {
+            // Act
+            const res = await post(`/clusters/${clusterId}/verdict`, { verdict: 'confirmed', rationale: 'x' });
+            const body = await res.json() as { error: string };
+
+            // Assert
+            expect(res.status).toBe(500);
+            expect(body.error).not.toContain('disk I/O');
+            expect(activityLog.since(0).some(e => e.text.includes('disk I/O'))).toBe(true);
+        }
+        finally
+        {
+            broken.saveVerification = original;
+        }
     });
 });
 

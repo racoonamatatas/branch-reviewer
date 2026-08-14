@@ -5,6 +5,7 @@
 // → rows.
 
 import { distinctRuns, maxSeverity, runClustering } from './consolidate.js';
+import type { ClusteringOptions } from './consolidate.js';
 import type { Consolidation, Finding, ReviewStore, Run } from '../store/store.js';
 
 export interface ConsolidationTarget
@@ -16,20 +17,20 @@ export interface ConsolidationTarget
 }
 
 // Every stored submitted run of this target, oldest first — the round order
-// a campaign would have produced.
+// a campaign would have produced. The quad filter (base included) is pushed
+// into the store: a campaign re-reads this on every round, and pulling the
+// whole runs table to filter in JS grew with the database, not the target.
 export function submittedRunsFor(store: ReviewStore, target: ConsolidationTarget): Run[]
 {
     const runs: Run[] = [];
-    for (const summary of store.listRuns())
+    for (const summary of store.listRuns(target))
     {
         if (summary.status !== 'submitted')
         {
             continue;
         }
         const run = store.getRun(summary.id);
-        if (run !== undefined
-            && run.owner === target.owner && run.repo === target.repo
-            && run.head === target.head && run.base === target.base)
+        if (run !== undefined)
         {
             runs.push(run);
         }
@@ -43,7 +44,7 @@ export async function consolidateRuns(
     store: ReviewStore,
     target: ConsolidationTarget,
     runs: Run[],
-    model?: string,
+    opts: ClusteringOptions = {},
 ): Promise<Consolidation | undefined>
 {
     const findings: Finding[] = runs.flatMap(run => store.getFindings(run.id));
@@ -52,7 +53,7 @@ export async function consolidateRuns(
         return undefined;
     }
 
-    const proposals = await runClustering(findings, { model });
+    const proposals = await runClustering(findings, opts);
     const byId = new Map(findings.map(f => [f.id, f]));
     const id = store.saveConsolidation({
         owner: target.owner,

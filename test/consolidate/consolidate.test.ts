@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { buildJudgePrompt, distinctRuns, maxSeverity, validatePartition } from '../../src/consolidate/consolidate.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { buildJudgePrompt, distinctRuns, identityPartition, maxSeverity, runClustering, validatePartition } from '../../src/consolidate/consolidate.js';
 import type { ClusterProposal } from '../../src/consolidate/consolidate.js';
 import type { Finding } from '../../src/store/store.js';
 import { findingId, runId } from '../../src/types/ids.js';
+
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
 
 function finding(id: number, run: number, overrides: Partial<Finding> = {}): Finding
 {
@@ -111,6 +114,114 @@ describe('validatePartition', () =>
 
         // Assert
         expect(violation).toContain('representative 3 is not a member');
+    });
+});
+
+describe('identityPartition', () =>
+{
+    it('should put every finding in its own cluster as its own representative', () =>
+    {
+        // Act
+        const partition = identityPartition(findings);
+
+        // Assert
+        expect(partition).toEqual([cluster([1], 1), cluster([2], 2), cluster([3], 3)]);
+        expect(validatePartition(findings, partition)).toBeUndefined();
+    });
+});
+
+describe('runClustering', () =>
+{
+    // What judgeOnce expects to stream: one result message, success, with the
+    // structured output the harness would have validated.
+    function judgeStream(clusters: ClusterProposal[]): ReturnType<typeof query>
+    {
+        async function* stream(): AsyncGenerator<unknown>
+        {
+            yield { type: 'result', subtype: 'success', is_error: false, structured_output: { clusters } };
+        }
+        return stream() as unknown as ReturnType<typeof query>;
+    }
+
+    // assertSubscriptionCredit reads the real env — isolate it per test.
+    let saved: Record<string, string | undefined>;
+
+    beforeEach(() =>
+    {
+        saved = {};
+        for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
+        {
+            saved[name] = process.env[name];
+            delete process.env[name];
+        }
+        vi.mocked(query).mockReset();
+    });
+
+    afterEach(() =>
+    {
+        for (const [name, value] of Object.entries(saved))
+        {
+            if (value === undefined)
+            {
+                delete process.env[name];
+            }
+            else
+            {
+                process.env[name] = value;
+            }
+        }
+    });
+
+    it('should accept a valid partition on the first attempt', async () =>
+    {
+        // Arrange
+        const valid = [cluster([1, 3], 3), cluster([2], 2)];
+        vi.mocked(query).mockReturnValueOnce(judgeStream(valid));
+
+        // Act
+        const clusters = await runClustering(findings);
+
+        // Assert
+        expect(clusters).toEqual(valid);
+        expect(vi.mocked(query)).toHaveBeenCalledTimes(1);
+    });
+
+    it('should retry once with the violation and accept a valid second partition', async () =>
+    {
+        // Arrange
+        const valid = [cluster([1], 1), cluster([2], 2), cluster([3], 3)];
+        vi.mocked(query)
+            .mockReturnValueOnce(judgeStream([cluster([1, 2], 1)]))
+            .mockReturnValueOnce(judgeStream(valid));
+        const degradations: string[] = [];
+
+        // Act
+        const clusters = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+
+        // Assert: the retry prompt names the violation, and a recovered judge
+        // is not a degradation.
+        expect(clusters).toEqual(valid);
+        expect(vi.mocked(query)).toHaveBeenCalledTimes(2);
+        const retryPrompt = (vi.mocked(query).mock.calls[1]![0] as { prompt: string }).prompt;
+        expect(retryPrompt).toContain('previous partition was invalid');
+        expect(retryPrompt).toContain('missing from every cluster: 3');
+        expect(degradations).toEqual([]);
+    });
+
+    it('should fall back to the identity partition after two invalid attempts and report the degradation', async () =>
+    {
+        // Arrange
+        vi.mocked(query)
+            .mockReturnValueOnce(judgeStream([cluster([1, 2], 1)]))
+            .mockReturnValueOnce(judgeStream([cluster([1, 2], 1)]));
+        const degradations: string[] = [];
+
+        // Act
+        const clusters = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+
+        // Assert: the fallback is valid and conservative, and the caller is told.
+        expect(clusters).toEqual(identityPartition(findings));
+        expect(degradations).toEqual(['ids missing from every cluster: 3']);
     });
 });
 

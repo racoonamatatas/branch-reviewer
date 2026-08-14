@@ -109,9 +109,23 @@ export function distinctRuns(findings: Finding[]): number
     return new Set(findings.map(f => f.runId)).size;
 }
 
+// Every finding its own cluster — trivially valid under validatePartition.
+// The degraded fallback when the judge cannot produce a valid partition:
+// occurrence collapses to 1 for everything, which over-proposes verification
+// rather than hiding findings, and the next consolidation re-clusters from
+// scratch, so the degradation is not sticky.
+export function identityPartition(findings: Finding[]): ClusterProposal[]
+{
+    return findings.map(f => ({ memberIds: [f.id], representativeId: f.id }));
+}
+
 export interface ClusteringOptions
 {
     model?: string;
+    // Fired when the judge exhausted its retries and the identity partition
+    // was used instead. Reporting is by callback, not console: stdout belongs
+    // to the CLI layer.
+    onDegraded?: (violation: string) => void;
 }
 
 export async function runClustering(findings: Finding[], opts: ClusteringOptions = {}): Promise<ClusterProposal[]>
@@ -135,7 +149,11 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
         }
     }
 
-    throw new Error(`Clustering failed: the judge produced an invalid partition twice (last violation: ${violation}).`);
+    // Two invalid partitions in a row: the judge cannot be trusted with this
+    // input today, but the findings are already paid for and a campaign's
+    // whole product hangs off the consolidation. Degrade instead of throwing.
+    opts.onDegraded?.(violation!);
+    return identityPartition(findings);
 }
 
 async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<ClusterProposal[]>

@@ -142,13 +142,11 @@ function main(): void
                 console.log(`  trigger: ${report.capped} PR(s) deferred to the next cycle by the per-cycle cap`);
             }
             // One line per cycle even when nothing happened — a quiet pass and
-            // a dead poller look identical without it.
+            // a dead poller look identical without it. No worker kick here:
+            // trigger enqueues are all held, so there is never claimable work
+            // until a human releases it (and the release route kicks).
             activityLog.push('trigger', `poll pass: ${watches.list().length} watch(es) — `
                 + `${report.enqueued.length} enqueued, ${report.skipped} seen before, ${report.capped} deferred`);
-            if (report.enqueued.length > 0)
-            {
-                kick();
-            }
         }
         catch (error)
         {

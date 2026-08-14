@@ -120,14 +120,44 @@ export function createServer(deps: ServerDeps): Server
     {
         route(deps, req, res).catch((error: unknown) =>
         {
+            // The raw message can carry filesystem paths or SQLite internals;
+            // it goes to the operator's activity feed, not over the wire.
             const message = error instanceof Error ? error.message : String(error);
-            json(res, 500, { error: message });
+            deps.activity.log.push('server', `internal error on ${req.method ?? '?'} ${req.url ?? '?'}: ${message}`);
+            json(res, 500, { error: 'Internal error — details in the activity feed.' });
         });
     });
 }
 
+// Binding to 127.0.0.1 does not stop a browser: any web page the operator
+// visits can fire requests at loopback, and DNS rebinding can address it
+// under a public name. A Host header that is not a loopback name is such a
+// request and is refused outright.
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function isLocalHost(host: string | undefined): boolean
+{
+    if (host === undefined)
+    {
+        return false;
+    }
+    try
+    {
+        return LOCAL_HOSTNAMES.has(new URL(`http://${host}`).hostname);
+    }
+    catch
+    {
+        return false;
+    }
+}
+
 async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>
 {
+    if (!isLocalHost(req.headers.host))
+    {
+        return json(res, 403, { error: 'This server answers only requests addressed to localhost.' });
+    }
+
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
 
@@ -360,16 +390,29 @@ async function postVerdict(deps: ServerDeps, id: ClusterId, req: IncomingMessage
     }
 
     // The store's own existence check speaks: an unknown cluster throws a
-    // named error before anything is written.
+    // named error before anything is written. Only that error is a 404 —
+    // anything else (disk, constraint) is not the client's fault and must
+    // surface as a 500, not be laundered into "not found".
     try
     {
         deps.store.saveVerification({ source: 'human', clusterId: id, ...parsed.data });
     }
-    catch
+    catch (error)
     {
-        return json(res, 404, { error: 'No such cluster.' });
+        if (isNamed(error, 'No cluster'))
+        {
+            return json(res, 404, { error: 'No such cluster.' });
+        }
+        throw error;
     }
     json(res, 201, { verifications: deps.store.getVerifications(id) });
+}
+
+// The stores speak in named errors for the states a client can cause; the
+// prefix is that contract. Everything else propagates to the 500 handler.
+function isNamed(error: unknown, prefix: string): error is Error
+{
+    return error instanceof Error && error.message.startsWith(prefix);
 }
 
 async function postWatch(deps: ServerDeps, req: IncomingMessage, res: ServerResponse): Promise<void>
@@ -387,7 +430,8 @@ async function postWatch(deps: ServerDeps, req: IncomingMessage, res: ServerResp
     }
 
     // The UNIQUE constraint speaks here: a duplicate watch is a conflict
-    // with existing state, not a malformed request.
+    // with existing state, not a malformed request — and only the duplicate
+    // is; any other store failure is a 500.
     try
     {
         const id = deps.watches.add(parsed.data);
@@ -395,7 +439,11 @@ async function postWatch(deps: ServerDeps, req: IncomingMessage, res: ServerResp
     }
     catch (error)
     {
-        json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+        if (isNamed(error, 'Already watching'))
+        {
+            return json(res, 409, { error: error.message });
+        }
+        throw error;
     }
 }
 
@@ -405,9 +453,13 @@ function deleteWatch(deps: ServerDeps, id: WatchId, res: ServerResponse): void
     {
         deps.watches.remove(id);
     }
-    catch
+    catch (error)
     {
-        return json(res, 404, { error: 'No such watch.' });
+        if (isNamed(error, 'No watch'))
+        {
+            return json(res, 404, { error: 'No such watch.' });
+        }
+        throw error;
     }
     json(res, 200, { removed: id });
 }
@@ -455,9 +507,20 @@ function releaseJob(deps: ServerDeps, id: JobId, res: ServerResponse): void
 }
 
 // Reads and parses a JSON body; on failure the response has already been
-// sent and the caller just returns.
+// sent and the caller just returns. The content-type gate is CSRF defense,
+// not pedantry: a cross-origin page can POST text/plain or form bodies to
+// loopback without a preflight, and `start: true` on such a request spends
+// real credit. Insisting on application/json forces a preflight this server
+// never grants (it serves no CORS headers).
 async function readJson(req: IncomingMessage, res: ServerResponse): Promise<{ ok: true; value: unknown } | { ok: false }>
 {
+    const contentType = req.headers['content-type'] ?? '';
+    if (!contentType.toLowerCase().startsWith('application/json'))
+    {
+        json(res, 415, { error: 'Content-Type must be application/json.' });
+        return { ok: false };
+    }
+
     const body = await readBody(req);
     if (!body.ok)
     {

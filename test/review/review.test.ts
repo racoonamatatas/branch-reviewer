@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { assertSubscriptionCredit, throwIfErrorResult } from '../../src/review/review.js';
+import type { RepoClient } from '../../src/github/github.js';
+import { assertSubscriptionCredit, runReview, throwIfErrorResult } from '../../src/review/review.js';
 
 // Every credential variable the assertions read; saved and restored around
 // each test so the suite never depends on (or leaks into) the real shell env.
@@ -31,6 +32,27 @@ afterEach(() =>
             process.env[name] = saved[name];
         }
     }
+});
+
+describe('runReview', () =>
+{
+    it('should abort an empty diff as a cost fuse, before any credit moves', async () =>
+    {
+        // Arrange: a merged or stale head compares empty. No SDK mock is
+        // needed — the fuse must fire before query() is ever reached.
+        const client: RepoClient = {
+            compare: async () => [],
+            readFile: async () => '',
+        };
+
+        // Act
+        const result = await runReview(client, { base: 'main', head: 'feature/x' });
+
+        // Assert
+        expect(result).toMatchObject({ status: 'aborted', reason: 'empty-diff', filesChanged: 0 });
+        expect(result.stats.costUsd).toBe(0);
+        expect(result.stats.turns).toBe(0);
+    });
 });
 
 describe('assertSubscriptionCredit', () =>

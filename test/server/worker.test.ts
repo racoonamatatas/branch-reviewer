@@ -312,6 +312,37 @@ describe('notify', () =>
         expect(jobs.list().every(j => j.state === 'succeeded')).toBe(true);
     });
 
+    it('should reject when a job escapes running mid-execution, and keep the queue alive for the next kick', async () =>
+    {
+        // Arrange: the runner sabotages the job's state before throwing, so
+        // the error is the worker's own (not the job's) and must propagate
+        // out of notify() rather than fail the job.
+        const first = jobs.enqueue(reviewJob());
+        let calls = 0;
+        const w = worker({
+            review: async () =>
+            {
+                if (++calls === 1)
+                {
+                    jobs.fail(jobs.list().find(j => j.state === 'running')!.id, 'sabotaged');
+                    throw new Error('boom');
+                }
+                return submitted();
+            },
+        });
+
+        // Act
+        await expect(w.notify()).rejects.toThrow('boom');
+        const second = jobs.enqueue(reviewJob({ head: 'feature/y' }));
+        const processed = await w.notify();
+
+        // Assert: the rejection reached the first kick's caller only — the
+        // next kick drains normally instead of inheriting a poisoned chain.
+        expect(processed).toBe(1);
+        expect(jobs.get(first)?.state).toBe('failed');
+        expect(jobs.get(second)?.state).toBe('succeeded');
+    });
+
     it('should report progress events against the job id', async () =>
     {
         // Arrange
@@ -367,6 +398,38 @@ describe('verify jobs', () =>
 
         // Assert
         expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
+    });
+
+    it('should keep a saved review succeeded even when proposing the verify job fails', async () =>
+    {
+        // Arrange: the proposal is a convenience on top of a finished job —
+        // its failure must not breach "persistence never changes an outcome".
+        class UnproposableJobs extends JobStore
+        {
+            override enqueue(job: NewJob, opts?: { held?: boolean }): ReturnType<JobStore['enqueue']>
+            {
+                if (job.kind === 'verify')
+                {
+                    throw new Error('jobs table locked');
+                }
+                return super.enqueue(job, opts);
+            }
+        }
+        const fragile = new UnproposableJobs(':memory:');
+        const id = fragile.enqueue(reviewJob());
+        const events: string[] = [];
+
+        // Act
+        await worker({
+            jobs: fragile,
+            review: async () => submittedWithFindings(),
+            onEvent: (_id, event) => events.push(event),
+        }).notify();
+
+        // Assert
+        expect(fragile.get(id)?.state).toBe('succeeded');
+        expect(events.some(e => e.includes('could not propose a verify job'))).toBe(true);
+        fragile.close();
     });
 
     it('should not stack a second verify job while one is already open', async () =>

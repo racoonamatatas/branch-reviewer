@@ -43,6 +43,9 @@ export interface CampaignOptions
     onReviewProgress?: (event: string) => void;
     onRun?: (outcome: RoundOutcome) => void;
     onBaseline?: (consolidationId: ConsolidationId, coverage: Coverage) => void;
+    // The judge retried into the identity-partition fallback — the
+    // consolidation is valid but degenerate (occurrence 1 everywhere).
+    onJudgeDegraded?: (violation: string) => void;
     verifyReporting?: VerifyPendingOptions;
 }
 
@@ -55,6 +58,7 @@ export interface RoundOutcome
     costUsd: number;
     aborted?: string;   // the SDK ended the run early (max turns)
     failed?: string;    // the round threw — network, API, or a save that did not land
+    consolidationFailed?: string;  // the judge threw; the round's run still joined the union
     consolidationId?: ConsolidationId;
     coverage?: Coverage;
     novelClusters: number;  // clusters only this run reported — the round's marginal yield
@@ -86,12 +90,21 @@ export async function runCampaign(
     let stoppedBy: StoppedBy = 'max-runs';
 
     // Runs already stored for this target are part of the union, so the
-    // campaign's own contribution is only measurable against them.
-    const baseline = await consolidateTarget(store, target, opts.model);
-    let latest = baseline;
-    if (baseline !== undefined)
+    // campaign's own contribution is only measurable against them. A baseline
+    // the judge cannot produce is forfeited, not fatal — the first round's
+    // consolidation supersedes it, and no review credit has moved yet.
+    let latest: Consolidation | undefined;
+    try
     {
-        opts.onBaseline?.(baseline.id, coverageOf(verifiableClusters(baseline)));
+        latest = await consolidateTarget(store, target, opts);
+    }
+    catch
+    {
+        latest = undefined;
+    }
+    if (latest !== undefined)
+    {
+        opts.onBaseline?.(latest.id, coverageOf(verifiableClusters(latest)));
     }
 
     for (let round = 1; round <= opts.maxRuns; round++)
@@ -158,13 +171,25 @@ export async function runCampaign(
         }
         consecutiveAborts = 0;
 
-        const consolidation = await consolidateTarget(store, target, opts.model);
-        if (consolidation !== undefined)
+        // The review is paid for and saved by this point, so a judge failure
+        // must not throw the campaign away: the run stays in the union, the
+        // round just cannot measure its own yield. No consolidationId keeps
+        // it out of shouldContinue's input — a judge outage neither counts
+        // barren nor resets patience.
+        try
         {
-            latest = consolidation;
-            outcome.consolidationId = consolidation.id;
-            outcome.coverage = coverageOf(verifiableClusters(consolidation));
-            outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
+            const consolidation = await consolidateTarget(store, target, opts);
+            if (consolidation !== undefined)
+            {
+                latest = consolidation;
+                outcome.consolidationId = consolidation.id;
+                outcome.coverage = coverageOf(verifiableClusters(consolidation));
+                outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
+            }
+        }
+        catch (error)
+        {
+            outcome.consolidationFailed = error instanceof Error ? error.message : String(error);
         }
         rounds.push(outcome);
         opts.onRun?.(outcome);
@@ -211,7 +236,7 @@ function verifiableClusters(consolidation: Consolidation): Consolidation['cluste
 async function consolidateTarget(
     store: ReviewStore,
     target: CampaignTarget,
-    model?: string,
+    opts: CampaignOptions,
 ): Promise<Consolidation | undefined>
 {
     const runs = submittedRunsFor(store, target);
@@ -219,7 +244,10 @@ async function consolidateTarget(
     {
         return undefined;
     }
-    return consolidateRuns(store, target, runs, model);
+    return consolidateRuns(store, target, runs, {
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.onJudgeDegraded !== undefined ? { onDegraded: opts.onJudgeDegraded } : {}),
+    });
 }
 
 export function clusterGrowth(rounds: RoundOutcome[]): Array<{ round: number; novelClusters: number }>

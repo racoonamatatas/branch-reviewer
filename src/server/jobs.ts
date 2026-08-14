@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     run_ids TEXT NOT NULL DEFAULT '[]',
     consolidation_id INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_jobs_target ON jobs(owner, repo, head);
 `;
 
 interface JobRow

@@ -106,7 +106,11 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
     }
 
     console.log(`Clustering ${findings.length} findings from ${runs.length} runs...`);
-    const clusters = await runClustering(findings, { model: process.env.REVIEW_MODEL });
+    const clusters = await runClustering(findings, {
+        model: process.env.REVIEW_MODEL,
+        onDegraded: violation => console.error(
+            `clustering degraded (${violation}) — saving one cluster per finding`),
+    });
 
     const byId = new Map(findings.map(f => [f.id, f]));
     const savedId = store.saveConsolidation({

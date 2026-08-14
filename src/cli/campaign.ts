@@ -150,6 +150,10 @@ async function main(): Promise<number>
             {
                 console.log(`baseline from stored runs — consolidation #${id}: ${coverageLine(coverage)}\n`);
             },
+            onJudgeDegraded: (violation) =>
+            {
+                console.error(`  clustering degraded (${violation}) — one cluster per finding this round`);
+            },
             onRoundStart: (round, of) =>
             {
                 console.log(`round ${round}/${of}: reviewing...`);
@@ -172,6 +176,11 @@ async function main(): Promise<number>
                 }
                 console.log(`  run #${outcome.runId} saved — ${outcome.findings} finding(s), `
                     + `${outcome.turns} turn(s), $${outcome.costUsd.toFixed(4)}`);
+                if (outcome.consolidationFailed !== undefined)
+                {
+                    console.error(`  consolidation failed: ${outcome.consolidationFailed}`
+                        + ' — the run is stored and joins the next round\'s union');
+                }
                 if (outcome.coverage !== undefined)
                 {
                     console.log(`  consolidation #${outcome.consolidationId}: `

@@ -7,7 +7,7 @@ import type { NewFinding } from '../../src/schema/schema.js';
 import { ReviewStore } from '../../src/store/store.js';
 import type { Finding, NewRun } from '../../src/store/store.js';
 import type { New } from '../../src/types/common.js';
-import { clusterId, consolidationId, runId } from '../../src/types/ids.js';
+import { clusterId, consolidationId, findingId, runId } from '../../src/types/ids.js';
 
 const submittedRun: NewRun = {
     owner: 'acme',
@@ -136,6 +136,21 @@ describe('ReviewStore', () =>
         expect(summaries[0]!.findingsCount).toBe(0);
     });
 
+    it('should pin the filter to a base when one is given: same head, different base is a different series', () =>
+    {
+        // Arrange
+        const ontoMain = store.saveRun(submittedRun);
+        store.saveRun({ ...submittedRun, base: 'release/2.0' });
+
+        // Act
+        const quad = store.listRuns({ owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' });
+        const triple = store.listRuns({ owner: 'acme', repo: 'widgets', head: 'feature-x' });
+
+        // Assert
+        expect(quad.map(r => r.id)).toEqual([ontoMain]);
+        expect(triple).toHaveLength(2);
+    });
+
     it('should return undefined for an unknown run id', () =>
     {
         // Act
@@ -230,6 +245,28 @@ describe('ReviewStore', () =>
 
             // Assert
             expect(consolidation).toBeUndefined();
+        });
+
+        it('should refuse a cluster member that references no stored finding, leaving nothing behind', () =>
+        {
+            // Arrange: validatePartition guards this upstream; the foreign
+            // key is the store's own backstop when a caller skips it.
+            const runA = store.saveRun(submittedRun);
+            const [a1] = store.getFindings(runA);
+
+            // Act + Assert: refused at write time, and the transaction rolls
+            // back — no half-saved consolidation survives.
+            expect(() => store.saveConsolidation({
+                owner: 'acme',
+                repo: 'widgets',
+                head: 'feature-x',
+                base: 'main',
+                runIds: [runA],
+                clusters: [
+                    { memberIds: [a1!.id, findingId(999)], representativeId: a1!.id, severity: 'warning', occurrence: 1 },
+                ],
+            })).toThrow(/FOREIGN KEY/i);
+            expect(store.listConsolidations()).toEqual([]);
         });
 
         describe('verifications', () =>
@@ -489,7 +526,14 @@ describe('ReviewStore', () =>
                 {
                     const legacy = new DatabaseSync(path);
                     legacy.exec(`
-                        CREATE TABLE clusters (id INTEGER PRIMARY KEY AUTOINCREMENT);
+                        CREATE TABLE clusters (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            consolidation_id INTEGER NOT NULL DEFAULT 1,
+                            representative_finding_id INTEGER NOT NULL DEFAULT 1,
+                            severity TEXT NOT NULL DEFAULT 'warning',
+                            occurrence INTEGER NOT NULL DEFAULT 1,
+                            verification_status TEXT NOT NULL DEFAULT 'pending'
+                        );
                         CREATE TABLE verifications (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             cluster_id INTEGER NOT NULL REFERENCES clusters(id),

@@ -296,6 +296,11 @@ const runningKind = computed(() => targetJobs.value.find(j => j.state === 'runni
 const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign');
 const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify');
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
+// A held verify job blocks "verify now" too: the worker auto-proposes one
+// after a review with findings, and a click here would stack a second job —
+// the held job's ▶ in the queue is the release path.
+const hasOpenVerify = computed(() => targetJobs.value.some(
+    j => j.kind === 'verify' && (j.state === 'held' || j.state === 'queued' || j.state === 'running')));
 
 const rounds = computed(() =>
     (consolidation.value?.runIds ?? []).map(id => ({
@@ -555,7 +560,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
             :subject="calloutSubject"
             :run-count="runCount"
             :rev-run-ids="consolidation?.runIds"
-            :can-verify="!hasActiveJob && base !== undefined"
+            :can-verify="!hasActiveJob && !hasOpenVerify && base !== undefined"
             @stamp="stamp"
             @verify="verifyNow"
         />

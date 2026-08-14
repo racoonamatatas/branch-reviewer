@@ -61,10 +61,16 @@ export class Worker
     // between the final empty claimNext and the drain resolving is still
     // picked up by the chained pass instead of stranded until the next kick.
     // Resolves with the number of jobs this drain processed.
+    // The stored tail is the settled copy, not the pass itself: a drain can
+    // reject (execute rethrows when a job escapes `running`), and chaining
+    // future drains off a rejected promise would stop the worker for the
+    // life of the process while the server keeps logging "worker crashed".
+    // The caller of this notify still sees the rejection.
     notify(): Promise<number>
     {
-        this.tail = this.tail.then(() => this.drain());
-        return this.tail;
+        const pass = this.tail.then(() => this.drain());
+        this.tail = pass.catch(() => 0);
+        return pass;
     }
 
     private async drain(): Promise<number>
@@ -146,24 +152,35 @@ export class Worker
             return;
         }
 
+        // The review ran, billed, and saved — it has succeeded, and nothing
+        // after this line may change that. The verify proposal below is a
+        // convenience on top of a finished job, so its failure only reports.
+        this.jobs.succeed(job.id);
+
         // Findings are claims until verified, and this run may be the only
         // one this target ever gets — propose the adversarial pass as a held
         // job (a human release bills it). Skipped when one is already open,
         // and when there is nothing to verify.
-        if (result.review.findings.length > 0
-            && !this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+        try
         {
-            const verifyId = this.jobs.enqueue({
-                kind: 'verify',
-                owner: job.owner,
-                repo: job.repo,
-                head: job.head,
-                base: job.base,
-                params: {},
-            }, { held: true });
-            this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
+            if (result.review.findings.length > 0
+                && !this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+            {
+                const verifyId = this.jobs.enqueue({
+                    kind: 'verify',
+                    owner: job.owner,
+                    repo: job.repo,
+                    head: job.head,
+                    base: job.base,
+                    params: {},
+                }, { held: true });
+                this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
+            }
         }
-        this.jobs.succeed(job.id);
+        catch (error)
+        {
+            this.onEvent?.(job.id, `could not propose a verify job: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     private async executeCampaign(job: CampaignJob): Promise<void>
@@ -190,6 +207,7 @@ export class Worker
                     }
                 },
                 onRoundStart: (round, of) => this.onEvent?.(job.id, `round ${round}/${of}`),
+                onJudgeDegraded: violation => this.onEvent?.(job.id, `clustering degraded: ${violation}`),
             },
         );
 

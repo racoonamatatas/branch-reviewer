@@ -45,12 +45,16 @@ export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 't
 
 // The dashboard's coordinates for "this branch" — the same triple the trigger
 // dedupes jobs on. All-or-nothing at the HTTP edge: filtering by owner alone
-// would silently mix branches.
+// would silently mix branches. `base` is the optional fourth coordinate:
+// review series of one head against different bases are different
+// experiments, and internal callers (consolidation, verification reuse) pin
+// it; the HTTP edge keys on the triple the dashboard navigates by.
 export interface TargetFilter
 {
     owner: string;
     repo: string;
     head: string;
+    base?: string;
 }
 
 // One reviewed branch aggregated across its runs. A view, not an entity:
@@ -217,6 +221,10 @@ CREATE TABLE IF NOT EXISTS verifications (
     cost_usd REAL,
     CHECK ((source = 'agent') = (confidence IS NOT NULL AND cost_usd IS NOT NULL))
 );
+CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id);
+CREATE INDEX IF NOT EXISTS idx_clusters_consolidation ON clusters(consolidation_id);
+CREATE INDEX IF NOT EXISTS idx_cluster_members_cluster ON cluster_members(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_verifications_cluster ON verifications(cluster_id);
 `;
 
 interface RunRow
@@ -277,6 +285,10 @@ export class ReviewStore
         // HTTP handlers in JobStore); a locked write must wait, not throw
         // SQLITE_BUSY.
         this.db.exec('PRAGMA busy_timeout = 5000');
+        // Off by default in SQLite, per connection — without this every
+        // REFERENCES in the schema is decorative and an orphan row is found
+        // at read time instead of refused at write time.
+        this.db.exec('PRAGMA foreign_keys = ON');
         this.migrateLegacyMergeTables();
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
@@ -391,8 +403,12 @@ export class ReviewStore
 
     listRuns(filter?: TargetFilter): RunSummary[]
     {
-        const where = filter === undefined ? '' : 'WHERE r.owner = ? AND r.repo = ? AND r.head = ?';
-        const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
+        const where = filter === undefined
+            ? ''
+            : `WHERE r.owner = ? AND r.repo = ? AND r.head = ?${filter.base !== undefined ? ' AND r.base = ?' : ''}`;
+        const params = filter === undefined
+            ? []
+            : [filter.owner, filter.repo, filter.head, ...(filter.base !== undefined ? [filter.base] : [])];
         const rows = this.db.prepare(
             `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.turns, r.cost_usd, r.files_changed,
                     COUNT(f.id) AS findings_count
@@ -546,8 +562,12 @@ export class ReviewStore
 
     listConsolidations(filter?: TargetFilter): ConsolidationSummary[]
     {
-        const where = filter === undefined ? '' : 'WHERE m.owner = ? AND m.repo = ? AND m.head = ?';
-        const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
+        const where = filter === undefined
+            ? ''
+            : `WHERE m.owner = ? AND m.repo = ? AND m.head = ?${filter.base !== undefined ? ' AND m.base = ?' : ''}`;
+        const params = filter === undefined
+            ? []
+            : [filter.owner, filter.repo, filter.head, ...(filter.base !== undefined ? [filter.base] : [])];
         const rows = this.db.prepare(
             `SELECT m.id, m.created_at, m.owner, m.repo, m.head, m.base, m.run_ids,
                     COUNT(c.id) AS cluster_count
