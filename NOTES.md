@@ -503,7 +503,7 @@ here.
 **Smoke-campaign follow-ups (rev 14, 2026-08-14)** — verified queue, fix in
 roughly this order:
 
-1. **CSRF gate misses /jobs/:id/release and /cancel (critical, occ 3/3,
+1. ~~**CSRF gate misses /jobs/:id/release and /cancel (critical, occ 3/3,
    unverified — recurrence across all three lenses).** release is the
    billing click; a cross-origin page can POST it with no preflight. Extend
    slice A's content-type/Host gate to bodyless POST routes.

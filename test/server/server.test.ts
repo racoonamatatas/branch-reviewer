@@ -185,6 +185,40 @@ describe('POST /jobs', () =>
         // Assert
         expect(res.status).toBe(413);
     });
+
+    it('should refuse a bodyless cross-origin POST to release: the billing click must preflight', async () =>
+    {
+        // Arrange: a held job — exactly what a hostile page would try to
+        // start. The gate must cover routes that never read a body, because
+        // those were the ones it missed (smoke rev 14's only critical).
+        const id = jobs.enqueue(
+            { kind: 'review', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} },
+            { held: true },
+        );
+
+        // Act: no content-type — the shape of a form or no-cors POST.
+        const res = await fetch(`${base}/jobs/${id}/release`, { method: 'POST' });
+
+        // Assert: still held, worker never kicked.
+        expect(res.status).toBe(415);
+        expect(jobs.get(id)?.state).toBe('held');
+        expect(enqueued).toEqual([]);
+    });
+
+    it('should refuse a bodyless cross-origin POST to cancel: a human decision no page may fake', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(
+            { kind: 'review', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} },
+        );
+
+        // Act
+        const res = await fetch(`${base}/jobs/${id}/cancel`, { method: 'POST' });
+
+        // Assert
+        expect(res.status).toBe(415);
+        expect(jobs.get(id)?.state).toBe('queued');
+    });
 });
 
 describe('host validation', () =>

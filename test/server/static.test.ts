@@ -146,12 +146,19 @@ describe('static dashboard serving', () =>
 
     it('should not swallow non-GET misses into the SPA fallback', async () =>
     {
-        // Act
-        const res = await fetch(`${base}/target/acme/widgets/main`, { method: 'POST' });
-        const body = await res.json() as { error: string };
+        // Act: fetch defaults to text/plain, so the route-level CSRF gate
+        // answers before path matching — default-deny for every POST, known
+        // path or not. What matters here is that no miss ever comes back as
+        // the SPA's HTML.
+        const bare = await fetch(`${base}/target/acme/widgets/main`, { method: 'POST' });
+        const declared = await fetch(`${base}/target/acme/widgets/main`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+        });
 
         // Assert
-        expect(res.status).toBe(404);
-        expect(body.error).toBe('No such route.');
+        expect(bare.status).toBe(415);
+        expect(declared.status).toBe(404);
+        expect((await declared.json() as { error: string }).error).toBe('No such route.');
     });
 });

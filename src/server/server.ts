@@ -158,6 +158,21 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         return json(res, 403, { error: 'This server answers only requests addressed to localhost.' });
     }
 
+    // CSRF defense for every POST, not just the ones that read a body: a
+    // cross-origin page can fire a form or no-cors POST at loopback without
+    // a preflight, and the bodyless routes are exactly the expensive ones —
+    // release is the click that bills. Insisting on application/json forces
+    // a preflight this server never grants (it serves no CORS headers).
+    // DELETE needs no gate: it is never a simple request, so it always
+    // preflights. Found as the smoke campaign's only critical (rev 14,
+    // occurrence 3/3): the gate lived in readJson, which release and cancel
+    // never call.
+    if (req.method === 'POST'
+        && !(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json'))
+    {
+        return json(res, 415, { error: 'Content-Type must be application/json.' });
+    }
+
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
 
@@ -505,20 +520,12 @@ function releaseJob(deps: ServerDeps, id: JobId, res: ServerResponse): void
 }
 
 // Reads and parses a JSON body; on failure the response has already been
-// sent and the caller just returns. The content-type gate is CSRF defense,
-// not pedantry: a cross-origin page can POST text/plain or form bodies to
-// loopback without a preflight, and `start: true` on such a request spends
-// real credit. Insisting on application/json forces a preflight this server
-// never grants (it serves no CORS headers).
+// sent and the caller just returns. The content-type CSRF gate lives in
+// route(), where it covers bodyless POSTs too — by the time a body is read
+// here, the request has already proven it is not a no-preflight cross-origin
+// shot.
 async function readJson(req: IncomingMessage, res: ServerResponse): Promise<{ ok: true; value: unknown } | { ok: false }>
 {
-    const contentType = req.headers['content-type'] ?? '';
-    if (!contentType.toLowerCase().startsWith('application/json'))
-    {
-        json(res, 415, { error: 'Content-Type must be application/json.' });
-        return { ok: false };
-    }
-
     const body = await readBody(req);
     if (!body.ok)
     {
