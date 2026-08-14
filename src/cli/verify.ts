@@ -12,7 +12,7 @@ import { verifyPending } from '../verify/verify.js';
 import { requirePositiveInt, runMain } from './main.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
-const USAGE = 'Usage: npm run verify -- <consolidation-id> [--max-turns N] [--reverify]';
+const USAGE = 'Usage: npm run verify -- <consolidation-id> [--max-turns N] [--reverify] [--verify-all]';
 
 async function main(): Promise<number>
 {
@@ -20,6 +20,7 @@ async function main(): Promise<number>
     const positional: string[] = [];
     let maxTurns: number | undefined;
     let reverify = false;
+    let verifyAll = false;
     for (let i = 0; i < args.length; i++)
     {
         const arg = args[i]!;
@@ -30,6 +31,10 @@ async function main(): Promise<number>
         else if (arg === '--reverify')
         {
             reverify = true;
+        }
+        else if (arg === '--verify-all')
+        {
+            verifyAll = true;
         }
         else
         {
@@ -60,14 +65,19 @@ async function main(): Promise<number>
         const summary = await verifyPending(store, github, consolidation, {
             model,
             reverify,
+            verifyAll,
             ...(maxTurns !== undefined ? { maxTurns } : {}),
             ...printVerdictProgress(),
         });
 
         if (summary.attempted === 0)
         {
-            console.log(`No occurrence-1 clusters awaiting a verdict in consolidation #${id}`
-                + `${reverify ? '' : ' (--reverify re-tests settled ones)'}.`);
+            const hints = [
+                ...(verifyAll ? [] : ['--verify-all queues corroborated clusters too']),
+                ...(reverify ? [] : ['--reverify re-tests settled ones']),
+            ];
+            console.log(`No clusters awaiting a verdict in consolidation #${id}`
+                + (hints.length > 0 ? ` (${hints.join('; ')})` : '') + '.');
         }
         else
         {

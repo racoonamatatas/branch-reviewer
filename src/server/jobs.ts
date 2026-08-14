@@ -44,6 +44,7 @@ export const campaignJobParamsSchema = z.strictObject({
     patience: z.number().int().positive().optional(),
     verify: z.boolean(),
     reverify: z.boolean().optional(),
+    verifyAll: z.boolean().optional(),
 });
 
 // Mirrors verifyTarget's option surface: the job consolidates the target's
@@ -52,6 +53,7 @@ export const verifyJobParamsSchema = z.strictObject({
     model: z.string().optional(),
     maxTurns: z.number().int().positive().optional(),
     reverify: z.boolean().optional(),
+    verifyAll: z.boolean().optional(),
 });
 
 // One lookup for both trust boundaries: enqueue() (writes) and toJob() (reads).

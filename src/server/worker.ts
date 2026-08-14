@@ -230,6 +230,7 @@ export class Worker
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.patience !== undefined ? { patience: job.params.patience } : {}),
                 ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
+                ...(job.params.verifyAll !== undefined ? { verifyAll: job.params.verifyAll } : {}),
                 // Rounds land on the job as they finish — a campaign's
                 // progress is visible mid-flight, which is the point of a
                 // job model. A failed round has no run to record.
@@ -302,6 +303,7 @@ export class Worker
                 model: job.params.model ?? this.defaultVerifyModel,
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
+                ...(job.params.verifyAll !== undefined ? { verifyAll: job.params.verifyAll } : {}),
                 onEvent: event => this.onEvent?.(job.id, event),
             },
         );

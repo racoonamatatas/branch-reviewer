@@ -174,14 +174,18 @@ discovered later:
   target with a two-model roster and compare its singleton/doubleton curve
   against the recorded single-model campaigns — the per-run `lens` and
   `model` columns exist so that comparison is a query, not archaeology.
-- **Occurrence under a single model is still self-agreement.** Findings seen
-  twice skip adversarial verification by default, which is only as sound as
-  the samples are independent; with one model in the roster, "seen twice"
-  can mean "systematically claimed twice". `--models` is the fix when spend
-  allows; `--reverify` re-tests deliberately either way. *Next experiment:*
-  compare verification outcomes of occurrence-≥2 clusters sampled
-  cross-model versus same-model — cross-model recurrence should survive
-  verification at a measurably higher rate.
+- **Occurrence under a single model is still self-agreement — and the queue
+  now prices that in.** The prediction came true on this repo's own PR: an
+  empirically false claim (disproven by a live HTTP probe) was reported
+  three times across campaigns, every sighting from the same model, while
+  the other model never made it. The verification queue therefore treats
+  recurrence as corroboration only when it is *cross-model*: same-model
+  repeats verify like singletons, and `--verify-all` removes the exemption
+  entirely for findings headed to a human. What remains open: whether
+  cross-model recurrence itself earns its trust — *next experiment:* compare
+  verification outcomes of cross-model versus same-model occurrence-≥2
+  clusters; cross-model recurrence should survive at a measurably higher
+  rate.
 - **The judge eval is one fixture deep.** `eval:judge --trials N` turned the
   verdict from a coin flip into a pass rate with pair precision/recall, but
   a rate against a single golden set still measures one clustering problem.
@@ -270,18 +274,24 @@ stored consolidations; `--show` reprints a saved one.
 ### `npm run verify`
 
 ```
-npm run verify -- <consolidation-id> [--max-turns N] [--reverify]
+npm run verify -- <consolidation-id> [--max-turns N] [--reverify] [--verify-all]
 ```
 
-Adjudicates the consolidation's pending queue — occurrence-1 clusters, plus
-clusters whose members absorbed a previously-adjudicated set — one
-settlement agent per cluster. `--reverify` re-tests clusters that already
-have a verdict. Reprints the consolidation with verdicts attached.
+Adjudicates the consolidation's pending queue — one settlement agent per
+cluster. Queued by default: clusters without **cross-model** corroboration
+(a claim repeated by one model across rounds is that model re-deriving its
+own prior, not independent agreement — observed live when an empirically
+false claim recurred three times, every sighting from the same model), plus
+clusters whose members absorbed a previously-adjudicated set. `--verify-all`
+queues every pending cluster regardless of corroboration — the posture for
+findings a human will be handed as fact. `--reverify` re-tests clusters
+that already have a verdict. Reprints the consolidation with verdicts
+attached.
 
 ### `npm run campaign`
 
 ```
-npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify] [--models a,b] [--no-lenses]
+npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify] [--verify-all] [--models a,b] [--no-lenses]
 ```
 
 Repeats review rounds on one target until discovery dries up (`--patience`

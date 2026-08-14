@@ -182,9 +182,63 @@ describe('verificationQueue', () =>
         ];
 
         // Act
-        const selected = verificationQueue(clusters, true);
+        const selected = verificationQueue(clusters, { reverify: true });
 
         // Assert
+        expect(selected.map(c => c.id)).toEqual([clusterId(1), clusterId(2)]);
+    });
+
+    // Two members from different runs; the modelOf lookup decides whether
+    // that recurrence counts as corroboration.
+    function pair(id: number): Cluster
+    {
+        const rep = finding(id * 10, id * 10);
+        const echo = finding(id * 10 + 1, id * 10 + 1);
+        return cluster(id, 2, { representative: rep, members: [rep, echo] });
+    }
+
+    it('should queue same-model recurrence like a singleton: self-agreement is not corroboration', () =>
+    {
+        // Arrange: the live specimen — an empirically false claim reported
+        // three times, every sighting the same model, while the other model
+        // never made it. Recurrence earned a skip it had not earned.
+        const sameModel = pair(1);
+        const crossModel = pair(2);
+        const models = new Map<number, string>([
+            [10, 'opus'], [11, 'opus'],
+            [20, 'opus'], [21, 'sonnet'],
+        ]);
+
+        // Act
+        const selected = verificationQueue([sameModel, crossModel], {
+            modelOf: run => models.get(run),
+        });
+
+        // Assert: only cross-model agreement earns the skip.
+        expect(selected.map(c => c.id)).toEqual([clusterId(1)]);
+    });
+
+    it('should fall back to the occurrence rule when no model lookup is given', () =>
+    {
+        // Act & Assert: pre-rotation behavior, unchanged.
+        expect(verificationQueue([pair(1), cluster(2, 1)]).map(c => c.id)).toEqual([clusterId(2)]);
+    });
+
+    it('should queue every pending cluster under verifyAll: what a human is handed as fact gets verified', () =>
+    {
+        // Arrange
+        const clusters = [
+            pair(1),
+            cluster(2, 1),
+            cluster(3, 1, { verificationStatus: 'confirmed' }),
+        ];
+        const models = new Map<number, string>([[10, 'opus'], [11, 'sonnet']]);
+
+        // Act
+        const selected = verificationQueue(clusters, { verifyAll: true, modelOf: run => models.get(run) });
+
+        // Assert: corroborated or not, pending clusters queue; settled ones
+        // still need reverify — verifyAll widens the net, never re-litigates.
         expect(selected.map(c => c.id)).toEqual([clusterId(1), clusterId(2)]);
     });
 });

@@ -21,7 +21,7 @@ import { ReviewStore } from '../store/store.js';
 import type { Cluster, Consolidation } from '../store/store.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
-import type { ConsolidationId } from '../types/ids.js';
+import type { ConsolidationId, RunId } from '../types/ids.js';
 import type { Target } from '../types/target.js';
 import { fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
@@ -65,18 +65,44 @@ export const verificationResponseSchema = z.object({
 export const verificationResponseJsonSchema = z.toJSONSchema(verificationResponseSchema, { target: 'draft-7' });
 export type VerificationResponse = z.infer<typeof verificationResponseSchema>;
 
-// What to adjudicate: findings only one run reported, plus clusters whose
-// member set absorbed a previously-adjudicated one (lapsedVerdict) — those
-// have new evidence a re-clustering merged in, and without this clause they
-// would sit pending forever behind the occurrence-1 gate. Already-verified
-// clusters are skipped unless reverify is asked for — re-testing a settled
-// finding is a calibration act (verdicts have been seen to flip when the
-// second run searched different files), so it should be deliberate.
-export function verificationQueue(clusters: Cluster[], reverify = false): Cluster[]
+export interface QueuePolicy
 {
+    // Re-test clusters that already have a verdict — a calibration act
+    // (verdicts have been seen to flip when the second run searched
+    // different files), so it should be deliberate.
+    reverify?: boolean;
+    // Verify every pending cluster, corroborated or not: "if I'm reviewing
+    // someone else's code, I owe it to them to verify what I say." The gate
+    // for anything a human will be handed as fact.
+    verifyAll?: boolean;
+    // The model that produced a member's run, for the corroboration test.
+    // Absent (or returning undefined) falls back to the pre-rotation rule:
+    // occurrence alone decides.
+    modelOf?: (run: RunId) => string | undefined;
+}
+
+// What to adjudicate. Recurrence only earns the skip when it is CROSS-MODEL
+// agreement: a claim repeated by one model across rounds is that model
+// re-deriving its own prior, not corroboration — proven live when an
+// empirically-refuted claim was re-reported for the third time, every
+// sighting from the same model, while the other model never made it (rev
+// 17). Lapsed clusters re-enter regardless: re-clustering merged new
+// evidence into an adjudicated claim. Already-verified clusters are skipped
+// unless reverify is asked for.
+export function verificationQueue(clusters: Cluster[], policy: QueuePolicy = {}): Cluster[]
+{
+    const corroborated = (c: Cluster): boolean =>
+    {
+        if (policy.modelOf === undefined)
+        {
+            return c.occurrence > 1;
+        }
+        const models = new Set(c.members.map(m => policy.modelOf!(m.runId)).filter(m => m !== undefined));
+        return models.size >= 2;
+    };
     return clusters.filter(c =>
-        (c.occurrence === 1 || c.lapsedVerdict !== undefined)
-        && (reverify || c.verificationStatus === 'pending'));
+        (policy.reverify === true || c.verificationStatus === 'pending')
+        && (policy.verifyAll === true || c.lapsedVerdict !== undefined || !corroborated(c)));
 }
 
 // The verifier sees everything the pipeline knows about the defect: every
@@ -205,6 +231,7 @@ export async function verifyCluster(
 export interface VerifyPendingOptions extends VerifyRunOptions
 {
     reverify?: boolean;
+    verifyAll?: boolean;
     // The per-cluster runner, injectable so the record-and-continue loop is
     // testable without burning credit — the same seam WorkerDeps gives the
     // job runners. Production callers omit it.
@@ -232,7 +259,22 @@ export async function verifyPending(
     opts: VerifyPendingOptions = {},
 ): Promise<VerifyPendingSummary>
 {
-    const pending = verificationQueue(consolidation.clusters, opts.reverify);
+    // The corroboration test needs to know which model produced each run;
+    // the runs are already local rows, so this costs no network.
+    const runModels = new Map<RunId, string>();
+    for (const id of consolidation.runIds)
+    {
+        const run = store.getRun(id);
+        if (run !== undefined)
+        {
+            runModels.set(id, run.model);
+        }
+    }
+    const pending = verificationQueue(consolidation.clusters, {
+        ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+        ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
+        modelOf: id => runModels.get(id),
+    });
     const target = { base: consolidation.base, head: consolidation.head };
     const totalRuns = consolidation.runIds.length;
 
@@ -270,6 +312,7 @@ export async function verifyPending(
 export interface VerifyTargetOptions extends VerifyRunOptions
 {
     reverify?: boolean;
+    verifyAll?: boolean;
     // For the consolidate-if-needed step; unset, the judge falls to its own
     // default rather than inheriting the verifier's model.
     judgeModel?: string;
@@ -348,6 +391,7 @@ export async function verifyTarget(
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
         ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+        ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         onCluster: cluster => opts.onEvent?.(`verifying cluster #${cluster.id}: ${cluster.representative.title}`),
         onVerdict: (cluster, response, stats) =>

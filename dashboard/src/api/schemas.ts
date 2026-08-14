@@ -56,6 +56,12 @@ const jobCommon = {
     consolidationId: toTypedId(consolidationId).optional(),
 };
 
+// Caution: the `satisfies` guard has an optional-field blind spot — a params
+// schema missing an optional server field still compiles (the parsed shape is
+// narrower, which is assignable), but z.object() STRIPS the unknown key at
+// parse, so the dashboard silently displays a job without it. models/
+// rotateLenses were dropped exactly that way (smoke rev 17, confirmed);
+// mirror every params field, optional or not.
 export const jobSchema = z.discriminatedUnion('kind', [
     z.object({
         ...jobCommon,
@@ -63,6 +69,7 @@ export const jobSchema = z.discriminatedUnion('kind', [
         params: z.object({
             model: z.string().optional(),
             maxTurns: z.number().int().optional(),
+            context: z.string().optional(),
         }),
     }),
     z.object({
@@ -70,11 +77,14 @@ export const jobSchema = z.discriminatedUnion('kind', [
         kind: z.literal('campaign'),
         params: z.object({
             model: z.string().optional(),
+            models: z.array(z.string()).optional(),
+            rotateLenses: z.boolean().optional(),
             maxTurns: z.number().int().optional(),
             maxRuns: z.number().int(),
             patience: z.number().int().optional(),
             verify: z.boolean(),
             reverify: z.boolean().optional(),
+            verifyAll: z.boolean().optional(),
         }),
     }),
     z.object({
@@ -84,6 +94,7 @@ export const jobSchema = z.discriminatedUnion('kind', [
             model: z.string().optional(),
             maxTurns: z.number().int().optional(),
             reverify: z.boolean().optional(),
+            verifyAll: z.boolean().optional(),
         }),
     }),
 ]) satisfies z.ZodType<Job>;

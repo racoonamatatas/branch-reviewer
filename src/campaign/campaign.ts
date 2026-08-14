@@ -60,6 +60,9 @@ export interface CampaignOptions
     patience?: number;
     verify: boolean;
     reverify?: boolean;
+    // Verify every pending cluster at the end, not just the uncorroborated
+    // ones — the posture for findings a human will be handed as fact.
+    verifyAll?: boolean;
     // Polled before each round fires and before the final verification pass.
     // A campaign is not one paid call, it is a plan for many — "let the
     // in-flight job finish" must mean the round already billing, not every
@@ -286,6 +289,7 @@ export async function runCampaign(
         campaign.verification = await verify(store, client, latest, {
             model: opts.verifyModel ?? opts.model,
             ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+            ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
             ...opts.verifyReporting,
         });
     }

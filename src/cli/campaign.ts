@@ -14,7 +14,7 @@ import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
     + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]'
-    + ' [--models a,b] [--no-lenses]';
+    + ' [--verify-all] [--models a,b] [--no-lenses]';
 
 const DEFAULT_MAX_RUNS = 3;
 
@@ -25,6 +25,7 @@ interface CampaignArgs extends Target
     maxTurns?: number;
     verify: boolean;
     reverify: boolean;
+    verifyAll: boolean;
     models?: string[];
     lenses: boolean;
 }
@@ -38,6 +39,7 @@ function parseArgs(argv: string[]): CampaignArgs
     let maxTurns: number | undefined;
     let verify = true;
     let reverify = false;
+    let verifyAll = false;
     let models: string[] | undefined;
     let lenses = true;
 
@@ -80,6 +82,10 @@ function parseArgs(argv: string[]): CampaignArgs
         {
             reverify = true;
         }
+        else if (arg === '--verify-all')
+        {
+            verifyAll = true;
+        }
         else
         {
             positional.push(arg);
@@ -93,7 +99,7 @@ function parseArgs(argv: string[]): CampaignArgs
         throw new Error(USAGE);
     }
     return {
-        owner, repo, head, base, maxRuns, verify, reverify, lenses,
+        owner, repo, head, base, maxRuns, verify, reverify, verifyAll, lenses,
         ...(models !== undefined ? { models } : {}),
         ...(patience !== undefined ? { patience } : {}),
         ...(maxTurns !== undefined ? { maxTurns } : {}),
@@ -163,6 +169,7 @@ async function main(): Promise<number>
             maxRuns: args.maxRuns,
             verify: args.verify,
             reverify: args.reverify,
+            verifyAll: args.verifyAll,
             ...(args.patience !== undefined ? { patience: args.patience } : {}),
             ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
             onBaseline: (id, coverage) =>
