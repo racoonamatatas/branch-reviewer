@@ -1,10 +1,14 @@
-// The verification agent: the reviewer's shape pointed backwards. Same three
-// GitHub read tools, same tooled query(), but the system prompt is an
-// adversary trying to refute one occurrence-1 finding against the diff and
-// repo. The verdict is three-valued because "couldn't refute" and "refuted"
-// are different facts — refutation needs positive contrary evidence, and
-// evidence that is unreachable from the repo must surface as undetermined,
-// never launder into false.
+// The verification agent: the reviewer's shape pointed at one finding. Same
+// GitHub read tools, same tooled query(), but the prompt asks for a
+// settlement — confirm, refute, or establish unreachability — with equal
+// effort in both directions. An earlier draft framed it as an adversary
+// ("try to refute", three times over): with the reviewer now recall-first,
+// low-confidence findings are the queue's normal diet, and an anchored
+// verifier would refute its way through exactly the suspicions the pipeline
+// asked the reviewer to voice. The verdict stays three-valued because
+// "couldn't refute" and "refuted" are different facts — refutation needs
+// positive contrary evidence, and evidence unreachable from the repo must
+// surface as undetermined, never launder into false.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -13,6 +17,7 @@ import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
 import type { ConsolidationTarget } from '../consolidate/persist.js';
 import type { RepoClient } from '../github/github.js';
 import { assertSubscriptionCredit, previewArgs, throwIfErrorResult } from '../review/review.js';
+import { verifyModel } from '../sdk/models.js';
 import { ReviewStore } from '../store/store.js';
 import type { Cluster, Consolidation } from '../store/store.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
@@ -21,16 +26,19 @@ import type { ConsolidationId } from '../types/ids.js';
 import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 
-// One finding, not a whole branch — a fraction of the reviewer's budget.
-const DEFAULT_MAX_TURNS = 12;
+// One finding, not a whole branch — but the instruction list asks for the
+// diff, callers, definitions, tests, and the places deployments configure
+// things. 12 turns aborted real verifications against that list; 24 leaves
+// room to actually follow it.
+const DEFAULT_MAX_TURNS = 24;
 
-const SYSTEM_PROMPT = `You are an adversarial code-review verifier. Several independent reviews of one branch were consolidated; exactly one of them reported the finding you are given. Your job is to try to refute it against the branch diff and the repository.
+const SYSTEM_PROMPT = `You are a code-review verification agent. Several independent reviews of one branch were consolidated; you are given one finding to settle against the branch diff and the repository. You have no stake in either answer: a wrong confirmation wastes a maintainer's attention, a wrong refutation buries a real bug.
 
 Method:
 1. Call list_changed_files first to see the shape of the branch.
 2. Read the diff (get_diff) of the file the finding names, and of related changed files.
-3. Use read_file wherever the finding's truth depends on code outside the diff — callers, definitions, configuration, tests. Actively hunt for evidence that the finding is wrong, not just for evidence that it is right.
-4. Configuration lives in more than one place. Application config declares defaults; environment templates, deploy manifests, hosting and CI files declare what a deployment actually sets. Check both before concluding that a setting is unpinned or that a default applies — "I found no override" is only true if you looked where overrides live.
+3. Use read_file wherever the finding's truth depends on code outside the diff — callers, definitions, configuration, tests. Weigh both directions with equal effort: hunt for the guard that would make the claimed problem impossible AND for the concrete path that makes it real.
+4. Configuration lives in more than one place. Application config declares defaults; environment templates, deploy manifests, hosting and CI files declare what a deployment actually sets. Use list_files to locate those files by their real paths instead of guessing. "I found no override" is only true if you looked where overrides live.
 5. When your investigation is complete, stop calling tools and give your verdict.
 
 Verdict rules:
@@ -57,26 +65,47 @@ export const verificationResponseSchema = z.object({
 export const verificationResponseJsonSchema = z.toJSONSchema(verificationResponseSchema, { target: 'draft-7' });
 export type VerificationResponse = z.infer<typeof verificationResponseSchema>;
 
-// What to adjudicate: findings only one run reported. Already-verified
+// What to adjudicate: findings only one run reported, plus clusters whose
+// member set absorbed a previously-adjudicated one (lapsedVerdict) — those
+// have new evidence a re-clustering merged in, and without this clause they
+// would sit pending forever behind the occurrence-1 gate. Already-verified
 // clusters are skipped unless reverify is asked for — re-testing a settled
 // finding is a calibration act (verdicts have been seen to flip when the
 // second run searched different files), so it should be deliberate.
 export function verificationQueue(clusters: Cluster[], reverify = false): Cluster[]
 {
-    return clusters.filter(c => c.occurrence === 1 && (reverify || c.verificationStatus === 'pending'));
+    return clusters.filter(c =>
+        (c.occurrence === 1 || c.lapsedVerdict !== undefined)
+        && (reverify || c.verificationStatus === 'pending'));
 }
 
+// The verifier sees everything the pipeline knows about the defect: every
+// run's phrasing (different angles on the same problem are evidence in
+// themselves), the reviewer's own confidence, and the occurrence odds stated
+// as fact rather than as a nudge toward either verdict.
 export function buildVerificationPrompt(cluster: Cluster, totalRuns: number): string
 {
     const f = cluster.representative;
     const line = f.line !== undefined ? `:${f.line}` : '';
     const suggestion = f.suggestion !== undefined ? `\nsuggestion: ${f.suggestion}` : '';
-    return `Finding to verify — cluster #${cluster.id}, reported by only 1 of ${totalRuns} independent review runs of this branch (run #${f.runId}):
+    const confidence = f.confidence !== undefined ? `\nreviewer confidence: ${f.confidence}` : '';
+    const others = cluster.members.filter(m => m.id !== f.id);
+    const phrasings = others.length === 0
+        ? ''
+        : `\n\nOther runs reported the same defect as:\n${others.map((m) =>
+        {
+            const memberLine = m.line !== undefined ? `:${m.line}` : '';
+            return `- (run #${m.runId}) ${m.file}${memberLine} — ${m.title}: ${m.detail}`;
+        }).join('\n')}`;
+    const lapsed = cluster.lapsedVerdict === undefined
+        ? ''
+        : `\n\nAn earlier adjudication of part of this group ended "${cluster.lapsedVerdict}", before re-clustering merged in new reports. That verdict no longer applies — the merged group is a different claim. Treat it as context, weigh the new reports, and settle the whole group afresh.`;
+    return `Finding to verify — cluster #${cluster.id}, reported by ${cluster.occurrence} of ${totalRuns} independent review runs of this branch (representative from run #${f.runId}):
 
 [${f.severity}] ${f.file}${line} — ${f.title}
-${f.detail}${suggestion}
+${f.detail}${suggestion}${confidence}${phrasings}${lapsed}
 
-Try to refute this finding against the diff and the repository, then give your verdict.`;
+Settle this finding against the diff and the repository, then give your verdict.`;
 }
 
 export interface VerifyRunOptions
@@ -115,7 +144,7 @@ export async function verifyCluster(
         prompt: buildVerificationPrompt(cluster, totalRuns),
         options: {
             systemPrompt: SYSTEM_PROMPT,
-            model: opts.model,
+            model: opts.model ?? verifyModel(),
             maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
             tools: [],  // no built-ins: the three GitHub tools are the whole world
             mcpServers: { [SERVER_NAME]: tools.server },
@@ -255,6 +284,9 @@ export async function verifyPending(
 export interface VerifyTargetOptions extends VerifyRunOptions
 {
     reverify?: boolean;
+    // For the consolidate-if-needed step; unset, the judge falls to its own
+    // default rather than inheriting the verifier's model.
+    judgeModel?: string;
     onEvent?: (event: string) => void;
 }
 
@@ -308,7 +340,7 @@ export async function verifyTarget(
     {
         opts.onEvent?.(`consolidating ${runs.length} run(s)`);
         consolidation = await consolidateRuns(store, target, runs, {
-            ...(opts.model !== undefined ? { model: opts.model } : {}),
+            ...(opts.judgeModel !== undefined ? { model: opts.judgeModel } : {}),
             onDegraded: violation => opts.onEvent?.(
                 `clustering degraded (${violation}) — proceeding with one cluster per finding`),
         });

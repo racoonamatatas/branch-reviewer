@@ -1,11 +1,14 @@
 // Repo access abstraction plus the real GitHub REST implementation.
 // The compare endpoint uses three-dot semantics (merge-base), so the diff
 // only contains what the branch itself changed.
-// RepoClient and its implementation are ported verbatim from
-// branch-reviewer-api — deliberately identical, so the two reviewers differ
-// only in harness. PullSource is this project's own addition (the trigger
-// slice needs to see PRs, the review path never does); it is a separate
-// interface so the review-tool contract stays the verbatim port.
+// RepoClient began as a verbatim port from branch-reviewer-api, so the two
+// reviewers differed only in harness. listFiles is this project's first
+// deliberate departure: the verifier is asked for evidence in files the diff
+// never touched (CI, deploy manifests, env templates), and a read tool that
+// can only fetch exact paths forces it to guess — a capability gap the port
+// inherited and the predecessor never fixed. PullSource is likewise this
+// project's own addition (the trigger slice needs to see PRs, the review
+// path never does).
 
 export interface ChangedFile
 {
@@ -20,6 +23,11 @@ export interface RepoClient
 {
     compare(base: string, head: string): Promise<ChangedFile[]>;
     readFile(path: string, ref: string): Promise<string>;
+    // Every file path in the repository at a ref — the map that makes
+    // read_file navigable. `truncated` is GitHub's own flag for a tree too
+    // large to list in one response; the caller must say so rather than
+    // present a partial map as the whole repo.
+    listFiles(ref: string): Promise<{ paths: string[]; truncated: boolean }>;
 }
 
 // What the trigger needs to know about an open PR to decide "review this?".
@@ -114,6 +122,17 @@ export class GitHubClient implements RepoClient, PullSource
             throw new Error(`Not a readable file: ${path}`);
         }
         return Buffer.from(data.content, 'base64').toString('utf8');
+    }
+
+    async listFiles(ref: string): Promise<{ paths: string[]; truncated: boolean }>
+    {
+        const data = await this.request(
+            `/repos/${this.owner}/${this.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+        ) as { tree?: Array<{ path: string; type: string }>; truncated?: boolean };
+        return {
+            paths: (data.tree ?? []).filter(entry => entry.type === 'blob').map(entry => entry.path),
+            truncated: data.truncated ?? false,
+        };
     }
 
     async listOpenPulls(): Promise<PullRequest[]>

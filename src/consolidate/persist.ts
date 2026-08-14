@@ -53,7 +53,7 @@ export async function consolidateRuns(
         return undefined;
     }
 
-    const proposals = await runClustering(findings, opts);
+    const { clusters: proposals, costUsd } = await runClustering(findings, opts);
     const byId = new Map(findings.map(f => [f.id, f]));
     const id = store.saveConsolidation({
         owner: target.owner,
@@ -61,6 +61,7 @@ export async function consolidateRuns(
         head: target.head,
         base: target.base,
         runIds: runs.map(run => run.id),
+        costUsd,
         clusters: proposals.map((proposal) =>
         {
             const members = proposal.memberIds.map(memberId => byId.get(memberId)!);

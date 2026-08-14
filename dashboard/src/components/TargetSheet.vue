@@ -532,8 +532,8 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                                 f₁ = {{ coverage.f1 }}, f₂ = {{ coverage.f2 }}<br>
                                 <template v-if="coverage.f2 > 0">f₁² / 2f₂ = {{ coverage.f1 * coverage.f1 }}/{{ 2 * coverage.f2 }}</template>
                                 <template v-else>f₁(f₁−1) / 2 = {{ coverage.f1 * (coverage.f1 - 1) }}/2</template>
-                                <span class="c">{{ ' ' }}≈ {{ coverage.undiscovered }} unseen</span><br>
-                                <span class="c">capture–recapture{{ refutedCount > 0 ? ` · ${refutedCount} refuted excluded` : '' }}</span>
+                                <span class="c">{{ ' ' }}≲ {{ coverage.undiscovered }} unseen</span><br>
+                                <span class="c">capture–recapture ceiling — runs are correlated{{ refutedCount > 0 ? ` · ${refutedCount} refuted excluded` : '' }}</span>
                             </div>
                         </template>
                         <div v-else class="vnote">no estimate yet — coverage reads occurrence counts across runs</div>

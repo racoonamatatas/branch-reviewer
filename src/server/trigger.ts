@@ -174,14 +174,15 @@ export async function pollOnce(deps: TriggerDeps): Promise<PollReport>
                 continue;
             }
             // Held, not queued: the label proposes the review, a human release
-            // disposes — automation alone never moves credit.
+            // disposes — automation alone never moves credit. The PR title
+            // rides along as intent for the reviewer's prompt.
             const id = deps.jobs.enqueue({
                 kind: 'review',
                 owner: watch.owner,
                 repo: watch.repo,
                 head: pull.headSha,
                 base: pull.baseRef,
-                params: {},
+                params: { context: `PR #${pull.number}: ${pull.title}` },
             }, { held: true });
             report.enqueued.push(id);
             deps.onEvent?.(`${watch.owner}/${watch.repo} PR #${pull.number} (${pull.headSha.slice(0, 7)}) enqueued as job #${id} — held, release to run`);

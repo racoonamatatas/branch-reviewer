@@ -20,6 +20,11 @@ class FakeRepoClient implements RepoClient
     {
         return '';
     }
+
+    async listFiles(): Promise<{ paths: string[]; truncated: boolean }>
+    {
+        return { paths: [], truncated: false };
+    }
 }
 
 function stats(): ReviewRunStats
@@ -69,7 +74,7 @@ function worker(overrides: Partial<WorkerDeps> = {}): Worker
         clientFor: () => new FakeRepoClient(),
         defaultModel: 'claude-opus-5',
         review: async () => submitted(),
-        campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, stoppedBy: 'max-runs' }),
+        campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' }),
         ...overrides,
     });
 }
@@ -212,6 +217,7 @@ describe('campaign jobs', () =>
             consolidationId: consolidationId(9),
             runIds: [runId(1), runId(2)],
             reviewCostUsd: 5,
+            judgeCostUsd: 0.4,
             stoppedBy: 'dry',
         };
 
@@ -241,7 +247,7 @@ describe('campaign jobs', () =>
             campaign: async (_store, _client, _target, opts) =>
             {
                 received = opts;
-                return { rounds: [], runIds: [], reviewCostUsd: 0, stoppedBy: 'max-runs' };
+                return { rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' };
             },
         }).notify();
 
@@ -256,7 +262,7 @@ describe('campaign jobs', () =>
 
         // Act
         await worker({
-            campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, stoppedBy: 'no-usable-runs' }),
+            campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'no-usable-runs' }),
         }).notify();
 
         // Assert

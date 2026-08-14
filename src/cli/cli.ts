@@ -4,6 +4,7 @@
 import { GitHubClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
 import type { ReviewResult } from '../review/review.js';
+import { reviewModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { printReview, printStats } from './render.js';
 
@@ -103,7 +104,7 @@ function saveRun(args: CliArgs, model: string, result: ReviewResult): void
 async function main(): Promise<number>
 {
     const args = parseArgs(process.argv.slice(2));
-    const model = process.env.REVIEW_MODEL ?? 'claude-opus-5';
+    const model = reviewModel();
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
 
     console.log(`Reviewing ${args.owner}/${args.repo} "${args.head}" against "${args.base}" with ${model}\n`);

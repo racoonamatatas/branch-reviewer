@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GitHubClient } from '../../src/github/github.js';
 
-// Only listOpenPulls is tested here: compare and readFile are the verbatim
-// port from branch-reviewer-api and deliberately stay untouched.
+// compare and readFile are the verbatim port from branch-reviewer-api and
+// deliberately stay untouched (and untested here); listOpenPulls and
+// listFiles are this project's own additions.
 
 function rawPull(number: number, overrides: Record<string, unknown> = {}): Record<string, unknown>
 {
@@ -92,5 +93,46 @@ describe('listOpenPulls', () =>
         // Act + Assert
         await expect(new GitHubClient('acme', 'gone').listOpenPulls())
             .rejects.toThrow('GitHub API 404');
+    });
+});
+
+describe('listFiles', () =>
+{
+    it('should return blob paths only, carrying the truncation flag through', async () =>
+    {
+        // Arrange: trees mix blobs and tree (directory) entries.
+        let requested = '';
+        vi.stubGlobal('fetch', vi.fn(async (url: string | URL) =>
+        {
+            requested = String(url);
+            return new Response(JSON.stringify({
+                tree: [
+                    { path: 'src', type: 'tree' },
+                    { path: 'src/auth.ts', type: 'blob' },
+                    { path: '.github/workflows/ci.yml', type: 'blob' },
+                ],
+                truncated: false,
+            }), { status: 200 });
+        }));
+
+        // Act
+        const result = await new GitHubClient('acme', 'widgets').listFiles('feature/x');
+
+        // Assert: recursive tree at the ref, directories dropped.
+        expect(result).toEqual({ paths: ['src/auth.ts', '.github/workflows/ci.yml'], truncated: false });
+        expect(requested).toContain('/repos/acme/widgets/git/trees/feature%2Fx?recursive=1');
+    });
+
+    it('should surface GitHub\'s truncation flag', async () =>
+    {
+        // Arrange
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(
+            JSON.stringify({ tree: [{ path: 'a.ts', type: 'blob' }], truncated: true }), { status: 200 })));
+
+        // Act
+        const result = await new GitHubClient('acme', 'huge').listFiles('main');
+
+        // Assert
+        expect(result.truncated).toBe(true);
     });
 });

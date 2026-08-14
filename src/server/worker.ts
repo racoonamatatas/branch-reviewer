@@ -123,6 +123,7 @@ export class Worker
         const result = await this.review(this.clientFor(job.owner, job.repo), { base: job.base, head: job.head }, {
             model,
             ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
+            ...(job.params.context !== undefined ? { context: job.params.context } : {}),
             onProgress: event => this.onEvent?.(job.id, event),
         });
 

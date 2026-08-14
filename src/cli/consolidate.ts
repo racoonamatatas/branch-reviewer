@@ -3,6 +3,7 @@
 // round-trip, never a parallel code path.
 
 import { distinctRuns, maxSeverity, runClustering } from '../consolidate/consolidate.js';
+import { judgeModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import type { Finding, Run } from '../store/store.js';
 import { consolidationId, runId } from '../types/ids.js';
@@ -105,9 +106,8 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
         throw new Error('The selected runs have no findings to consolidate.');
     }
 
-    console.log(`Clustering ${findings.length} findings from ${runs.length} runs...`);
-    const clusters = await runClustering(findings, {
-        model: process.env.REVIEW_MODEL,
+    console.log(`Clustering ${findings.length} findings from ${runs.length} runs with ${judgeModel()}...`);
+    const { clusters, costUsd } = await runClustering(findings, {
         onDegraded: violation => console.error(
             `clustering degraded (${violation}) — saving one cluster per finding`),
     });
@@ -119,6 +119,7 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
         head: first.head,
         base: first.base,
         runIds,
+        costUsd,
         clusters: clusters.map((cluster) =>
         {
             const members = cluster.memberIds.map(id => byId.get(id)!);
@@ -130,7 +131,7 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
             };
         }),
     });
-    console.log(`saved as consolidation #${savedId}`);
+    console.log(`saved as consolidation #${savedId} (judge: $${costUsd.toFixed(4)})`);
 
     printConsolidation(store.getConsolidation(savedId)!);
     return 0;

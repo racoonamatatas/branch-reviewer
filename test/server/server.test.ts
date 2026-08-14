@@ -574,7 +574,8 @@ describe('GET /consolidations/:id', () =>
         expect(verified).toMatchObject({ verificationStatus: 'confirmed' });
         expect(verified?.verifications).toMatchObject([{ verdict: 'confirmed', rationale: 'the guard is real' }]);
         expect(body.consolidation.clusters.find(c => c.occurrence === 2)?.verifications).toEqual([]);
-        expect(body.coverage).toEqual({ observed: 2, f1: 1, f2: 1, undiscovered: 1, estimatedTotal: 3 });
+        // Bias-corrected Chao1: f1·(f1−1)/(2·(f2+1)) = 1·0/4 = 0 unseen.
+        expect(body.coverage).toEqual({ observed: 2, f1: 1, f2: 1, undiscovered: 0, estimatedTotal: 2 });
     });
 
     it('should 404 an unknown consolidation and an id that cannot exist', async () =>

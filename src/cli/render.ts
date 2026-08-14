@@ -113,11 +113,12 @@ export function printConsolidation(consolidation: Consolidation): void
     {
         const f = cluster.representative;
         const line = f.line !== undefined ? `:${f.line}` : '';
+        const confidence = f.confidence !== undefined ? `, reviewer confidence ${f.confidence}` : '';
         const unverified = cluster.occurrence === 1 && cluster.verificationStatus === 'pending'
             ? ', unverified'
             : '';
         const status = cluster.verificationStatus !== 'pending' ? `, ${STATUS_LABEL[cluster.verificationStatus]}` : '';
-        console.log(`[${cluster.severity}] ${f.file}${line} — ${f.title} (seen in ${cluster.occurrence}/${totalRuns} runs${unverified}${status})`);
+        console.log(`[${cluster.severity}] ${f.file}${line} — ${f.title} (seen in ${cluster.occurrence}/${totalRuns} runs${confidence}${unverified}${status})`);
         console.log(`    ${f.detail}`);
         if (f.suggestion !== undefined)
         {
@@ -145,7 +146,8 @@ export function printReview(review: Review): void
         for (const f of review.findings.filter(x => x.severity === severity))
         {
             const line = f.line !== undefined ? `:${f.line}` : '';
-            console.log(`[${f.severity}] ${f.file}${line} — ${f.title}`);
+            const confidence = f.confidence !== undefined ? ` (confidence: ${f.confidence})` : '';
+            console.log(`[${f.severity}] ${f.file}${line} — ${f.title}${confidence}`);
             console.log(`    ${f.detail}`);
             if (f.suggestion !== undefined)
             {

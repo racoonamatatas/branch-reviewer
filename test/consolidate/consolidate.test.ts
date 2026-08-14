@@ -134,11 +134,11 @@ describe('runClustering', () =>
 {
     // What judgeOnce expects to stream: one result message, success, with the
     // structured output the harness would have validated.
-    function judgeStream(clusters: ClusterProposal[]): ReturnType<typeof query>
+    function judgeStream(clusters: ClusterProposal[], costUsd = 0.1): ReturnType<typeof query>
     {
         async function* stream(): AsyncGenerator<unknown>
         {
-            yield { type: 'result', subtype: 'success', is_error: false, structured_output: { clusters } };
+            yield { type: 'result', subtype: 'success', is_error: false, total_cost_usd: costUsd, structured_output: { clusters } };
         }
         return stream() as unknown as ReturnType<typeof query>;
     }
@@ -172,35 +172,37 @@ describe('runClustering', () =>
         }
     });
 
-    it('should accept a valid partition on the first attempt', async () =>
+    it('should accept a valid partition on the first attempt, reporting its cost', async () =>
     {
         // Arrange
         const valid = [cluster([1, 3], 3), cluster([2], 2)];
-        vi.mocked(query).mockReturnValueOnce(judgeStream(valid));
+        vi.mocked(query).mockReturnValueOnce(judgeStream(valid, 0.25));
 
         // Act
-        const clusters = await runClustering(findings);
+        const outcome = await runClustering(findings);
 
         // Assert
-        expect(clusters).toEqual(valid);
+        expect(outcome.clusters).toEqual(valid);
+        expect(outcome.costUsd).toBe(0.25);
         expect(vi.mocked(query)).toHaveBeenCalledTimes(1);
     });
 
-    it('should retry once with the violation and accept a valid second partition', async () =>
+    it('should retry once with the violation and accept a valid second partition, cost summed over attempts', async () =>
     {
         // Arrange
         const valid = [cluster([1], 1), cluster([2], 2), cluster([3], 3)];
         vi.mocked(query)
-            .mockReturnValueOnce(judgeStream([cluster([1, 2], 1)]))
-            .mockReturnValueOnce(judgeStream(valid));
+            .mockReturnValueOnce(judgeStream([cluster([1, 2], 1)], 0.2))
+            .mockReturnValueOnce(judgeStream(valid, 0.3));
         const degradations: string[] = [];
 
         // Act
-        const clusters = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+        const outcome = await runClustering(findings, { onDegraded: v => degradations.push(v) });
 
-        // Assert: the retry prompt names the violation, and a recovered judge
-        // is not a degradation.
-        expect(clusters).toEqual(valid);
+        // Assert: the retry prompt names the violation, the failed attempt
+        // still cost real money, and a recovered judge is not a degradation.
+        expect(outcome.clusters).toEqual(valid);
+        expect(outcome.costUsd).toBeCloseTo(0.5);
         expect(vi.mocked(query)).toHaveBeenCalledTimes(2);
         const retryPrompt = (vi.mocked(query).mock.calls[1]![0] as { prompt: string }).prompt;
         expect(retryPrompt).toContain('previous partition was invalid');
@@ -217,10 +219,10 @@ describe('runClustering', () =>
         const degradations: string[] = [];
 
         // Act
-        const clusters = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+        const outcome = await runClustering(findings, { onDegraded: v => degradations.push(v) });
 
         // Assert: the fallback is valid and conservative, and the caller is told.
-        expect(clusters).toEqual(identityPartition(findings));
+        expect(outcome.clusters).toEqual(identityPartition(findings));
         expect(degradations).toEqual(['ids missing from every cluster: 3']);
     });
 });

@@ -2,10 +2,11 @@
 // the findings only one run saw. --max-runs is the hard cost cap and has a
 // default for that reason — a campaign spends real credit per round.
 
-import { runCampaign } from '../campaign/campaign.js';
+import { campaignCost, runCampaign } from '../campaign/campaign.js';
 import type { CampaignResult, CampaignTarget } from '../campaign/campaign.js';
 import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
+import { judgeModel, reviewModel, verifyModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
@@ -97,10 +98,13 @@ function requireValue(value: string | undefined, flag: string): string
     return value;
 }
 
+// The estimate is labeled as a ceiling, not a measurement: Chao1 assumes
+// independent samples and campaign rounds are correlated (same model, same
+// prompt, shared cache), which biases the unseen tail upward.
 function coverageLine(coverage: Coverage): string
 {
     return `${coverage.observed} distinct finding(s), seen-once ${coverage.f1} / seen-twice ${coverage.f2}`
-        + ` → ~${coverage.undiscovered} still undiscovered (est. ${coverage.estimatedTotal} total)`;
+        + ` → at most ~${coverage.undiscovered} unseen (optimistic ceiling: runs are correlated)`;
 }
 
 function printSummary(campaign: CampaignResult, args: CampaignArgs): void
@@ -111,14 +115,15 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
         'no-usable-runs': 'consecutive runs aborted',
     }[campaign.stoppedBy];
 
+    const cost = campaignCost(campaign);
     console.log(`\ncampaign complete: ${campaign.rounds.length} run(s) fired — ${reason}`);
-    console.log(`  reviews: $${campaign.reviewCostUsd.toFixed(4)} (clustering judge calls are not metered)`);
+    console.log(`  reviews: $${cost.reviews.toFixed(4)}, clustering judge: $${cost.judge.toFixed(4)}`);
     if (campaign.verification !== undefined)
     {
         const v = campaign.verification;
         console.log(`  verification: $${v.costUsd.toFixed(4)} — ${v.verified} verdict(s), ${v.failures} incomplete`);
-        console.log(`  total: $${(campaign.reviewCostUsd + v.costUsd).toFixed(4)}`);
     }
+    console.log(`  total: $${cost.total.toFixed(4)}`);
     if (campaign.consolidationId !== undefined)
     {
         console.log(`  final consolidation #${campaign.consolidationId} unions ${campaign.runIds.length} run(s) `
@@ -129,11 +134,12 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
 async function main(): Promise<number>
 {
     const args = parseArgs(process.argv.slice(2));
-    const model = process.env.REVIEW_MODEL ?? 'claude-opus-5';
+    const model = reviewModel();
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);
 
-    console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}" with ${model}`);
+    console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}"`);
+    console.log(`models: review ${model}, judge ${judgeModel()}, verify ${verifyModel()}`);
     console.log(`up to ${args.maxRuns} run(s), stopping early after ${args.patience ?? 2} round(s) without a new finding`
         + `${args.verify ? '; occurrence-1 findings verified at the end' : '; verification skipped'}\n`);
 
@@ -141,6 +147,8 @@ async function main(): Promise<number>
     {
         const campaign = await runCampaign(store, github, args, {
             model,
+            judgeModel: judgeModel(),
+            verifyModel: verifyModel(),
             maxRuns: args.maxRuns,
             verify: args.verify,
             reverify: args.reverify,

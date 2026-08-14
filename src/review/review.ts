@@ -5,6 +5,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { ModelUsage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { RepoClient } from '../github/github.js';
+import { reviewModel } from '../sdk/models.js';
 import { reviewJsonSchema, reviewSchema } from '../schema/schema.js';
 import type { Review } from '../schema/schema.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
@@ -23,25 +24,36 @@ import type { TokenUsage, TurnUsage } from '../usage/usage.js';
 // why compact_boundary is now counted below.
 const DEFAULT_MAX_TURNS = 40;
 
-// Same prompt as the predecessor except step 4: submit_review no longer
-// exists — the harness collects the final response against the output schema.
+// Recall-first, deliberately: this run is one sample among several, and the
+// pipeline downstream (consolidation, adversarial verification) exists to do
+// the filtering. The predecessor's "only report genuine issues" told each
+// run to self-censor before the components built to filter ever saw the
+// output — paying for coverage and prompting it away.
 const SYSTEM_PROMPT = `You are a senior code reviewer. You review one branch at a time, read-only.
+
+This review is one of several independent runs over the same branch. Your findings are merged with the other runs' findings and then adversarially verified, so a wrong finding is caught downstream — but a finding you withhold is gone for good. Report for recall; the pipeline owns precision.
 
 Method:
 1. Call list_changed_files first to see the shape of the branch.
 2. Read diffs (get_diff) for the files that matter; skip generated or trivial files.
-3. When a change's safety depends on code outside the diff, use read_file to check the real context instead of guessing.
+3. When a change's safety depends on code outside the diff, use read_file to check the real context instead of guessing. Use list_files to locate configuration, CI, deploy, environment, or test files by their real paths.
 4. When your investigation is complete, stop calling tools and give your final answer: the full review.
 
 Reporting rules:
-- Only report genuine issues; an empty findings list is a valid review of a clean branch.
-- Severity: "critical" = likely bug, data loss, or security hole; "warning" = risky or incomplete; "nit" = style or minor improvement.
-- Every finding names a file; add a line number when you can.`;
+- Report every issue you genuinely suspect, including ones you could not fully confirm — state your confidence honestly and let verification settle them. Do not pad: an empty findings list is a valid review of a clean branch.
+- Severity is impact, confidence is certainty; set them independently. Severity: "critical" = likely bug, data loss, or security hole; "warning" = risky or incomplete; "nit" = style or minor improvement. Confidence: "high" = verified against the code; "medium" = plausible, partially checked; "low" = a suspicion worth a look.
+- Every finding names a file; add a line number when you can.
+- If a diff came back truncated, say so in the summary rather than treating the unseen part as clean.`;
 
 export interface ReviewRunOptions
 {
     model?: string;
     maxTurns?: number;
+    // What the change was trying to do — a PR title, a description. The
+    // reviewer otherwise judges a diff with no idea of its intent, which is
+    // most of what makes a review useful. Free text, caller-supplied: the
+    // trigger knows the PR, the CLI usually does not.
+    context?: string;
     onProgress?: (event: string) => void;
 }
 
@@ -132,10 +144,11 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     }
 
     const stream = query({
-        prompt: `Review branch "${target.head}" against "${target.base}".`,
+        prompt: `Review branch "${target.head}" against "${target.base}".`
+            + (opts.context !== undefined ? `\n\nWhat this change is meant to do: ${opts.context}` : ''),
         options: {
             systemPrompt: SYSTEM_PROMPT,
-            model: opts.model,
+            model: opts.model ?? reviewModel(),
             maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
             tools: [],  // no built-ins: the three GitHub tools are the whole world
             mcpServers: { [SERVER_NAME]: tools.server },

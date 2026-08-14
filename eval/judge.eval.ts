@@ -52,12 +52,12 @@ async function main(): Promise<number>
 
     const findings: Finding[] = fixture.findings.map(f =>
         ({ ...f, id: findingId(f.id), runId: runId(f.runId) }));
-    const clusters = await runClustering(findings, {
-        model: process.env.REVIEW_MODEL,
+    const { clusters, costUsd } = await runClustering(findings, {
         // The eval must not silently score the fallback as if the judge
         // produced it — a degraded partition is itself the failure.
         onDegraded: violation => console.error(`clustering degraded: ${violation} — scoring the identity fallback`),
     });
+    console.log(`judge cost: $${costUsd.toFixed(4)}`);
     const actual = clusters.map(c => c.memberIds);
 
     if (canonical(actual).join('|') === canonical(fixture.expectedClusters).join('|'))

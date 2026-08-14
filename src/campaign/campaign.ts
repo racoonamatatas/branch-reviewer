@@ -35,6 +35,10 @@ export interface CampaignOptions
 {
     maxRuns: number;
     model?: string;
+    // Role overrides; unset, the judge and verifier fall to their own
+    // defaults (src/sdk/models.ts) rather than inheriting the reviewer's.
+    judgeModel?: string;
+    verifyModel?: string;
     maxTurns?: number;
     patience?: number;
     verify: boolean;
@@ -72,6 +76,9 @@ export interface CampaignResult
     consolidationId?: ConsolidationId;
     runIds: RunId[];  // every run in the final consolidation, not just this campaign's
     reviewCostUsd: number;
+    // Judge calls this campaign fired (baseline + one per usable round),
+    // metered so the headline number stops excluding half the spend.
+    judgeCostUsd: number;
     verification?: VerifyPendingSummary;
     stoppedBy: StoppedBy;
 }
@@ -86,6 +93,7 @@ export async function runCampaign(
     const reviewTarget = { base: target.base, head: target.head };
     const rounds: RoundOutcome[] = [];
     let reviewCostUsd = 0;
+    let judgeCostUsd = 0;
     let consecutiveAborts = 0;
     let stoppedBy: StoppedBy = 'max-runs';
 
@@ -104,6 +112,7 @@ export async function runCampaign(
     }
     if (latest !== undefined)
     {
+        judgeCostUsd += latest.costUsd ?? 0;
         opts.onBaseline?.(latest.id, coverageOf(verifiableClusters(latest)));
     }
 
@@ -182,6 +191,7 @@ export async function runCampaign(
             if (consolidation !== undefined)
             {
                 latest = consolidation;
+                judgeCostUsd += consolidation.costUsd ?? 0;
                 outcome.consolidationId = consolidation.id;
                 outcome.coverage = coverageOf(verifiableClusters(consolidation));
                 outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
@@ -205,6 +215,7 @@ export async function runCampaign(
         rounds,
         ...(latest !== undefined ? { consolidationId: latest.id, runIds: latest.runIds } : { runIds: [] }),
         reviewCostUsd,
+        judgeCostUsd,
         stoppedBy,
     };
 
@@ -212,7 +223,7 @@ export async function runCampaign(
     {
         const consolidation = store.getConsolidation(latest.id)!;
         campaign.verification = await verifyPending(store, client, consolidation, {
-            model: opts.model,
+            model: opts.verifyModel ?? opts.model,
             ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
             ...opts.verifyReporting,
         });
@@ -245,7 +256,7 @@ async function consolidateTarget(
         return undefined;
     }
     return consolidateRuns(store, target, runs, {
-        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.judgeModel !== undefined ? { model: opts.judgeModel } : {}),
         ...(opts.onJudgeDegraded !== undefined ? { onDegraded: opts.onJudgeDegraded } : {}),
     });
 }
@@ -257,8 +268,13 @@ export function clusterGrowth(rounds: RoundOutcome[]): Array<{ round: number; no
         .map(r => ({ round: r.round, novelClusters: r.novelClusters }));
 }
 
-export function campaignCost(campaign: CampaignResult): { reviews: number; verification: number; total: number }
+export function campaignCost(campaign: CampaignResult): { reviews: number; judge: number; verification: number; total: number }
 {
     const verification = campaign.verification?.costUsd ?? 0;
-    return { reviews: campaign.reviewCostUsd, verification, total: campaign.reviewCostUsd + verification };
+    return {
+        reviews: campaign.reviewCostUsd,
+        judge: campaign.judgeCostUsd,
+        verification,
+        total: campaign.reviewCostUsd + campaign.judgeCostUsd + verification,
+    };
 }

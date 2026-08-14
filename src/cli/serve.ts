@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubClient } from '../github/github.js';
 import { assertSubscriptionCredit } from '../review/review.js';
+import { reviewModel } from '../sdk/models.js';
 import { EventLog } from '../server/events.js';
 import { JobStore } from '../server/jobs.js';
 import { createServer } from '../server/server.js';
@@ -69,7 +70,7 @@ function main(): void
 {
     assertSubscriptionCredit();
     const args = parseArgs(process.argv.slice(2));
-    const model = process.env.REVIEW_MODEL ?? 'claude-opus-5';
+    const model = reviewModel();
 
     const jobs = new JobStore(DEFAULT_DB_PATH);
     const store = new ReviewStore(DEFAULT_DB_PATH);

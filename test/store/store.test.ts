@@ -100,6 +100,28 @@ describe('ReviewStore', () =>
         expect(stored?.review).toBeUndefined();
     });
 
+    it('should round-trip a finding confidence and keep it absent where the reviewer was not asked', () =>
+    {
+        // Arrange
+        const id = store.saveRun({
+            ...submittedRun,
+            review: {
+                summary: 'one confident, one legacy-shaped',
+                findings: [
+                    { file: 'src/a.ts', severity: 'warning', confidence: 'low', title: 'Suspicion', detail: 'Might be off' },
+                    { file: 'src/b.ts', severity: 'nit', title: 'Old shape', detail: 'No confidence field' },
+                ],
+            },
+        });
+
+        // Act
+        const findings = store.getFindings(id);
+
+        // Assert
+        expect(findings[0]?.confidence).toBe('low');
+        expect(findings[1]).not.toHaveProperty('confidence');
+    });
+
     it('should keep optional finding fields absent, not null', () =>
     {
         // Arrange
@@ -188,6 +210,7 @@ describe('ReviewStore', () =>
                 head: 'feature-x',
                 base: 'main',
                 runIds: [runA, runB],
+                costUsd: 0.42,
                 clusters: [
                     { memberIds: [a1!.id, b1!.id], representativeId: b1!.id, severity: 'warning', occurrence: 2 },
                     { memberIds: [a2!.id], representativeId: a2!.id, severity: 'nit', occurrence: 1 },
@@ -206,6 +229,7 @@ describe('ReviewStore', () =>
 
             // Assert
             expect(consolidation?.runIds).toEqual([runA, runB]);
+            expect(consolidation?.costUsd).toBe(0.42);
             expect(consolidation?.clusters).toHaveLength(2);
             expect(consolidation?.clusters[0]?.representative.id).toBe(b1.id);
             expect(consolidation?.clusters[0]?.members.map(m => m.id)).toContain(b1.id);
@@ -466,8 +490,42 @@ describe('ReviewStore', () =>
                     }],
                 });
 
+                // Assert: pending is the honest status for the new claim, but
+                // the old answer must not be buried — the lapsed verdict is
+                // what re-admits this cluster to the verification queue.
+                const regrouped = store.getConsolidation(merged)!.clusters[0];
+                expect(regrouped?.verificationStatus).toBe('pending');
+                expect(regrouped?.lapsedVerdict).toBe('refuted');
+            });
+
+            it('should not record a lapsed verdict on clusters unrelated to any adjudicated set', () =>
+            {
+                // Arrange
+                const first = savedClusters();
+                store.saveVerification({
+                    source: 'agent',
+                    clusterId: first.clusters[1]!.id, verdict: 'refuted',
+                    rationale: 'Contrary evidence.', confidence: 'High.', costUsd: 0.5,
+                });
+
+                // Act: re-cluster identically — exact matches inherit, and the
+                // untouched cluster carries no lapsed trace.
+                const again = store.saveConsolidation({
+                    owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+                    runIds: store.getConsolidation(first.consolidationId)!.runIds,
+                    clusters: first.clusters.map(c => ({
+                        memberIds: c.members.map(m => m.id),
+                        representativeId: c.representative.id,
+                        severity: c.severity,
+                        occurrence: c.occurrence,
+                    })),
+                });
+
                 // Assert
-                expect(store.getConsolidation(merged)!.clusters[0]?.verificationStatus).toBe('pending');
+                const reread = store.getConsolidation(again)!;
+                expect(reread.clusters[1]?.verificationStatus).toBe('refuted');
+                expect(reread.clusters[1]).not.toHaveProperty('lapsedVerdict');
+                expect(reread.clusters[0]).not.toHaveProperty('lapsedVerdict');
             });
 
             it('should carry forward the latest verdict when a member set was adjudicated twice', () =>

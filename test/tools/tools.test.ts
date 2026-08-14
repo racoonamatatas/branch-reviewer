@@ -11,8 +11,11 @@ const changedFiles: ChangedFile[] = [
 class FakeRepoClient implements RepoClient
 {
     compareCalls = 0;
+    listFilesCalls = 0;
     files: ChangedFile[] = changedFiles;
     fileContents: Record<string, string> = { 'src/session.ts': 'export const refresh = () => {};' };
+    treePaths: string[] = ['src/auth.ts', 'src/session.ts', '.github/workflows/deploy.yml', 'README.md'];
+    treeTruncated = false;
 
     async compare(): Promise<ChangedFile[]>
     {
@@ -28,6 +31,12 @@ class FakeRepoClient implements RepoClient
             throw new Error(`404: ${path}`);
         }
         return content;
+    }
+
+    async listFiles(): Promise<{ paths: string[]; truncated: boolean }>
+    {
+        this.listFilesCalls++;
+        return { paths: this.treePaths, truncated: this.treeTruncated };
     }
 }
 
@@ -58,7 +67,7 @@ function setup()
 
 describe('createReviewTools', () =>
 {
-    it('should register exactly the three read tools', () =>
+    it('should register exactly the four read tools', () =>
     {
         // Arrange
         const { tools } = setup();
@@ -67,7 +76,7 @@ describe('createReviewTools', () =>
         const names = tools.defs.map(d => d.name).sort();
 
         // Assert
-        expect(names).toEqual(['get_diff', 'list_changed_files', 'read_file']);
+        expect(names).toEqual(['get_diff', 'list_changed_files', 'list_files', 'read_file']);
     });
 
     it('should mark every tool read-only', () =>
@@ -79,7 +88,7 @@ describe('createReviewTools', () =>
         const hints = tools.defs.map(d => d.annotations?.readOnlyHint);
 
         // Assert
-        expect(hints).toEqual([true, true, true]);
+        expect(hints).toEqual([true, true, true, true]);
     });
 
     it('should list changed files with status and line counts', async () =>
@@ -158,6 +167,59 @@ describe('createReviewTools', () =>
 
         // Assert
         expect(client.compareCalls).toBe(1);
+    });
+
+    it('should list the whole repository tree, not just changed files', async () =>
+    {
+        // Arrange
+        const { tools } = setup();
+
+        // Act
+        const result = await execute(tools, 'list_files');
+
+        // Assert: deploy.yml is nowhere in the diff — that is the point.
+        expect(result).toContain('.github/workflows/deploy.yml');
+        expect(result).toContain('README.md');
+    });
+
+    it('should filter the tree by prefix and say so when nothing matches', async () =>
+    {
+        // Arrange
+        const { tools } = setup();
+
+        // Act
+        const filtered = await execute(tools, 'list_files', { prefix: '.github/' });
+        const empty = await execute(tools, 'list_files', { prefix: 'terraform/' });
+
+        // Assert
+        expect(filtered).toBe('.github/workflows/deploy.yml');
+        expect(empty).toContain('No files under "terraform/"');
+    });
+
+    it('should disclose a truncated tree instead of presenting a partial map as the repo', async () =>
+    {
+        // Arrange
+        const { client, tools } = setup();
+        client.treeTruncated = true;
+
+        // Act
+        const result = await execute(tools, 'list_files');
+
+        // Assert
+        expect(result).toContain('too large for GitHub to list completely');
+    });
+
+    it('should fetch the tree only once across list_files calls', async () =>
+    {
+        // Arrange
+        const { client, tools } = setup();
+
+        // Act
+        await execute(tools, 'list_files');
+        await execute(tools, 'list_files', { prefix: 'src/' });
+
+        // Assert
+        expect(client.listFilesCalls).toBe(1);
     });
 
     it('should truncate oversized results with an explicit marker', async () =>

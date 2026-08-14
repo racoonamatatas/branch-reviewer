@@ -27,6 +27,9 @@ import type { ConsolidationId, JobId, RunId } from '../types/ids.js';
 export const reviewJobParamsSchema = z.strictObject({
     model: z.string().optional(),
     maxTurns: z.number().int().positive().optional(),
+    // Intent for the reviewer's prompt — a PR title, a description. The
+    // trigger fills it from the PR; a manual enqueue may say anything.
+    context: z.string().max(2000).optional(),
 });
 
 export const campaignJobParamsSchema = z.strictObject({

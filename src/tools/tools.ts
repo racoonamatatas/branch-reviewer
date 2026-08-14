@@ -53,6 +53,14 @@ export function createReviewTools(client: RepoClient, target: ReviewTarget): Rev
         return comparePromise;
     };
 
+    // Same discipline for the repo tree: one snapshot per run, at the head.
+    let treePromise: Promise<{ paths: string[]; truncated: boolean }> | undefined;
+    const repoTree = (): Promise<{ paths: string[]; truncated: boolean }> =>
+    {
+        treePromise ??= client.listFiles(target.head);
+        return treePromise;
+    };
+
     const readOnly = { annotations: { readOnlyHint: true } };
 
     const defs: RegisteredTool[] = [
@@ -75,6 +83,14 @@ export function createReviewTools(client: RepoClient, target: ReviewTarget): Rev
             'Read a file\'s full contents at the branch head. Use it to inspect context the diff alone does not show (callers, definitions, tests).',
             { path: z.string().describe('Repo-relative file path.') },
             async ({ path }) => text(await client.readFile(path, target.head)),
+            readOnly,
+        ),
+        tool(
+            'list_files',
+            'List file paths in the whole repository at the branch head — not just changed files. '
+                + 'Use it to locate configuration, CI, deploy, environment, or test files before read_file, instead of guessing paths.',
+            { prefix: z.string().optional().describe('Only paths starting with this prefix, e.g. ".github/" or "src/auth". Omit for the full tree.') },
+            async ({ prefix }) => text(formatTree(await repoTree(), prefix)),
             readOnly,
         ),
     ];
@@ -112,6 +128,19 @@ function getDiff(files: ChangedFile[], file?: string): string
     return files
         .map(f => `--- ${f.filename} (${f.status})\n${f.patch ?? '(no textual diff — binary or too large)'}`)
         .join('\n\n');
+}
+
+function formatTree(tree: { paths: string[]; truncated: boolean }, prefix?: string): string
+{
+    const matches = prefix === undefined ? tree.paths : tree.paths.filter(p => p.startsWith(prefix));
+    // A partial map presented as the whole repo would turn "not found" into a
+    // false negative — the one lie this tool exists to prevent.
+    const caveat = tree.truncated ? '\n[note: the repository tree was too large for GitHub to list completely]' : '';
+    if (matches.length === 0)
+    {
+        return `No files${prefix !== undefined ? ` under "${prefix}"` : ''}.${caveat}`;
+    }
+    return matches.join('\n') + caveat;
 }
 
 function truncate(text: string): string

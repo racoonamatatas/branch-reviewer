@@ -76,7 +76,7 @@ describe('clusterGrowth', () =>
 
 describe('campaignCost', () =>
 {
-    it('should roll up review and verification costs separately', () =>
+    it('should roll up review, judge, and verification costs separately', () =>
     {
         // Arrange
         const campaign: CampaignResult = {
@@ -84,6 +84,7 @@ describe('campaignCost', () =>
             consolidationId: consolidationId(2),
             runIds: [runId(101), runId(102)],
             reviewCostUsd: 5,
+            judgeCostUsd: 0.4,
             verification: { attempted: 3, verified: 3, failures: 0, costUsd: 2.5 },
             stoppedBy: 'dry',
         };
@@ -92,7 +93,7 @@ describe('campaignCost', () =>
         const cost = campaignCost(campaign);
 
         // Assert
-        expect(cost).toEqual({ reviews: 5, verification: 2.5, total: 7.5 });
+        expect(cost).toEqual({ reviews: 5, judge: 0.4, verification: 2.5, total: 7.9 });
     });
 
     it('should count verification as free when it was skipped', () =>
@@ -103,6 +104,7 @@ describe('campaignCost', () =>
             consolidationId: consolidationId(1),
             runIds: [runId(101)],
             reviewCostUsd: 2.5,
+            judgeCostUsd: 0,
             stoppedBy: 'max-runs',
         };
 
@@ -110,6 +112,6 @@ describe('campaignCost', () =>
         const cost = campaignCost(campaign);
 
         // Assert
-        expect(cost).toEqual({ reviews: 2.5, verification: 0, total: 2.5 });
+        expect(cost).toEqual({ reviews: 2.5, judge: 0, verification: 0, total: 2.5 });
     });
 });

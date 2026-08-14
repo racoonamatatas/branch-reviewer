@@ -43,6 +43,7 @@ describe('runReview', () =>
         const client: RepoClient = {
             compare: async () => [],
             readFile: async () => '',
+            listFiles: async () => ({ paths: [], truncated: false }),
         };
 
         // Act

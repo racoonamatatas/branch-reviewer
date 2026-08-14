@@ -8,6 +8,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { assertSubscriptionCredit, throwIfErrorResult } from '../review/review.js';
+import { judgeModel } from '../sdk/models.js';
 import type { Severity } from '../schema/schema.js';
 import type { Finding } from '../store/store.js';
 import { findingId, toTypedId } from '../types/ids.js';
@@ -128,12 +129,21 @@ export interface ClusteringOptions
     onDegraded?: (violation: string) => void;
 }
 
-export async function runClustering(findings: Finding[], opts: ClusteringOptions = {}): Promise<ClusterProposal[]>
+export interface ClusteringOutcome
+{
+    clusters: ClusterProposal[];
+    // Everything the judge billed to produce this partition, retries
+    // included — the campaign's headline number is a lie without it.
+    costUsd: number;
+}
+
+export async function runClustering(findings: Finding[], opts: ClusteringOptions = {}): Promise<ClusteringOutcome>
 {
     assertSubscriptionCredit();
 
     const basePrompt = buildJudgePrompt(findings);
     let violation: string | undefined;
+    let costUsd = 0;
 
     for (let attempt = 1; attempt <= 2; attempt++)
     {
@@ -141,11 +151,12 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
             ? basePrompt
             : `${basePrompt}\n\nYour previous partition was invalid: ${violation}. Produce a valid partition.`;
 
-        const clusters = await judgeOnce(prompt, opts);
-        violation = validatePartition(findings, clusters);
+        const attempted = await judgeOnce(prompt, opts);
+        costUsd += attempted.costUsd;
+        violation = validatePartition(findings, attempted.clusters);
         if (violation === undefined)
         {
-            return clusters;
+            return { clusters: attempted.clusters, costUsd };
         }
     }
 
@@ -153,16 +164,16 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
     // input today, but the findings are already paid for and a campaign's
     // whole product hangs off the consolidation. Degrade instead of throwing.
     opts.onDegraded?.(violation!);
-    return identityPartition(findings);
+    return { clusters: identityPartition(findings), costUsd };
 }
 
-async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<ClusterProposal[]>
+async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<ClusteringOutcome>
 {
     const stream = query({
         prompt,
         options: {
             systemPrompt: JUDGE_SYSTEM_PROMPT,
-            model: opts.model,
+            model: opts.model ?? judgeModel(),
             maxTurns: 1,
             tools: [],
             outputFormat: { type: 'json_schema', schema: clusterResponseJsonSchema },
@@ -181,7 +192,10 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Clust
             {
                 throw new Error(`Clustering judge failed: ${message.subtype}`);
             }
-            return clusterResponseSchema.parse(message.structured_output).clusters;
+            return {
+                clusters: clusterResponseSchema.parse(message.structured_output).clusters,
+                costUsd: message.total_cost_usd,
+            };
         }
     }
     throw new Error('The SDK stream ended without a result message.');

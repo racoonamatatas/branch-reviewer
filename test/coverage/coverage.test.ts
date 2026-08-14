@@ -19,22 +19,22 @@ describe('coverageOf', () =>
         expect(coverage.f2).toBe(1);
     });
 
-    it('should estimate undiscovered findings with the classic form', () =>
+    it('should estimate undiscovered findings with the bias-corrected form', () =>
     {
-        // Arrange: f1 = 4, f2 = 2 → 16 / 4
+        // Arrange: f1 = 4, f2 = 2 → 4·3 / (2·3) = 2
         const spread = clusters(1, 1, 1, 1, 2, 2, 3);
 
         // Act
         const coverage = coverageOf(spread);
 
         // Assert
-        expect(coverage.undiscovered).toBe(4);
-        expect(coverage.estimatedTotal).toBe(11);
+        expect(coverage.undiscovered).toBe(2);
+        expect(coverage.estimatedTotal).toBe(9);
     });
 
-    it('should use the bias-corrected form when no cluster was seen exactly twice', () =>
+    it('should stay defined with no doubletons at all', () =>
     {
-        // Arrange: f1 = 4, f2 = 0 → 4 * 3 / 2
+        // Arrange: f1 = 4, f2 = 0 → 4·3 / 2
         const noDoubletons = clusters(1, 1, 1, 1, 3, 4);
 
         // Act
@@ -42,6 +42,18 @@ describe('coverageOf', () =>
 
         // Assert
         expect(coverage.undiscovered).toBe(6);
+    });
+
+    it('should never estimate less unseen after losing a doubleton: one form, no seam', () =>
+    {
+        // Arrange: the old classic/corrected mix gave 50 at f2=1 but 45 at
+        // f2=0 — losing the only doubleton lowered the unseen estimate.
+        const tenSingletonsOneDoubleton = clusters(...Array<number>(10).fill(1), 2);
+        const tenSingletonsNoDoubleton = clusters(...Array<number>(10).fill(1));
+
+        // Act + Assert
+        expect(coverageOf(tenSingletonsNoDoubleton).undiscovered)
+            .toBeGreaterThanOrEqual(coverageOf(tenSingletonsOneDoubleton).undiscovered);
     });
 
     it('should report nothing undiscovered once every cluster has recurred', () =>
@@ -64,9 +76,11 @@ describe('coverageOf', () =>
         expect(coverage).toEqual({ observed: 0, f1: 0, f2: 0, undiscovered: 0, estimatedTotal: 0 });
     });
 
-    it('should reproduce the real consolidation #3 estimate', () =>
+    it('should reproduce the real consolidation #3 shape', () =>
     {
-        // Arrange: the reference target's 4-run union — 8 seen once, 3 twice, 1 thrice, 2 in all four
+        // Arrange: the reference target's 4-run union — 8 seen once, 3 twice,
+        // 1 thrice, 2 in all four. The classic form put the estimate at 11;
+        // the bias-corrected form used everywhere now gives 8·7/(2·4) = 7.
         const consolidationThree = clusters(1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 4, 4);
 
         // Act
@@ -76,7 +90,7 @@ describe('coverageOf', () =>
         expect(coverage.observed).toBe(14);
         expect(coverage.f1).toBe(8);
         expect(coverage.f2).toBe(3);
-        expect(coverage.undiscovered).toBe(11);
+        expect(coverage.undiscovered).toBe(7);
     });
 });
 

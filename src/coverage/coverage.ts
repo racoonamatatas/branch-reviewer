@@ -3,9 +3,20 @@
 // badges; the same counts answer a second question for free — a population
 // where most findings were seen once is still being discovered, one where
 // findings keep recurring has been swept. That is a capture-recapture
-// estimator, borrowed from ecology (f1/f2 are singleton/doubleton species
-// there, cluster occurrences here). Structurally typed on { occurrence } so
-// the estimator stays free of both the store and the campaign that consumes it.
+// estimator (Chao1), borrowed from ecology (f1/f2 are singleton/doubleton
+// species there, cluster occurrences here). Structurally typed on
+// { occurrence } so the estimator stays free of both the store and the
+// campaign that consumes it.
+//
+// Honesty caveat, owned rather than hidden: Chao1 assumes independent
+// samples, and these runs are anything but — same model, same prompt, same
+// diff, back-to-back on a shared prompt cache. Correlation inflates f1
+// relative to f2, which biases the estimate of the unseen tail UPWARD. That
+// is why the number on real data stays high for many rounds: partly a
+// property of code review, partly the violated assumption showing. Report it
+// as an optimistic ceiling on what remains ("at most roughly this much
+// unseen credibility is left"), never as a measurement — and never gate on
+// it (see shouldContinue).
 
 export interface Coverage
 {
@@ -22,11 +33,12 @@ export function coverageOf(clusters: Array<{ occurrence: number }>): Coverage
     const f1 = clusters.filter(c => c.occurrence === 1).length;
     const f2 = clusters.filter(c => c.occurrence === 2).length;
 
-    // The classic form divides by f2; with no doubletons at all, the
-    // bias-corrected form is the one that stays defined.
-    const raw = f2 > 0
-        ? (f1 * f1) / (2 * f2)
-        : (f1 * (f1 - 1)) / 2;
+    // The bias-corrected Chao1 form, used for every input — not just the
+    // f2 = 0 boundary. Mixing the classic form (f1²/2f2) with the corrected
+    // one at the boundary made the estimate discontinuous the wrong way:
+    // f1=10,f2=1 gave 50 while f1=10,f2=0 gave 45, so losing the only
+    // doubleton *lowered* the unseen estimate. One form, no seam.
+    const raw = (f1 * (f1 - 1)) / (2 * (f2 + 1));
 
     // A fraction of a finding means nothing to any caller — this is a count.
     // Clamped because the bias-corrected form yields -0 when f1 is 0.

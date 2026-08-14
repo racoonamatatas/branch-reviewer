@@ -33,7 +33,7 @@ function cluster(id: number, occurrence: number, overrides: Partial<Cluster> = {
 
 describe('buildVerificationPrompt', () =>
 {
-    it('should carry provenance: cluster id, source run, and 1-of-K odds', () =>
+    it('should carry provenance: cluster id, source run, and occurrence stated as fact', () =>
     {
         // Arrange
         const singleton = cluster(19, 1, { representative: finding(7, 4) });
@@ -41,8 +41,34 @@ describe('buildVerificationPrompt', () =>
         // Act
         const prompt = buildVerificationPrompt(singleton, 4);
 
+        // Assert: "reported by 1 of 4", not "only 1 of 4" — the odds are
+        // evidence, not a nudge toward refutation.
+        expect(prompt).toContain('cluster #19, reported by 1 of 4 independent review runs of this branch (representative from run #4)');
+    });
+
+    it('should show every member phrasing and the reviewer confidence', () =>
+    {
+        // Arrange
+        const rep = finding(7, 4, { confidence: 'low' });
+        const echo = finding(9, 5, { file: 'src/b.ts', line: 22, title: 'Same defect, other angle' });
+        const merged = cluster(19, 2, { representative: rep, members: [rep, echo] });
+
+        // Act
+        const prompt = buildVerificationPrompt(merged, 4);
+
         // Assert
-        expect(prompt).toContain('cluster #19, reported by only 1 of 4 independent review runs of this branch (run #4)');
+        expect(prompt).toContain('reviewer confidence: low');
+        expect(prompt).toContain('Other runs reported the same defect as:');
+        expect(prompt).toContain('- (run #5) src/b.ts:22 — Same defect, other angle: Detail 9');
+    });
+
+    it('should omit the members section for a singleton', () =>
+    {
+        // Act
+        const prompt = buildVerificationPrompt(cluster(1, 1), 2);
+
+        // Assert
+        expect(prompt).not.toContain('Other runs reported');
     });
 
     it('should include severity, location, title, detail and suggestion', () =>
@@ -74,13 +100,26 @@ describe('buildVerificationPrompt', () =>
         expect(prompt).not.toContain('suggestion:');
     });
 
-    it('should end with the refute instruction', () =>
+    it('should present a lapsed verdict as context, not as the answer', () =>
+    {
+        // Arrange
+        const merged = cluster(5, 2, { lapsedVerdict: 'refuted' });
+
+        // Act
+        const prompt = buildVerificationPrompt(merged, 3);
+
+        // Assert
+        expect(prompt).toContain('An earlier adjudication of part of this group ended "refuted"');
+        expect(prompt).toContain('settle the whole group afresh');
+    });
+
+    it('should end with the symmetric settle instruction', () =>
     {
         // Act
         const prompt = buildVerificationPrompt(cluster(1, 1), 2);
 
         // Assert
-        expect(prompt).toMatch(/Try to refute this finding against the diff and the repository, then give your verdict\.$/);
+        expect(prompt).toMatch(/Settle this finding against the diff and the repository, then give your verdict\.$/);
     });
 });
 
@@ -110,6 +149,22 @@ describe('verificationQueue', () =>
 
         // Assert
         expect(selected).toEqual([]);
+    });
+
+    it('should admit a pending cluster whose members absorbed an adjudicated set, whatever its occurrence', () =>
+    {
+        // Arrange: the ghost scenario — a refuted singleton merged with a new
+        // duplicate would otherwise hide behind the occurrence-1 gate forever.
+        const clusters = [
+            cluster(1, 2, { lapsedVerdict: 'refuted' }),
+            cluster(2, 2),
+        ];
+
+        // Act
+        const selected = verificationQueue(clusters);
+
+        // Assert
+        expect(selected.map(c => c.id)).toEqual([clusterId(1)]);
     });
 
     it('should re-test settled clusters when reverify is asked for', () =>

@@ -5,7 +5,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { NewFinding, Review, Severity } from '../schema/schema.js';
+import type { Confidence, NewFinding, Review, Severity } from '../schema/schema.js';
 import type { Created, Identified, New } from '../types/common.js';
 import { clusterId, consolidationId, findingId, runId, verificationId } from '../types/ids.js';
 import type { ClusterId, ConsolidationId, FindingId, RunId, VerificationId } from '../types/ids.js';
@@ -75,6 +75,7 @@ export interface Finding extends Identified<'Finding'>
     file: string;
     line?: number;
     severity: Severity;
+    confidence?: Confidence;  // absent on findings stored before the field existed
     title: string;
     detail: string;
     suggestion?: string;
@@ -87,6 +88,9 @@ export interface Consolidation extends Identified<'Consolidation'>, Created
     head: string;
     base: string;
     runIds: RunId[];
+    // What the clustering judge billed, retries included. Absent on
+    // consolidations from before judge calls were metered.
+    costUsd?: number;
     clusters: Cluster[];
 }
 
@@ -95,6 +99,12 @@ export interface Cluster extends Identified<'Cluster'>
     severity: Severity;
     occurrence: number;
     verificationStatus: VerificationStatus;
+    // A verdict a strict subset of this cluster's members earned in an
+    // earlier consolidation, which re-clustering lapsed: the merged group is
+    // a different claim, so the verdict does not inherit — but without this
+    // trace the cluster would sit pending forever, invisible to the
+    // occurrence-1 verification gate. Context for the verifier, never status.
+    lapsedVerdict?: Verdict;
     representative: Finding;
     members: Finding[];
 }
@@ -185,6 +195,7 @@ CREATE TABLE IF NOT EXISTS findings (
     file TEXT NOT NULL,
     line INTEGER,
     severity TEXT NOT NULL,
+    confidence TEXT,
     title TEXT NOT NULL,
     detail TEXT NOT NULL,
     suggestion TEXT
@@ -196,7 +207,8 @@ CREATE TABLE IF NOT EXISTS consolidations (
     repo TEXT NOT NULL,
     head TEXT NOT NULL,
     base TEXT NOT NULL,
-    run_ids TEXT NOT NULL
+    run_ids TEXT NOT NULL,
+    cost_usd REAL
 );
 CREATE TABLE IF NOT EXISTS clusters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,7 +216,8 @@ CREATE TABLE IF NOT EXISTS clusters (
     representative_finding_id INTEGER NOT NULL REFERENCES findings(id),
     severity TEXT NOT NULL,
     occurrence INTEGER NOT NULL,
-    verification_status TEXT NOT NULL DEFAULT 'pending'
+    verification_status TEXT NOT NULL DEFAULT 'pending',
+    lapsed_verdict TEXT
 );
 CREATE TABLE IF NOT EXISTS cluster_members (
     cluster_id INTEGER NOT NULL REFERENCES clusters(id),
@@ -253,6 +266,7 @@ interface FindingRow
     file: string;
     line: number | null;
     severity: string;
+    confidence: string | null;
     title: string;
     detail: string;
     suggestion: string | null;
@@ -293,6 +307,42 @@ export class ReviewStore
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
         this.migrateRunFilesChanged();
+        this.migrateFindingConfidence();
+        this.migrateClusterLapsedVerdict();
+        this.migrateConsolidationCost();
+    }
+
+    // Databases from before the recall-first prompt lack the column; old
+    // findings honestly stay NULL — "the reviewer was not asked", not "low".
+    private migrateFindingConfidence(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('findings') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'confidence'))
+        {
+            this.db.exec('ALTER TABLE findings ADD COLUMN confidence TEXT');
+        }
+    }
+
+    // Old cluster rows never tracked lapsed verdicts; NULL is accurate for
+    // them — the tracking did not exist when they were written.
+    private migrateClusterLapsedVerdict(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('clusters') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'lapsed_verdict'))
+        {
+            this.db.exec('ALTER TABLE clusters ADD COLUMN lapsed_verdict TEXT');
+        }
+    }
+
+    // Judge calls billed real credit before anyone metered them; NULL says
+    // "unmetered", which is the truth about those rows — not zero.
+    private migrateConsolidationCost(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('consolidations') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'cost_usd'))
+        {
+            this.db.exec('ALTER TABLE consolidations ADD COLUMN cost_usd REAL');
+        }
     }
 
     // Databases from before the empty-diff tell existed lack the column; the
@@ -384,11 +434,11 @@ export class ReviewStore
             const id = runId(Number(result.lastInsertRowid));
 
             const insertFinding = this.db.prepare(
-                'INSERT INTO findings (run_id, file, line, severity, title, detail, suggestion) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO findings (run_id, file, line, severity, confidence, title, detail, suggestion) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             );
             for (const f of run.review?.findings ?? [])
             {
-                insertFinding.run(id, f.file, f.line ?? null, f.severity, f.title, f.detail, f.suggestion ?? null);
+                insertFinding.run(id, f.file, f.line ?? null, f.severity, f.confidence ?? null, f.title, f.detail, f.suggestion ?? null);
             }
 
             this.db.exec('COMMIT');
@@ -435,11 +485,22 @@ export class ReviewStore
     // key on the triple because that is what callers navigate by.
     listTargets(): TargetSummary[]
     {
+        // The total is everything the target has billed: runs, judge calls
+        // (NULL for pre-metering rows — honestly uncounted), and agent
+        // verifications, which hang off each consolidation's own cluster rows
+        // so re-clustering never double-counts them.
         const rows = this.db.prepare(
             `SELECT r.owner, r.repo, r.head, r.base,
                     COUNT(*) AS run_count,
                     MAX(r.created_at) AS last_run_at,
-                    SUM(r.cost_usd) AS total_cost_usd,
+                    SUM(r.cost_usd)
+                    + COALESCE((SELECT SUM(c.cost_usd) FROM consolidations c
+                                WHERE c.owner = r.owner AND c.repo = r.repo AND c.head = r.head AND c.base = r.base), 0)
+                    + COALESCE((SELECT SUM(v.cost_usd) FROM verifications v
+                                JOIN clusters cl ON cl.id = v.cluster_id
+                                JOIN consolidations c2 ON c2.id = cl.consolidation_id
+                                WHERE c2.owner = r.owner AND c2.repo = r.repo AND c2.head = r.head AND c2.base = r.base), 0)
+                    AS total_cost_usd,
                     (SELECT MAX(c.id) FROM consolidations c
                      WHERE c.owner = r.owner AND c.repo = r.repo AND c.head = r.head AND c.base = r.base) AS latest_consolidation_id
              FROM runs r
@@ -474,7 +535,7 @@ export class ReviewStore
         }
 
         const findingRows = this.db.prepare(
-            'SELECT file, line, severity, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
+            'SELECT file, line, severity, confidence, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
         ).all(id) as unknown as FindingRow[];
 
         const findings: NewFinding[] = findingRows.map(toFinding);
@@ -506,7 +567,7 @@ export class ReviewStore
     getFindings(run: RunId): Finding[]
     {
         const rows = this.db.prepare(
-            'SELECT id, run_id, file, line, severity, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
+            'SELECT id, run_id, file, line, severity, confidence, title, detail, suggestion FROM findings WHERE run_id = ? ORDER BY id',
         ).all(run) as unknown as Array<FindingRow & { id: number; run_id: number }>;
         return rows.map(row => ({ id: findingId(row.id), runId: runId(row.run_id), ...toFinding(row) }));
     }
@@ -517,32 +578,57 @@ export class ReviewStore
         // happened to represent it, so a re-clustering of the same findings
         // starts from what is already known instead of re-buying it. Exact
         // member-set matches only: a group the judge split or merged is a
-        // different claim, and pending is the honest answer there.
+        // different claim, and pending is the honest answer there. But a
+        // merge must not bury the old answer either — a refuted singleton
+        // absorbed into a bigger cluster would otherwise sit pending forever,
+        // past the occurrence-1 verification gate. Strict supersets record
+        // the lapsed verdict so the queue can re-test them with that context.
         const inherited = this.verdictsByMemberSet();
+        const adjudicated = [...inherited].map(([key, verdict]) => ({
+            ids: key.split(',').map(Number),
+            verdict,
+        }));
 
         this.db.exec('BEGIN');
         try
         {
             const result = this.db.prepare(
-                'INSERT INTO consolidations (created_at, owner, repo, head, base, run_ids) VALUES (?, ?, ?, ?, ?, ?)',
+                'INSERT INTO consolidations (created_at, owner, repo, head, base, run_ids, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?)',
             ).run(
                 new Date().toISOString(), consolidation.owner, consolidation.repo, consolidation.head, consolidation.base,
-                JSON.stringify(consolidation.runIds),
+                JSON.stringify(consolidation.runIds), consolidation.costUsd ?? null,
             );
             const id = consolidationId(Number(result.lastInsertRowid));
 
             const insertCluster = this.db.prepare(
-                `INSERT INTO clusters (consolidation_id, representative_finding_id, severity, occurrence, verification_status)
-                 VALUES (?, ?, ?, ?, ?)`,
+                `INSERT INTO clusters (consolidation_id, representative_finding_id, severity, occurrence, verification_status, lapsed_verdict)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
             );
             const insertMember = this.db.prepare(
                 'INSERT INTO cluster_members (cluster_id, finding_id) VALUES (?, ?)',
             );
             for (const cluster of consolidation.clusters)
             {
+                const status = inherited.get(memberSetKey(cluster.memberIds));
+                // Only when nothing inherits exactly: iteration order is
+                // verification order, so of several lapsed subsets the most
+                // recently earned verdict wins — same latest-wins rule as
+                // inheritance itself.
+                let lapsed: Verdict | undefined;
+                if (status === undefined)
+                {
+                    const memberSet = new Set<number>(cluster.memberIds);
+                    for (const past of adjudicated)
+                    {
+                        if (past.ids.length < memberSet.size && past.ids.every(fid => memberSet.has(fid)))
+                        {
+                            lapsed = past.verdict;
+                        }
+                    }
+                }
                 const newClusterId = clusterId(Number(insertCluster.run(
                     id, cluster.representativeId, cluster.severity, cluster.occurrence,
-                    inherited.get(memberSetKey(cluster.memberIds)) ?? 'pending',
+                    status ?? 'pending', lapsed ?? null,
                 ).lastInsertRowid));
                 for (const memberId of cluster.memberIds)
                 {
@@ -593,6 +679,7 @@ export class ReviewStore
     {
         const row = this.db.prepare('SELECT * FROM consolidations WHERE id = ?').get(id) as unknown as {
             id: number; created_at: string; owner: string; repo: string; head: string; base: string; run_ids: string;
+            cost_usd: number | null;
         } | undefined;
         if (row === undefined)
         {
@@ -600,13 +687,14 @@ export class ReviewStore
         }
 
         const clusterRows = this.db.prepare(
-            'SELECT id, representative_finding_id, severity, occurrence, verification_status FROM clusters WHERE consolidation_id = ? ORDER BY id',
+            'SELECT id, representative_finding_id, severity, occurrence, verification_status, lapsed_verdict FROM clusters WHERE consolidation_id = ? ORDER BY id',
         ).all(id) as unknown as Array<{
-            id: number; representative_finding_id: number; severity: string; occurrence: number; verification_status: string;
+            id: number; representative_finding_id: number; severity: string; occurrence: number;
+            verification_status: string; lapsed_verdict: string | null;
         }>;
 
         const memberQuery = this.db.prepare(
-            `SELECT f.id, f.run_id, f.file, f.line, f.severity, f.title, f.detail, f.suggestion
+            `SELECT f.id, f.run_id, f.file, f.line, f.severity, f.confidence, f.title, f.detail, f.suggestion
              FROM cluster_members cm JOIN findings f ON f.id = cm.finding_id
              WHERE cm.cluster_id = ? ORDER BY f.id`,
         );
@@ -625,6 +713,7 @@ export class ReviewStore
                 severity: c.severity as Severity,
                 occurrence: c.occurrence,
                 verificationStatus: c.verification_status as Cluster['verificationStatus'],
+                ...(c.lapsed_verdict !== null ? { lapsedVerdict: c.lapsed_verdict as Verdict } : {}),
                 representative,
                 members,
             };
@@ -638,6 +727,7 @@ export class ReviewStore
             head: row.head,
             base: row.base,
             runIds: (JSON.parse(row.run_ids) as number[]).map(runId),
+            ...(row.cost_usd !== null ? { costUsd: row.cost_usd } : {}),
             clusters,
         };
     }
@@ -735,6 +825,7 @@ function toFinding(row: FindingRow): NewFinding
         file: row.file,
         ...(row.line !== null ? { line: row.line } : {}),
         severity: row.severity as Severity,
+        ...(row.confidence !== null ? { confidence: row.confidence as Confidence } : {}),
         title: row.title,
         detail: row.detail,
         ...(row.suggestion !== null ? { suggestion: row.suggestion } : {}),
