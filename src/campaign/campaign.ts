@@ -60,6 +60,13 @@ export interface CampaignOptions
     patience?: number;
     verify: boolean;
     reverify?: boolean;
+    // Polled before each round fires and before the final verification pass.
+    // A campaign is not one paid call, it is a plan for many — "let the
+    // in-flight job finish" must mean the round already billing, not every
+    // round the plan still intends (the smoke review confirmed a SIGTERM'd
+    // campaign kept spending for its full run cap). Completed rounds stay
+    // saved and consolidated.
+    shouldStop?: () => boolean;
     onRoundStart?: (round: number, of: number, lens?: string, model?: string) => void;
     onReviewProgress?: (event: string) => void;
     onRun?: (outcome: RoundOutcome) => void;
@@ -88,7 +95,7 @@ export interface RoundOutcome
     novelClusters: number;  // clusters only this run reported — the round's marginal yield
 }
 
-export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs';
+export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'stopped';
 
 export interface CampaignResult
 {
@@ -140,6 +147,12 @@ export async function runCampaign(
 
     for (let round = 1; round <= opts.maxRuns; round++)
     {
+        if (opts.shouldStop?.() === true)
+        {
+            stoppedBy = 'stopped';
+            break;
+        }
+
         // The round's slice of the rotation. Lenses cycle unless switched
         // off; models cycle only when a list was given. Both are functions
         // of the round number alone, so an unusable round still consumes
@@ -255,7 +268,10 @@ export async function runCampaign(
         stoppedBy,
     };
 
-    if (opts.verify && latest !== undefined)
+    // Verification is its own string of paid calls, so the stop signal
+    // gates it exactly like a round; the pending queue survives in the
+    // consolidation and a later verify picks it up.
+    if (opts.verify && latest !== undefined && stoppedBy !== 'stopped' && opts.shouldStop?.() !== true)
     {
         // `latest` is already the read-back entity consolidateRuns returned —
         // fresh rows, inherited statuses and all. No re-read.

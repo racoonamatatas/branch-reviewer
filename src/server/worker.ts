@@ -210,6 +210,10 @@ export class Worker
             {
                 maxRuns: job.params.maxRuns,
                 verify: job.params.verify,
+                // stop() must reach into a running campaign, not just the
+                // claim loop: "the in-flight job" is otherwise a plan for
+                // maxRuns more paid rounds plus a verification pass.
+                shouldStop: () => this.stopping,
                 model: job.params.model ?? this.defaultModel,
                 ...(job.params.models !== undefined ? { models: job.params.models } : {}),
                 ...(job.params.rotateLenses !== undefined ? { rotateLenses: job.params.rotateLenses } : {}),
@@ -258,6 +262,14 @@ export class Worker
         if (result.stoppedBy === 'no-usable-runs')
         {
             this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed');
+            return;
+        }
+        // A shutdown cut the plan short: not a success (the sampling plan
+        // did not complete) and not silently re-runnable (completed rounds
+        // billed and are saved) — the abort path, with the reason stored.
+        if (result.stoppedBy === 'stopped')
+        {
+            this.jobs.abort(job.id, 'stopped: shutdown interrupted the campaign — completed rounds are saved; re-enqueue to continue');
             return;
         }
         this.jobs.succeed(job.id, {

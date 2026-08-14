@@ -507,7 +507,7 @@ roughly this order:
    unverified — recurrence across all three lenses).** release is the
    billing click; a cross-origin page can POST it with no preflight. Extend
    slice A's content-type/Host gate to bodyless POST routes.
-2. **Shutdown lets an in-flight campaign keep spending (warning, confirmed).**
+2. ~~**Shutdown lets an in-flight campaign keep spending (warning, confirmed).**~~ — fixed: `CampaignOptions.shouldStop`, polled per round and before verify; worker passes `() => this.stopping`; cut-short plans abort with the reason stored.
    `Worker.stop()` awaits the whole campaign loop — up to maxRuns more paid
    rounds after SIGTERM. Thread a stop signal into CampaignOptions, checked
    at the top of each round.

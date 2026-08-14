@@ -256,6 +256,35 @@ describe('runCampaign', () =>
         expect(campaign.rounds.map(r => r.lens)).toEqual([undefined, LENSES[0]?.name, LENSES[1]?.name]);
     });
 
+    it('should stop between rounds when asked, keeping paid rounds and skipping paid verification', async () =>
+    {
+        // Arrange: the stop signal flips while round 1 is billing — the
+        // shape of a SIGTERM landing mid-campaign.
+        let stopping = false;
+        const review = async (): Promise<ReviewResult> =>
+        {
+            stopping = true;
+            return submittedResult([finding('round-1')]);
+        };
+        const verify = vi.fn(noVerify);
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 5,
+            verify: true,
+            shouldStop: () => stopping,
+            runners: { review, consolidate: identityConsolidate(), verifyPending: verify },
+        });
+
+        // Assert: round 1 completed and saved (its credit was already
+        // committed), no round 2 fired, and the verification pass — its own
+        // string of paid calls — never started.
+        expect(campaign.stoppedBy).toBe('stopped');
+        expect(campaign.rounds).toHaveLength(1);
+        expect(campaign.rounds[0]?.runId).toBeDefined();
+        expect(verify).not.toHaveBeenCalled();
+    });
+
     it('should keep every round identical when lenses are off and one model is given', async () =>
     {
         // Arrange

@@ -116,6 +116,9 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
         'dry': 'discovery dried up',
         'max-runs': `run cap reached (${args.maxRuns})`,
         'no-usable-runs': 'consecutive runs aborted',
+        // The CLI wires no stop signal (Ctrl-C kills the process outright);
+        // only the server path can produce this.
+        'stopped': 'stopped by shutdown',
     }[campaign.stoppedBy];
 
     const cost = campaignCost(campaign);

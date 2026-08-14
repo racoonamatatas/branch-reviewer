@@ -395,6 +395,50 @@ describe('notify', () =>
         expect(jobs.get(second)?.state).toBe('queued');
     });
 
+    it('should reach into a running campaign: stop() must end the plan, not just the claim loop', async () =>
+    {
+        // Arrange: a campaign job whose runner behaves like the real one —
+        // it polls shouldStop and reports how the plan ended.
+        const id = jobs.enqueue({
+            kind: 'campaign', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main',
+            params: { maxRuns: 5, verify: true },
+        } as NewJob);
+        let inRound!: () => void;
+        const roundStarted = new Promise<void>(resolve =>
+        {
+            inRound = resolve;
+        });
+        let release!: () => void;
+        const gate = new Promise<void>(resolve =>
+        {
+            release = resolve;
+        });
+        const w = worker({
+            campaign: async (_store, _client, _target, opts): Promise<CampaignResult> =>
+            {
+                inRound();
+                await gate;
+                return {
+                    rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0,
+                    stoppedBy: opts.shouldStop?.() === true ? 'stopped' : 'max-runs',
+                };
+            },
+        });
+
+        // Act: stop lands mid-campaign, then the round in flight finishes.
+        const pass = w.notify();
+        await roundStarted;
+        const stopped = w.stop();
+        release();
+        await stopped;
+        await pass;
+
+        // Assert: the campaign saw the signal and the cut-short plan is an
+        // abort with the reason stored, never a clean success.
+        expect(jobs.get(id)?.state).toBe('aborted');
+        expect(jobs.get(id)?.error).toContain('stopped: shutdown interrupted the campaign');
+    });
+
     it('should resolve stop() immediately on an idle worker', async () =>
     {
         // Act & Assert
