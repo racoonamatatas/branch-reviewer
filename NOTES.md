@@ -534,6 +534,29 @@ verdict filter on lapsed-verdict re-queue (the branch's tests assert the
 current uncapped behavior on purpose), and a verify-spend fuse for degraded
 identity partitions (occurrence 1 everywhere → whole-union verify queue).
 
+**Campaign 2 (job 7, 2026-08-14, ~$9.11) — server-path validation after the
+fixes.** Everything held: a 529-failed round surfaced in the feed with its
+real error and the campaign moved on; the judge ran alive inside the loop
+(3 calls, $0.53); 11 old verdicts inherited free by member set; 8 new
+singletons verified for $4.04 (rev 17, runs 17–21). Two lessons for the
+thesis: (1) **recurrence ≠ truth, observed live** — the empirically-refuted
+listFiles slash-encoding claim was independently re-reported by a fresh run
+(occ 2→3): correlated systematic error exactly as §4 predicts; stamp it
+refuted so it stops re-queuing. (2) **Fixed findings linger**: the union
+spans branch states, so CSRF (fixed on head) still shows occ-3 pending —
+"resolved on a newer head" doesn't exist as a concept yet; design-boundary
+candidate. New confirmed queue (all about the fix layer itself): shutdown
+during the last round skips verification yet the job succeeds; verifyPending
+has no stop hook (bills per pending cluster after SIGTERM); shutdown closes
+stores under in-flight HTTP/poll; dashboard job schema drifted (models/
+rotateLenses stripped at parse — the optional-field hole in the satisfies
+guard); memoized compare/tree cache rejections for the whole run; a judge
+max-turns throw skips the degrade path and loses its metered cost; owner/
+repo interpolated unencoded into GitHub URLs from untrusted job input; a
+never-settling refresh stalls the dashboard poller. Also: the campaign's
+verification phase is invisible in the job feed (worker wires no
+verifyReporting) — $4 spent silently.
+
 **Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
 CLI: review job → auto-proposed held verify job → release → verdicts.
