@@ -557,6 +557,29 @@ never-settling refresh stalls the dashboard poller. Also: the campaign's
 verification phase is invisible in the job feed (worker wires no
 verifyReporting) — $4 spent silently.
 
+**Queue policy change (same day, `4991be8`), prompted by the specimen:**
+recurrence earns the verification skip only when it is **cross-model** —
+`verificationQueue` takes a `modelOf` lookup (verifyPending builds it from
+the consolidation's run rows) and same-model repeats verify like singletons;
+no lookup → the old occurrence rule. **`--verify-all`** (CLI verify +
+campaign, job params, worker) queues every pending cluster regardless of
+corroboration — the user's stated ethic: "if I'm reviewing someone else's
+code, I owe it to them to verify what I say." Opt-in for now; should become
+the default of the read→write path (posting findings to PRs) if that lands.
+The dashboard job-schema drift from the rev-17 queue was fixed in the same
+commit (params now mirror every field; the satisfies guard's optional-field
+blind spot is documented at the schema). Rev-17 queue still open:
+verifyPending stop hook + last-round-shutdown verify skip (job should not
+read as a completed plan), store close under in-flight HTTP/poll, memoized
+compare/tree rejection caching, judge cost lost on max-turns throw,
+owner/repo URL encoding from untrusted job input, never-settling refresh
+stalls the poller, campaign verify phase invisible in the job feed. User
+actions pending: stamp the slash-encoding cluster refuted in the dashboard
+(rev 17; the probe is the rationale — it WILL recur otherwise), widen the
+.env fine-grained PAT to cover this repo, restart `npm run serve` (the
+process from today predates the day's last five commits; stopped cleanly
+at day's end).
+
 **Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
 CLI: review job → auto-proposed held verify job → release → verdicts.
