@@ -9,9 +9,13 @@
 // campaign that consumes it.
 //
 // Honesty caveat, owned rather than hidden: Chao1 assumes independent
-// samples, and these runs are anything but — same model, same prompt, same
-// diff, back-to-back on a shared prompt cache. Correlation inflates f1
-// relative to f2, which biases the estimate of the unseen tail UPWARD. That
+// samples, and these runs are anything but. The correlation comes from
+// sameness — the same model brings the same systematic blind spots to every
+// round, and the same prompt walks the same files in the same order (a
+// shared prompt cache is only the tell that the inputs were identical, not
+// a cause: a cache hit computes exactly what recomputing would). Correlation
+// inflates f1 relative to f2, which biases the estimate of the unseen tail
+// UPWARD. That
 // is why the number on real data stays high for many rounds: partly a
 // property of code review, partly the violated assumption showing. Report it
 // as an optimistic ceiling on what remains ("at most roughly this much

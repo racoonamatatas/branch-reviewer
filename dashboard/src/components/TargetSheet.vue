@@ -531,11 +531,12 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                     <div class="stage-body">
                         <template v-if="coverage">
                             <div class="fraction">{{ coverage.observed }} <span class="of">of</span> <span class="est">≈{{ coverage.estimatedTotal }}</span></div>
-                            <!-- mirrors coverageOf: the bias-corrected form is the one that stays defined at f₂ = 0 -->
+                            <!-- mirrors coverageOf exactly: one bias-corrected form for every
+                                 input, no classic-form branch — the engine dropped that seam
+                                 (losing the only doubleton must not lower the estimate). -->
                             <div class="margincalc">
                                 f₁ = {{ coverage.f1 }}, f₂ = {{ coverage.f2 }}<br>
-                                <template v-if="coverage.f2 > 0">f₁² / 2f₂ = {{ coverage.f1 * coverage.f1 }}/{{ 2 * coverage.f2 }}</template>
-                                <template v-else>f₁(f₁−1) / 2 = {{ coverage.f1 * (coverage.f1 - 1) }}/2</template>
+                                f₁(f₁−1) / 2(f₂+1) = {{ coverage.f1 * (coverage.f1 - 1) }}/{{ 2 * (coverage.f2 + 1) }}
                                 <span class="c">{{ ' ' }}≲ {{ coverage.undiscovered }} unseen</span><br>
                                 <span class="c">capture–recapture ceiling — runs are correlated{{ refutedCount > 0 ? ` · ${refutedCount} refuted excluded` : '' }}</span>
                             </div>
@@ -634,22 +635,24 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
     display: flex;
     align-items: stretch;
     gap: 0;
-    min-width: 1180px;
+    min-width: 1300px;
 }
 
 .coverage-stage { max-width: 280px; }
 
+/* Sized by the widest label ("OCCURRENCE") plus breathing room on both
+   sides — at 84px the 03→04 label touched both stage borders. */
 .connector
 {
     flex: none;
-    width: 84px;
+    width: 132px;
     align-self: stretch;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
     gap: 0.3rem;
-    padding: 0 4px;
+    padding: 0 6px;
 }
 
 .connector .arrow

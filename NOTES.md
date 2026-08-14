@@ -33,8 +33,10 @@ resolved model are recorded on the run (nullable `lens` column, resolved
 model never saved as 'default' when rotating). Round 1 is deliberately
 lens-free so the baseline stays comparable with stored runs; rotation is a
 function of round number alone (an aborted round consumes its slot). Model
-rotation forfeits cross-model cache sharing on purpose — cache-warm
-repetition is the correlation being fixed. Worker campaign jobs keep a
+rotation forfeits cross-model cache sharing on purpose — purely a cost, not
+a statistical loss: the sameness of the inputs is the correlation, and a
+cache hit only certifies that sameness (identical prefixes compute
+identically, cached or not). Worker campaign jobs keep a
 single model (params carry one); a job-level roster is a later decision.
 The rest of the finishing plan landed the same day: **graceful shutdown**
 (`Worker.stop()` stops claiming and resolves when the in-flight job has
@@ -548,6 +550,13 @@ was itself REFUTED by the adversary; no action.)
   should become a value import from the pure coverage module.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
+- **Ensemble expansion idea (user, 2026-08-14, explicitly not now):** beyond
+  cycling one (lens, model) pair per round, run the grid — multiple prompt
+  variants × multiple models per round, or randomized prompt paraphrases —
+  so each round samples a designed ensemble cell. The per-run `lens` and
+  `model` columns already record the coordinates; coverage could then
+  stratify by cell. Cost scales linearly with cells, so this waits for
+  evidence from the two-model roster experiment first.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.

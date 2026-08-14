@@ -101,8 +101,9 @@ function parseArgs(argv: string[]): CampaignArgs
 }
 
 // The estimate is labeled as a ceiling, not a measurement: Chao1 assumes
-// independent samples and campaign rounds are correlated (same model, same
-// prompt, shared cache), which biases the unseen tail upward.
+// independent samples and campaign rounds are correlated — the same model
+// repeats its systematic blind spots and the same prompt repeats the same
+// walk — which biases the unseen tail upward.
 function coverageLine(coverage: Coverage): string
 {
     return `${coverage.observed} distinct finding(s), seen-once ${coverage.f1} / seen-twice ${coverage.f2}`

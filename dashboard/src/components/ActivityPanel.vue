@@ -46,9 +46,10 @@ const rows = computed(() =>
 </template>
 
 <style scoped>
+/* Height comes from the parent grid (the fill slot bounds it and adds the
+   scroll); the panel itself only caps how much one glance can use (SHOWN). */
 .log
 {
-    max-height: 15rem;
     overflow-y: auto;
     font-size: 0.75rem;
 }

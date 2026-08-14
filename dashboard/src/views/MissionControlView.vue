@@ -208,21 +208,28 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
         <p v-if="connectionError" class="msg offline">OFFLINE — {{ connectionError }}</p>
         <p v-if="actionError" class="msg action-error">{{ actionError }}</p>
 
+        <!-- The grid owns its own bottom edge: the flexible panels (activity
+             left, targets right) absorb the height difference between the
+             columns, so their bottoms align — and both scroll internally
+             instead of stretching the page when they overpopulate. -->
         <main>
             <div class="col">
-                <QueuePanel :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
-                <NewJobForm @enqueue="enqueue" />
+                <QueuePanel class="pin" :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
+                <NewJobForm class="pin" @enqueue="enqueue" />
+                <ActivityPanel class="fill" :events="events" />
             </div>
             <div class="col side">
-                <WatchesPanel :watches="watches" @add="addWatch" @remove="removeWatch" />
-                <TargetsPanel :targets="targets" :selected="selectedTarget" />
+                <WatchesPanel class="pin" :watches="watches" @add="addWatch" @remove="removeWatch" />
+                <TargetsPanel class="fill" :targets="targets" :selected="selectedTarget" />
             </div>
         </main>
 
-        <!-- Keyed by target: switching targets remounts the sheet, so caches
-             and selections from the old target can't leak into the new one.
-             The key must cover all of owner/repo/head — the sheet does not
-             reset itself on prop changes; the remount IS the reset. -->
+        <!-- Below the whole grid — activity included — so opening a target
+             never shoves the feed around. Keyed by target: switching targets
+             remounts the sheet, so caches and selections from the old target
+             can't leak into the new one. The key must cover all of
+             owner/repo/head — the sheet does not reset itself on prop
+             changes; the remount IS the reset. -->
         <div v-if="selectedTarget" ref="sheetWrap" class="sheetwrap">
             <TargetSheet
                 ref="sheet"
@@ -238,12 +245,6 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
                 @release="release"
                 @enqueue="enqueue"
             />
-        </div>
-
-        <!-- Below the sheet on purpose: the feed's height breathes as lines
-             arrive, and nothing being read should shift under the reader. -->
-        <div class="activitywrap">
-            <ActivityPanel :events="events" />
         </div>
 
         <div class="titleblockwrap">
@@ -276,7 +277,7 @@ main
 {
     flex: 1;
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 1.2rem;
 }
 
@@ -291,9 +292,27 @@ main
 
 .col.side { flex: none; width: 360px; }
 
-.sheetwrap { scroll-margin-top: 1rem; }
+/* Blueprint gives every .stage flex: 1, which under the stretched grid would
+   inflate all panels evenly. Pinned panels keep their content height; the
+   fill panel takes the column's remainder, and flex-basis 0 keeps its own
+   content out of the column's height calculation — that is what stops a long
+   list from stretching the page instead of scrolling. */
+.mc .col > .pin { flex: none; }
 
-.activitywrap { margin-top: 1.2rem; }
+.mc .col > .fill
+{
+    flex: 1 1 0;
+    min-height: 14rem;
+}
+
+.mc .col > .fill :deep(.stage-body)
+{
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.sheetwrap { margin-top: 1.2rem; scroll-margin-top: 1rem; }
 
 @media (max-width: 900px)
 {

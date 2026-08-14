@@ -47,8 +47,9 @@ export interface CampaignOptions
     // manufactures the independence the estimator wants, and cross-model
     // agreement is a stronger confirmation signal than one model repeating
     // itself. `models` cycles per round and overrides `model`; rotation
-    // forfeits cross-round cache sharing between different models, a cost
-    // accepted because cache-warm repetition is the correlation being fixed.
+    // forfeits cross-round cache sharing between different models — purely a
+    // cost, not a statistical loss: identical inputs are the correlation,
+    // and the cache only ever certified that rounds were identical.
     models?: string[];
     rotateLenses?: boolean;
     // Role overrides; unset, the judge and verifier fall to their own

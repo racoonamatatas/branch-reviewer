@@ -294,10 +294,10 @@ Rounds are diversity-sampled by default: round 1 reviews generalist (the
 comparable baseline), later rounds cycle a lens — security, concurrency,
 config-and-deploy, tests — that redirects attention without narrowing what
 may be reported (`--no-lenses` disables). `--models a,b` additionally cycles
-the review model per round, making recurrence cross-model agreement; it
-deliberately trades away cross-round cache sharing, because cache-warm
-repetition is the correlation being removed. Lens and model are recorded on
-each run.
+the review model per round, making recurrence cross-model agreement. The
+lost cross-round cache sharing is purely a cost, not a statistical trade:
+identical inputs are the correlation, and a cache hit only ever certified
+that rounds were identical. Lens and model are recorded on each run.
 
 ### `npm run serve`
 
