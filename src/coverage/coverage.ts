@@ -18,6 +18,8 @@
 // unseen credibility is left"), never as a measurement — and never gate on
 // it (see shouldContinue).
 
+import type { RunId } from '../types/ids.js';
+
 export interface Coverage
 {
     observed: number;        // distinct findings seen so far
@@ -52,7 +54,7 @@ export function coverageOf(clusters: Array<{ occurrence: number }>): Coverage
 // would be measuring the judge, not the branch, because each round re-judges
 // from scratch and a merge of two previously separate clusters can flatten or
 // reverse the count while the run really did find something.
-export function novelClusters<T>(clusters: Array<{ members: Array<{ runId: T }> }>, run: T): number
+export function novelClusters(clusters: Array<{ members: Array<{ runId: RunId }> }>, run: RunId): number
 {
     return clusters.filter(c => c.members.every(m => m.runId === run)).length;
 }

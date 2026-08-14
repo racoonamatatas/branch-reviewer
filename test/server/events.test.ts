@@ -43,7 +43,7 @@ describe('EventLog', () =>
         // A dashboard that watched the old process holds a cursor far past
         // this ring's numbering; it must not be answered with silence.
         expect(log.since(250).map(e => e.text)).toEqual(['fresh start']);
-        expect(log.latest()).toBe(1);
+        expect(log.since(250).map(e => e.seq)).toEqual([1]);
     });
 
     it('should name each process life with a distinct boot id', () =>

@@ -458,10 +458,11 @@ verify-orchestration test seams:
    the verify proposal in its own try/catch that only reports via onEvent.
 2. ~~**Concurrent refresh duplicates feed events (warning, #133)**~~ —
    fixed: `usePolling` has an in-flight guard.
-3. **`verifyTarget` is untested (warning, #134):** the only gate deciding
-   whether a judge call gets paid for has no test. Cover: zero submitted
-   runs throws; no findings → vacuous success, nothing written; exact-set
-   reuse → `runClustering` never called; newer run → re-consolidates.
+3. ~~**`verifyTarget` is untested (warning, #134)**~~ — fixed in slice C:
+   `verifyTarget`/`verifyPending` gained injectable stage runners (the
+   WorkerDeps seam, one layer down) and the reuse gate, vacuous success,
+   re-consolidation, base pinning, and record-and-continue are all covered;
+   `runCampaign`'s stopping rules and judge-failure salvage likewise.
 4. ~~**"verify now" ignores held verify jobs (nit, #139)**~~ — fixed:
    `hasOpenVerify` (held/queued/running verify) gates `canVerify`.
 5. ~~**Reuse lookup filters triple, runs filter quad (nit, #140)**~~ —

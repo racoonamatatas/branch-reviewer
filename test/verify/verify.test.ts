@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import type { Cluster, Finding, VerificationStatus } from '../../src/store/store.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RepoClient } from '../../src/github/github.js';
+import type { NewFinding } from '../../src/schema/schema.js';
+import { ReviewStore } from '../../src/store/store.js';
+import type { Cluster, Consolidation, Finding, NewRun, Run, VerificationStatus } from '../../src/store/store.js';
+import type { Target } from '../../src/types/target.js';
 import { clusterId, findingId, runId } from '../../src/types/ids.js';
-import { buildVerificationPrompt, verificationQueue, verificationResponseSchema } from '../../src/verify/verify.js';
+import { buildVerificationPrompt, verificationQueue, verificationResponseSchema, verifyPending, verifyTarget } from '../../src/verify/verify.js';
+import type { VerifyResult } from '../../src/verify/verify.js';
 
 function finding(id: number, run: number, overrides: Partial<Finding> = {}): Finding
 {
@@ -181,6 +186,206 @@ describe('verificationQueue', () =>
 
         // Assert
         expect(selected.map(c => c.id)).toEqual([clusterId(1), clusterId(2)]);
+    });
+});
+
+// ── the orchestration layer, on a real store with injected runners ──────
+
+const fakeClient: RepoClient = {
+    compare: async () => [],
+    readFile: async () => '',
+    listFiles: async () => ({ paths: [], truncated: false }),
+};
+
+function newRun(head: string, findings: NewFinding[]): NewRun
+{
+    return {
+        owner: 'acme', repo: 'widgets', head, base: 'main', model: 'test',
+        status: 'submitted',
+        review: { summary: 'test run', findings },
+        turns: 1, costUsd: 0,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    };
+}
+
+const someFinding = { file: 'src/a.ts', severity: 'warning' as const, title: 'claim', detail: 'evidence' };
+
+function verified(verdict: 'confirmed' | 'refuted' | 'undetermined', costUsd = 0.5): VerifyResult
+{
+    return {
+        status: 'verified',
+        response: { verdict, rationale: 'because', confidence: 'sure' },
+        stats: { turns: 3, costUsd, usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } },
+    };
+}
+
+let store: ReviewStore;
+
+beforeEach(() =>
+{
+    store = new ReviewStore(':memory:');
+});
+
+afterEach(() =>
+{
+    store.close();
+});
+
+// A consolidation over the given runs, one singleton cluster per finding —
+// built directly on the store so no judge is involved.
+function savedIdentityConsolidation(runIds: Parameters<ReviewStore['getFindings']>[0][]): Consolidation
+{
+    const findings = runIds.flatMap(id => store.getFindings(id));
+    const id = store.saveConsolidation({
+        owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+        runIds,
+        clusters: findings.map(f => ({ memberIds: [f.id], representativeId: f.id, severity: f.severity, occurrence: 1 })),
+    });
+    return store.getConsolidation(id)!;
+}
+
+describe('verifyPending', () =>
+{
+    it('should record each verdict as it lands and continue past failures', async () =>
+    {
+        // Arrange: three pending singletons; the runner confirms the first,
+        // aborts on the second, throws on the third.
+        const run = store.saveRun(newRun('feature-x', [
+            { ...someFinding, title: 'first' },
+            { ...someFinding, title: 'second' },
+            { ...someFinding, title: 'third' },
+        ]));
+        const consolidation = savedIdentityConsolidation([run]);
+        let call = 0;
+        const runner = async (): Promise<VerifyResult> =>
+        {
+            call++;
+            if (call === 1)
+            {
+                return verified('confirmed', 0.5);
+            }
+            if (call === 2)
+            {
+                return {
+                    status: 'aborted', reason: 'error_max_turns',
+                    stats: { turns: 24, costUsd: 0.3, usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } },
+                };
+            }
+            throw new Error('GitHub 502');
+        };
+
+        // Act
+        const summary = await verifyPending(store, fakeClient, consolidation, { runner });
+
+        // Assert: the confirmed verdict is durable, the failures stay pending
+        // for a later re-run, and the aborted attempt's cost still counts.
+        expect(summary).toEqual({ attempted: 3, verified: 1, failures: 2, costUsd: 0.8 });
+        const reread = store.getConsolidation(consolidation.id)!;
+        expect(reread.clusters.map(c => c.verificationStatus)).toEqual(['confirmed', 'pending', 'pending']);
+    });
+
+    it('should verify nothing when every cluster is settled and reverify is off', async () =>
+    {
+        // Arrange
+        const run = store.saveRun(newRun('feature-x', [someFinding]));
+        const consolidation = savedIdentityConsolidation([run]);
+        store.saveVerification({
+            source: 'agent', clusterId: consolidation.clusters[0]!.id,
+            verdict: 'confirmed', rationale: 'done', confidence: 'high', costUsd: 0.2,
+        });
+        const runner = vi.fn();
+
+        // Act
+        const summary = await verifyPending(store, fakeClient, store.getConsolidation(consolidation.id)!, { runner });
+
+        // Assert
+        expect(summary.attempted).toBe(0);
+        expect(runner).not.toHaveBeenCalled();
+    });
+});
+
+describe('verifyTarget', () =>
+{
+    const target = { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' };
+
+    it('should throw on a target with no submitted runs: such a job is a caller mistake', async () =>
+    {
+        // Act + Assert
+        await expect(verifyTarget(store, fakeClient, target)).rejects.toThrow('No submitted runs');
+    });
+
+    it('should succeed vacuously when the runs have no findings, consolidating nothing', async () =>
+    {
+        // Arrange
+        store.saveRun(newRun('feature-x', []));
+
+        // Act
+        const result = await verifyTarget(store, fakeClient, target);
+
+        // Assert: nothing existed to consolidate, so nothing was saved and
+        // nothing was billed.
+        expect(result.consolidationId).toBeUndefined();
+        expect(result.summary).toEqual({ attempted: 0, verified: 0, failures: 0, costUsd: 0 });
+        expect(store.listConsolidations()).toEqual([]);
+    });
+
+    it('should reuse a consolidation that covers exactly the submitted runs: no judge call to re-buy', async () =>
+    {
+        // Arrange: the gate this test exists for — NOTES #134.
+        const runA = store.saveRun(newRun('feature-x', [someFinding]));
+        const runB = store.saveRun(newRun('feature-x', [{ ...someFinding, file: 'src/b.ts' }]));
+        const existing = savedIdentityConsolidation([runA, runB]);
+        const consolidate = vi.fn(async (): Promise<Consolidation | undefined> => undefined);
+        const runner = async (): Promise<VerifyResult> => verified('refuted');
+
+        // Act
+        const result = await verifyTarget(store, fakeClient, target, { consolidate, runner });
+
+        // Assert
+        expect(consolidate).not.toHaveBeenCalled();
+        expect(result.consolidationId).toBe(existing.id);
+        expect(result.summary.verified).toBe(2);
+    });
+
+    it('should re-consolidate when a newer run is not covered by the latest consolidation', async () =>
+    {
+        // Arrange
+        const runA = store.saveRun(newRun('feature-x', [someFinding]));
+        savedIdentityConsolidation([runA]);
+        const runB = store.saveRun(newRun('feature-x', [{ ...someFinding, file: 'src/b.ts' }]));
+        const consolidate = vi.fn(async (_store: ReviewStore, _target: Target, runs: Run[]) =>
+            savedIdentityConsolidation(runs.map(r => r.id)));
+        const runner = async (): Promise<VerifyResult> => verified('confirmed');
+
+        // Act
+        const result = await verifyTarget(store, fakeClient, target, { consolidate, runner });
+
+        // Assert: consolidation was re-bought over both runs, then verified.
+        expect(consolidate).toHaveBeenCalledTimes(1);
+        expect(consolidate.mock.calls[0]![2].map(r => r.id)).toEqual([runA, runB]);
+        expect(result.consolidationId).toBeDefined();
+        expect(result.summary.attempted).toBe(2);
+    });
+
+    it('should not mistake a different-base consolidation of the same head for coverage', async () =>
+    {
+        // Arrange: same head consolidated against another base — the quad
+        // filter must not reuse it.
+        const runA = store.saveRun(newRun('feature-x', [someFinding]));
+        const otherBase = store.saveRun({ ...newRun('feature-x', [someFinding]), base: 'release/2.0' });
+        store.saveConsolidation({
+            owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'release/2.0',
+            runIds: [otherBase],
+            clusters: store.getFindings(otherBase).map(f => ({ memberIds: [f.id], representativeId: f.id, severity: f.severity, occurrence: 1 })),
+        });
+        const consolidate = vi.fn(async (): Promise<Consolidation | undefined> => savedIdentityConsolidation([runA]));
+        const runner = async (): Promise<VerifyResult> => verified('confirmed');
+
+        // Act
+        await verifyTarget(store, fakeClient, target, { consolidate, runner });
+
+        // Assert
+        expect(consolidate).toHaveBeenCalledTimes(1);
     });
 });
 

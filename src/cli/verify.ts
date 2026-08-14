@@ -9,6 +9,7 @@ import { verifyModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { consolidationId } from '../types/ids.js';
 import { verifyPending } from '../verify/verify.js';
+import { requirePositiveInt, runMain } from './main.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run verify -- <consolidation-id> [--max-turns N] [--reverify]';
@@ -24,12 +25,7 @@ async function main(): Promise<number>
         const arg = args[i]!;
         if (arg === '--max-turns')
         {
-            const value = args[++i];
-            if (value === undefined)
-            {
-                throw new Error(`--max-turns needs a value.\n${USAGE}`);
-            }
-            maxTurns = Number(value);
+            maxTurns = requirePositiveInt(args[++i], arg, USAGE);
         }
         else if (arg === '--reverify')
         {
@@ -88,14 +84,4 @@ async function main(): Promise<number>
     }
 }
 
-main().then(
-    (code) =>
-    {
-        process.exitCode = code;
-    },
-    (err: unknown) =>
-    {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exitCode = 1;
-    },
-);
+runMain(main);

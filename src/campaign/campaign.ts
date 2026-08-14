@@ -16,6 +16,7 @@ import { runReview } from '../review/review.js';
 import { ReviewStore } from '../store/store.js';
 import type { Consolidation } from '../store/store.js';
 import type { ConsolidationId, RunId } from '../types/ids.js';
+import type { Target } from '../types/target.js';
 import { verifyPending } from '../verify/verify.js';
 import type { VerifyPendingOptions, VerifyPendingSummary } from '../verify/verify.js';
 
@@ -23,12 +24,14 @@ import type { VerifyPendingOptions, VerifyPendingSummary } from '../verify/verif
 // rest of the run cap on it is waste, not diligence.
 const ABORT_TOLERANCE = 2;
 
-export interface CampaignTarget
+// The stage runners, injectable so the loop that decides when to stop
+// burning credit is testable without burning any — the same seam WorkerDeps
+// gives the job runners. Production callers omit them.
+export interface CampaignRunners
 {
-    owner: string;
-    repo: string;
-    head: string;
-    base: string;
+    review?: typeof runReview;
+    consolidate?: typeof consolidateRuns;
+    verifyPending?: typeof verifyPending;
 }
 
 export interface CampaignOptions
@@ -51,6 +54,7 @@ export interface CampaignOptions
     // consolidation is valid but degenerate (occurrence 1 everywhere).
     onJudgeDegraded?: (violation: string) => void;
     verifyReporting?: VerifyPendingOptions;
+    runners?: CampaignRunners;
 }
 
 export interface RoundOutcome
@@ -86,10 +90,12 @@ export interface CampaignResult
 export async function runCampaign(
     store: ReviewStore,
     client: RepoClient,
-    target: CampaignTarget,
+    target: Target,
     opts: CampaignOptions,
 ): Promise<CampaignResult>
 {
+    const review = opts.runners?.review ?? runReview;
+    const verify = opts.runners?.verifyPending ?? verifyPending;
     const reviewTarget = { base: target.base, head: target.head };
     const rounds: RoundOutcome[] = [];
     let reviewCostUsd = 0;
@@ -123,7 +129,7 @@ export async function runCampaign(
         const outcome: RoundOutcome = { round, findings: 0, turns: 0, costUsd: 0, novelClusters: 0 };
         try
         {
-            const result = await runReview(client, reviewTarget, {
+            const result = await review(client, reviewTarget, {
                 model: opts.model,
                 ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
                 ...(opts.onReviewProgress !== undefined ? { onProgress: opts.onReviewProgress } : {}),
@@ -221,8 +227,9 @@ export async function runCampaign(
 
     if (opts.verify && latest !== undefined)
     {
-        const consolidation = store.getConsolidation(latest.id)!;
-        campaign.verification = await verifyPending(store, client, consolidation, {
+        // `latest` is already the read-back entity consolidateRuns returned —
+        // fresh rows, inherited statuses and all. No re-read.
+        campaign.verification = await verify(store, client, latest, {
             model: opts.verifyModel ?? opts.model,
             ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
             ...opts.verifyReporting,
@@ -246,7 +253,7 @@ function verifiableClusters(consolidation: Consolidation): Consolidation['cluste
 // therefore coverage, only mean something to the loop across runs.
 async function consolidateTarget(
     store: ReviewStore,
-    target: CampaignTarget,
+    target: Target,
     opts: CampaignOptions,
 ): Promise<Consolidation | undefined>
 {
@@ -255,7 +262,8 @@ async function consolidateTarget(
     {
         return undefined;
     }
-    return consolidateRuns(store, target, runs, {
+    const consolidate = opts.runners?.consolidate ?? consolidateRuns;
+    return consolidate(store, target, runs, {
         ...(opts.judgeModel !== undefined ? { model: opts.judgeModel } : {}),
         ...(opts.onJudgeDegraded !== undefined ? { onDegraded: opts.onJudgeDegraded } : {}),
     });

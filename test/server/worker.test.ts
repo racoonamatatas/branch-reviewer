@@ -30,7 +30,7 @@ class FakeRepoClient implements RepoClient
 function stats(): ReviewRunStats
 {
     const usage = { inputTokens: 1000, outputTokens: 500, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
-    return { turns: 30, costUsd: 2.5, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 };
+    return { turns: 30, costUsd: 2.5, usage, perModel: {}, turnUsage: [], compactions: 0 };
 }
 
 function submitted(): ReviewResult
@@ -460,7 +460,7 @@ describe('verify jobs', () =>
 
         // Act
         await worker({
-            verify: async () => ({ consolidationId: cid, reused: false, summary: { attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
+            verify: async () => ({ consolidationId: cid, summary: { attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
         }).notify();
 
         // Assert

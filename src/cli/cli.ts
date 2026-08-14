@@ -6,6 +6,7 @@ import { runReview } from '../review/review.js';
 import type { ReviewResult } from '../review/review.js';
 import { reviewModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
+import { requirePositiveInt, requireValue, runMain } from './main.js';
 import { printReview, printStats } from './render.js';
 
 const USAGE = 'Usage: npm run review -- <owner>/<repo> <branch> [--base main] [--max-turns N] [--verbose] [--no-save]';
@@ -34,11 +35,11 @@ function parseArgs(argv: string[]): CliArgs
         const arg = argv[i]!;
         if (arg === '--base')
         {
-            base = requireValue(argv[++i], arg);
+            base = requireValue(argv[++i], arg, USAGE);
         }
         else if (arg === '--max-turns')
         {
-            maxTurns = Number(requireValue(argv[++i], arg));
+            maxTurns = requirePositiveInt(argv[++i], arg, USAGE);
         }
         else if (arg === '--verbose')
         {
@@ -61,15 +62,6 @@ function parseArgs(argv: string[]): CliArgs
         throw new Error(USAGE);
     }
     return { owner, repo, head, base, maxTurns, verbose, save };
-}
-
-function requireValue(value: string | undefined, flag: string): string
-{
-    if (value === undefined)
-    {
-        throw new Error(`${flag} needs a value.\n${USAGE}`);
-    }
-    return value;
 }
 
 // Persistence is observational, like the accounting: a failed save warns
@@ -135,14 +127,4 @@ async function main(): Promise<number>
     return result.review.findings.some(f => f.severity === 'critical') ? 1 : 0;
 }
 
-main().then(
-    (code) =>
-    {
-        process.exitCode = code;
-    },
-    (err: unknown) =>
-    {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exitCode = 1;
-    },
-);
+runMain(main);

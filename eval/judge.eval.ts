@@ -6,6 +6,7 @@
 // prompt" and "we think we improved the prompt".
 
 import { readFileSync } from 'node:fs';
+import { runMain } from '../src/cli/main.js';
 import { runClustering } from '../src/consolidate/consolidate.js';
 import type { Finding } from '../src/store/store.js';
 import { findingId, runId } from '../src/types/ids.js';
@@ -84,14 +85,4 @@ async function main(): Promise<number>
     return 1;
 }
 
-main().then(
-    (code) =>
-    {
-        process.exitCode = code;
-    },
-    (err: unknown) =>
-    {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exitCode = 1;
-    },
-);
+runMain(main);

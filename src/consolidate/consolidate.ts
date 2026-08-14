@@ -7,8 +7,8 @@
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { assertSubscriptionCredit, throwIfErrorResult } from '../review/review.js';
 import { judgeModel } from '../sdk/models.js';
+import { assertSubscriptionCredit, throwIfErrorResult } from '../sdk/sdk.js';
 import type { Severity } from '../schema/schema.js';
 import type { Finding } from '../store/store.js';
 import { findingId, toTypedId } from '../types/ids.js';

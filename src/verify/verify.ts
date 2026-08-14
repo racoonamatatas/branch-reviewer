@@ -14,16 +14,16 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
-import type { ConsolidationTarget } from '../consolidate/persist.js';
 import type { RepoClient } from '../github/github.js';
-import { assertSubscriptionCredit, previewArgs, throwIfErrorResult } from '../review/review.js';
 import { verifyModel } from '../sdk/models.js';
+import { assertSubscriptionCredit, previewArgs, rethrowUnlessResultExplains, requireResult } from '../sdk/sdk.js';
 import { ReviewStore } from '../store/store.js';
 import type { Cluster, Consolidation } from '../store/store.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
 import type { ConsolidationId } from '../types/ids.js';
-import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
+import type { Target } from '../types/target.js';
+import { fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 
 // One finding, not a whole branch — but the instruction list asks for the
@@ -154,15 +154,13 @@ export async function verifyCluster(
         },
     });
 
-    const accumulator = new UsageAccumulator();
-    let result: SDKResultMessage | undefined;
+    let seen: SDKResultMessage | undefined;
     try
     {
         for await (const message of stream)
         {
             if (message.type === 'assistant')
             {
-                accumulator.record(message.message.id, message.message.usage);
                 for (const block of message.message.content)
                 {
                     if (block.type === 'tool_use')
@@ -173,32 +171,15 @@ export async function verifyCluster(
             }
             else if (message.type === 'result')
             {
-                result = message;
+                seen = message;
             }
         }
     }
     catch (error)
     {
-        // After an error result (e.g. max turns) the SDK errors the stream —
-        // but only after yielding the result message, which carries the abort
-        // reason and stats. Keep it; rethrow only if we never saw one. An
-        // is_error 'success' result (unauthenticated) also errors the stream
-        // — prefer our translation of the result over the raw stream error.
-        if (result !== undefined)
-        {
-            throwIfErrorResult(result);
-        }
-        if (result === undefined || result.subtype === 'success')
-        {
-            throw error;
-        }
+        rethrowUnlessResultExplains(seen, error);
     }
-
-    if (result === undefined)
-    {
-        throw new Error('The SDK stream ended without a result message.');
-    }
-    throwIfErrorResult(result);
+    const result = requireResult(seen);
 
     const stats: VerificationStats = {
         turns: result.num_turns,
@@ -224,6 +205,10 @@ export async function verifyCluster(
 export interface VerifyPendingOptions extends VerifyRunOptions
 {
     reverify?: boolean;
+    // The per-cluster runner, injectable so the record-and-continue loop is
+    // testable without burning credit — the same seam WorkerDeps gives the
+    // job runners. Production callers omit it.
+    runner?: typeof verifyCluster;
     onCluster?: (cluster: Cluster) => void;
     onVerdict?: (cluster: Cluster, response: VerificationResponse, stats: VerificationStats) => void;
     onFailure?: (cluster: Cluster, reason: string) => void;
@@ -251,13 +236,14 @@ export async function verifyPending(
     const target = { base: consolidation.base, head: consolidation.head };
     const totalRuns = consolidation.runIds.length;
 
+    const run = opts.runner ?? verifyCluster;
     const summary: VerifyPendingSummary = { attempted: pending.length, verified: 0, failures: 0, costUsd: 0 };
     for (const cluster of pending)
     {
         opts.onCluster?.(cluster);
         try
         {
-            const result = await verifyCluster(client, target, cluster, totalRuns, opts);
+            const result = await run(client, target, cluster, totalRuns, opts);
             summary.costUsd += result.stats.costUsd;
 
             if (result.status === 'aborted')
@@ -287,6 +273,11 @@ export interface VerifyTargetOptions extends VerifyRunOptions
     // For the consolidate-if-needed step; unset, the judge falls to its own
     // default rather than inheriting the verifier's model.
     judgeModel?: string;
+    // Injectable stages: `consolidate` guards the one paid judge call this
+    // gate exists to avoid, `runner` is the per-cluster verifier. Testable
+    // without credit; production callers omit both.
+    consolidate?: typeof consolidateRuns;
+    runner?: typeof verifyCluster;
     onEvent?: (event: string) => void;
 }
 
@@ -295,9 +286,6 @@ export interface VerifyTargetResult
     // Absent only when the target had no findings at all — nothing existed
     // to consolidate, let alone verify.
     consolidationId?: ConsolidationId;
-    // True when the latest consolidation already covered every submitted run
-    // and was reused instead of paying for a fresh judge call.
-    reused: boolean;
     summary: VerifyPendingSummary;
 }
 
@@ -311,7 +299,7 @@ export interface VerifyTargetResult
 export async function verifyTarget(
     store: ReviewStore,
     client: RepoClient,
-    target: ConsolidationTarget,
+    target: Target,
     opts: VerifyTargetOptions = {},
 ): Promise<VerifyTargetResult>
 {
@@ -339,7 +327,8 @@ export async function verifyTarget(
     else
     {
         opts.onEvent?.(`consolidating ${runs.length} run(s)`);
-        consolidation = await consolidateRuns(store, target, runs, {
+        const consolidate = opts.consolidate ?? consolidateRuns;
+        consolidation = await consolidate(store, target, runs, {
             ...(opts.judgeModel !== undefined ? { model: opts.judgeModel } : {}),
             onDegraded: violation => opts.onEvent?.(
                 `clustering degraded (${violation}) — proceeding with one cluster per finding`),
@@ -352,17 +341,18 @@ export async function verifyTarget(
     if (consolidation === undefined)
     {
         opts.onEvent?.('no findings on any submitted run — nothing to verify');
-        return { reused: false, summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+        return { summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
     }
 
     const summary = await verifyPending(store, client, consolidation, {
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
         ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         onCluster: cluster => opts.onEvent?.(`verifying cluster #${cluster.id}: ${cluster.representative.title}`),
         onVerdict: (cluster, response, stats) =>
             opts.onEvent?.(`cluster #${cluster.id}: ${response.verdict} ($${stats.costUsd.toFixed(2)})`),
         onFailure: (cluster, reason) => opts.onEvent?.(`cluster #${cluster.id} failed: ${reason}`),
     });
-    return { consolidationId: consolidation.id, reused: covered, summary };
+    return { consolidationId: consolidation.id, summary };
 }

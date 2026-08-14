@@ -3,11 +3,13 @@
 // default for that reason — a campaign spends real credit per round.
 
 import { campaignCost, runCampaign } from '../campaign/campaign.js';
-import type { CampaignResult, CampaignTarget } from '../campaign/campaign.js';
+import type { CampaignResult } from '../campaign/campaign.js';
+import type { Target } from '../types/target.js';
 import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
 import { judgeModel, reviewModel, verifyModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
+import { requirePositiveInt, requireValue, runMain } from './main.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
@@ -15,7 +17,7 @@ const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
 
 const DEFAULT_MAX_RUNS = 3;
 
-interface CampaignArgs extends CampaignTarget
+interface CampaignArgs extends Target
 {
     maxRuns: number;
     patience?: number;
@@ -39,19 +41,19 @@ function parseArgs(argv: string[]): CampaignArgs
         const arg = argv[i]!;
         if (arg === '--base')
         {
-            base = requireValue(argv[++i], arg);
+            base = requireValue(argv[++i], arg, USAGE);
         }
         else if (arg === '--max-runs')
         {
-            maxRuns = Number(requireValue(argv[++i], arg));
+            maxRuns = requirePositiveInt(argv[++i], arg, USAGE);
         }
         else if (arg === '--patience')
         {
-            patience = Number(requireValue(argv[++i], arg));
+            patience = requirePositiveInt(argv[++i], arg, USAGE);
         }
         else if (arg === '--max-turns')
         {
-            maxTurns = Number(requireValue(argv[++i], arg));
+            maxTurns = requirePositiveInt(argv[++i], arg, USAGE);
         }
         else if (arg === '--no-verify')
         {
@@ -73,29 +75,11 @@ function parseArgs(argv: string[]): CampaignArgs
     {
         throw new Error(USAGE);
     }
-    if (!Number.isInteger(maxRuns) || maxRuns < 1)
-    {
-        throw new Error(`--max-runs must be a positive integer.\n${USAGE}`);
-    }
-    if (patience !== undefined && (!Number.isInteger(patience) || patience < 1))
-    {
-        throw new Error(`--patience must be a positive integer.\n${USAGE}`);
-    }
-
     return {
         owner, repo, head, base, maxRuns, verify, reverify,
         ...(patience !== undefined ? { patience } : {}),
         ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
-}
-
-function requireValue(value: string | undefined, flag: string): string
-{
-    if (value === undefined)
-    {
-        throw new Error(`${flag} needs a value.\n${USAGE}`);
-    }
-    return value;
 }
 
 // The estimate is labeled as a ceiling, not a measurement: Chao1 assumes
@@ -215,14 +199,4 @@ async function main(): Promise<number>
     }
 }
 
-main().then(
-    (code) =>
-    {
-        process.exitCode = code;
-    },
-    (err: unknown) =>
-    {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exitCode = 1;
-    },
-);
+runMain(main);

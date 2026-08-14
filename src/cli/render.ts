@@ -5,7 +5,6 @@
 import type { ReviewRunStats } from '../review/review.js';
 import type { Review, Severity } from '../schema/schema.js';
 import type { Cluster, Consolidation, Verdict } from '../store/store.js';
-import { diffUsage, isZeroUsage } from '../usage/usage.js';
 import type { TokenUsage } from '../usage/usage.js';
 import type { VerificationResponse, VerificationStats } from '../verify/verify.js';
 
@@ -45,15 +44,6 @@ export function printStats(stats: ReviewRunStats, verbose: boolean): void
     if (stats.compactions > 0)
     {
         console.log(`  ${stats.compactions} auto-compaction(s) during the run — context was rewritten mid-review`);
-    }
-
-    // Observational reconciliation: our streamed sum vs the SDK's totals.
-    // A delta is information about what the SDK counts that the stream does
-    // not show — it never affects the review or the exit code.
-    const delta = diffUsage(stats.usage, stats.streamed);
-    if (!isZeroUsage(delta))
-    {
-        console.log(`  warning: SDK totals differ from streamed sum by ${usageLine(delta)}`);
     }
 
     if (verbose)

@@ -6,6 +6,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { ModelUsage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { RepoClient } from '../github/github.js';
 import { reviewModel } from '../sdk/models.js';
+import { assertSubscriptionCredit, previewArgs, rethrowUnlessResultExplains, requireResult } from '../sdk/sdk.js';
 import { reviewJsonSchema, reviewSchema } from '../schema/schema.js';
 import type { Review } from '../schema/schema.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
@@ -64,10 +65,9 @@ export interface ReviewRunStats
     // The SDK's own totals from the result message — the authoritative view.
     usage: TokenUsage;
     perModel: Record<string, ModelUsage>;
-    // Our observational sum over the streamed assistant messages, plus the
-    // per-turn detail behind it. May legitimately differ from `usage`;
-    // callers report the delta, never act on it.
-    streamed: TokenUsage;
+    // Per-turn detail streamed off the assistant messages, deduped by
+    // message id (parallel tool calls share one). Observational: the
+    // --verbose table, never a gate.
     turnUsage: TurnUsage[];
     // Auto-compactions the SDK performed mid-run. Observational, like the
     // rest of this: a run that compacted has had its context rewritten, which
@@ -81,43 +81,6 @@ export interface ReviewRunStats
 export type ReviewResult =
     | { status: 'submitted'; review: Review; filesChanged: number; stats: ReviewRunStats }
     | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats };
-
-// Which credential wins when both an API key and a subscription login are
-// present is undocumented; refuse the ambiguous state so a run can never
-// silently bill pay-as-you-go. ANTHROPIC_AUTH_TOKEN sits in the same SDK
-// credential list (a gateway/proxy billing path — another way to silently
-// not run on subscription) and is refused for the same reason.
-// CLAUDE_CODE_OAUTH_TOKEN is the one deliberate exception: it is minted by
-// `claude setup-token` against the subscription itself, so headless runs
-// stay on subscription credit. Shared by every query()-calling module.
-export function assertSubscriptionCredit(): void
-{
-    for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'])
-    {
-        if (process.env[name] !== undefined && process.env[name] !== '')
-        {
-            throw new Error(`${name} is set. This reviewer runs on subscription credit only — unset it to continue.`);
-        }
-    }
-}
-
-// An unauthenticated run surfaces as a zero-cost result with subtype
-// 'success' but is_error set (observed on SDK 0.3.222: "Not logged in ·
-// Please run /login") — the success/error split in `subtype` does not cover
-// it, and left alone it dies later as an opaque Zod parse of an absent
-// structured_output. Translate it here; the SDK's own advice (/login)
-// presumes an interactive terminal, so point headless machines at the token.
-export function throwIfErrorResult(result: SDKResultMessage): void
-{
-    if (result.subtype !== 'success' || !result.is_error)
-    {
-        return;
-    }
-    const headless = result.result.includes('Not logged in') && !process.env.CLAUDE_CODE_OAUTH_TOKEN
-        ? ' On a headless machine: mint a token with `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN.'
-        : '';
-    throw new Error(`The run failed without completing: ${result.result}.${headless}`);
-}
 
 export async function runReview(client: RepoClient, target: ReviewTarget, opts: ReviewRunOptions = {}): Promise<ReviewResult>
 {
@@ -139,7 +102,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
             status: 'aborted',
             reason: 'empty-diff',
             filesChanged,
-            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, streamed: zero, turnUsage: [], compactions: 0 },
+            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, turnUsage: [], compactions: 0 },
         };
     }
 
@@ -160,7 +123,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
 
     const accumulator = new UsageAccumulator();
     let compactions = 0;
-    let result: SDKResultMessage | undefined;
+    let seen: SDKResultMessage | undefined;
     try
     {
         for await (const message of stream)
@@ -184,40 +147,21 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
             }
             else if (message.type === 'result')
             {
-                result = message;
+                seen = message;
             }
         }
     }
     catch (error)
     {
-        // After an error result (e.g. max turns) the CLI exits non-zero and
-        // the SDK errors the stream — but only after yielding the result
-        // message, which carries the abort reason and the run's stats. Keep
-        // it; rethrow only if we never saw one. An is_error 'success' result
-        // (unauthenticated) also errors the stream — prefer our translation
-        // of the result over the raw stream error.
-        if (result !== undefined)
-        {
-            throwIfErrorResult(result);
-        }
-        if (result === undefined || result.subtype === 'success')
-        {
-            throw error;
-        }
+        rethrowUnlessResultExplains(seen, error);
     }
-
-    if (result === undefined)
-    {
-        throw new Error('The SDK stream ended without a result message.');
-    }
-    throwIfErrorResult(result);
+    const result = requireResult(seen);
 
     const stats: ReviewRunStats = {
         turns: result.num_turns,
         costUsd: result.total_cost_usd,
         usage: fromWireUsage(result.usage),
         perModel: result.modelUsage,
-        streamed: accumulator.total(),
         turnUsage: accumulator.turns(),
         compactions,
     };
@@ -230,10 +174,4 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     // The harness already validated against reviewJsonSchema; this parse is
     // the type boundary between `unknown` and Review, not a re-check.
     return { status: 'submitted', review: reviewSchema.parse(result.structured_output), filesChanged, stats };
-}
-
-export function previewArgs(input: unknown): string
-{
-    const json = JSON.stringify(input) ?? '';
-    return json.length <= 80 ? json : json.slice(0, 77) + '...';
 }

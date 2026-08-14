@@ -3,6 +3,9 @@
     "version": "0.1.0",
     "private": true,
     "type": "module",
+    "engines": {
+        "node": ">=24"
+    },
     "scripts": {
         "review": "tsx --env-file-if-exists=.env src/cli/cli.ts",
         "history": "tsx src/cli/history.ts",

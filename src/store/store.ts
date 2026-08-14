@@ -303,7 +303,6 @@ export class ReviewStore
         // REFERENCES in the schema is decorative and an orphan row is found
         // at read time instead of refused at write time.
         this.db.exec('PRAGMA foreign_keys = ON');
-        this.migrateLegacyMergeTables();
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
         this.migrateRunFilesChanged();
@@ -354,21 +353,6 @@ export class ReviewStore
         if (!columns.some(c => c.name === 'files_changed'))
         {
             this.db.exec('ALTER TABLE runs ADD COLUMN files_changed INTEGER');
-        }
-    }
-
-    // Databases from before the terminology sweep carry a `merges` table and
-    // a clusters.merge_id column. Rename in place — the stored runs and
-    // consolidations are the eval seed data and must survive.
-    private migrateLegacyMergeTables(): void
-    {
-        const legacy = this.db.prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'merges'",
-        ).get();
-        if (legacy !== undefined)
-        {
-            this.db.exec('ALTER TABLE merges RENAME TO consolidations');
-            this.db.exec('ALTER TABLE clusters RENAME COLUMN merge_id TO consolidation_id');
         }
     }
 

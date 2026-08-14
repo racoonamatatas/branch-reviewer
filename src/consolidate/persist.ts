@@ -7,20 +7,13 @@
 import { distinctRuns, maxSeverity, runClustering } from './consolidate.js';
 import type { ClusteringOptions } from './consolidate.js';
 import type { Consolidation, Finding, ReviewStore, Run } from '../store/store.js';
-
-export interface ConsolidationTarget
-{
-    owner: string;
-    repo: string;
-    head: string;
-    base: string;
-}
+import type { Target } from '../types/target.js';
 
 // Every stored submitted run of this target, oldest first — the round order
 // a campaign would have produced. The quad filter (base included) is pushed
 // into the store: a campaign re-reads this on every round, and pulling the
 // whole runs table to filter in JS grew with the database, not the target.
-export function submittedRunsFor(store: ReviewStore, target: ConsolidationTarget): Run[]
+export function submittedRunsFor(store: ReviewStore, target: Target): Run[]
 {
     const runs: Run[] = [];
     for (const summary of store.listRuns(target))
@@ -42,7 +35,7 @@ export function submittedRunsFor(store: ReviewStore, target: ConsolidationTarget
 // there are no findings — a judge call over nothing is not a consolidation.
 export async function consolidateRuns(
     store: ReviewStore,
-    target: ConsolidationTarget,
+    target: Target,
     runs: Run[],
     opts: ClusteringOptions = {},
 ): Promise<Consolidation | undefined>

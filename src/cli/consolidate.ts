@@ -8,6 +8,7 @@ import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import type { Finding, Run } from '../store/store.js';
 import { consolidationId, runId } from '../types/ids.js';
 import type { ConsolidationId, RunId } from '../types/ids.js';
+import { runMain } from './main.js';
 import { printConsolidation } from './render.js';
 
 const USAGE = 'Usage: npm run consolidate -- <run-id> [<run-id> ...] | npm run consolidate | npm run consolidate -- --show <consolidation-id>';
@@ -137,14 +138,4 @@ async function consolidate(store: ReviewStore, runIds: RunId[]): Promise<number>
     return 0;
 }
 
-main().then(
-    (code) =>
-    {
-        process.exitCode = code;
-    },
-    (err: unknown) =>
-    {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exitCode = 1;
-    },
-);
+runMain(main);

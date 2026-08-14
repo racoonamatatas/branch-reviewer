@@ -55,17 +55,12 @@ export class EventLog
     // Everything after a cursor the client already holds; the whole ring for
     // a new client. seq stays monotonic across evictions, so a client that
     // fell behind sees a gap in the numbering, never a stale repeat. A cursor
-    // beyond latest() means the client is holding a previous process's
-    // numbering — it gets the whole ring again, and the overlap in seq tells
+    // beyond this ring's numbering means the client is holding a previous
+    // process's — it gets the whole ring again, and the overlap in seq tells
     // it to start over rather than append.
     since(after = 0): ActivityEvent[]
     {
         const effective = after > this.seq ? 0 : after;
         return this.buffer.filter(e => e.seq > effective);
-    }
-
-    latest(): number
-    {
-        return this.seq;
     }
 }

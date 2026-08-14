@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { coverageOf, novelClusters, shouldContinue } from '../../src/coverage/coverage.js';
+import { runId } from '../../src/types/ids.js';
 
 function clusters(...occurrences: number[]): Array<{ occurrence: number }>
 {
@@ -100,14 +101,14 @@ describe('novelClusters', () =>
     {
         // Arrange
         const clusters = [
-            { members: [{ runId: 5 }] },
-            { members: [{ runId: 1 }, { runId: 5 }] },
-            { members: [{ runId: 5 }, { runId: 5 }] },
-            { members: [{ runId: 1 }] },
+            { members: [{ runId: runId(5) }] },
+            { members: [{ runId: runId(1) }, { runId: runId(5) }] },
+            { members: [{ runId: runId(5) }, { runId: runId(5) }] },
+            { members: [{ runId: runId(1) }] },
         ];
 
         // Act
-        const novel = novelClusters(clusters, 5);
+        const novel = novelClusters(clusters, runId(5));
 
         // Assert
         expect(novel).toBe(2);
@@ -116,10 +117,10 @@ describe('novelClusters', () =>
     it('should count nothing when every cluster has an earlier witness', () =>
     {
         // Arrange
-        const clusters = [{ members: [{ runId: 1 }, { runId: 5 }] }, { members: [{ runId: 1 }] }];
+        const clusters = [{ members: [{ runId: runId(1) }, { runId: runId(5) }] }, { members: [{ runId: runId(1) }] }];
 
         // Act + Assert
-        expect(novelClusters(clusters, 5)).toBe(0);
+        expect(novelClusters(clusters, runId(5))).toBe(0);
     });
 });
 

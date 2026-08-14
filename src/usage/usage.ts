@@ -1,8 +1,11 @@
-// Cache-aware token accounting. The predecessor summed two fields the loop
-// already owned; here usage arrives on a stream the harness owns, in two
-// shapes (nullable per-message BetaUsage, non-nullable result totals), and
-// parallel tool calls share one message id — summing naively double-counts.
-// The accumulator is observational only: it never gates a review.
+// Cache-aware token accounting. Usage arrives on a stream the harness owns,
+// in two shapes (nullable per-message BetaUsage, non-nullable result totals),
+// and parallel tool calls share one message id — summing naively
+// double-counts, which is the one subtlety this module exists to hold. The
+// SDK result's totals are authoritative; the accumulator's per-turn view is
+// observational (the --verbose per-turn table) and never gates a review. An
+// earlier revision also reconciled the two sums and warned on a delta — a
+// warning its own comment said never to act on, so it went.
 
 // Structural subset satisfied by both BetaUsage (number | null) and the
 // result message's NonNullableUsage.
@@ -28,13 +31,6 @@ export interface TurnUsage
     usage: TokenUsage;
 }
 
-export const ZERO_USAGE: TokenUsage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0,
-};
-
 export function fromWireUsage(usage: WireUsage): TokenUsage
 {
     return {
@@ -43,34 +39,6 @@ export function fromWireUsage(usage: WireUsage): TokenUsage
         cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
         cacheCreationInputTokens: usage.cache_creation_input_tokens ?? 0,
     };
-}
-
-export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage
-{
-    return {
-        inputTokens: a.inputTokens + b.inputTokens,
-        outputTokens: a.outputTokens + b.outputTokens,
-        cacheReadInputTokens: a.cacheReadInputTokens + b.cacheReadInputTokens,
-        cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
-    };
-}
-
-export function diffUsage(a: TokenUsage, b: TokenUsage): TokenUsage
-{
-    return {
-        inputTokens: a.inputTokens - b.inputTokens,
-        outputTokens: a.outputTokens - b.outputTokens,
-        cacheReadInputTokens: a.cacheReadInputTokens - b.cacheReadInputTokens,
-        cacheCreationInputTokens: a.cacheCreationInputTokens - b.cacheCreationInputTokens,
-    };
-}
-
-export function isZeroUsage(usage: TokenUsage): boolean
-{
-    return usage.inputTokens === 0
-        && usage.outputTokens === 0
-        && usage.cacheReadInputTokens === 0
-        && usage.cacheCreationInputTokens === 0;
 }
 
 export class UsageAccumulator
@@ -82,16 +50,6 @@ export class UsageAccumulator
     record(messageId: string, usage: WireUsage): void
     {
         this.byMessageId.set(messageId, fromWireUsage(usage));
-    }
-
-    total(): TokenUsage
-    {
-        let sum = ZERO_USAGE;
-        for (const usage of this.byMessageId.values())
-        {
-            sum = addUsage(sum, usage);
-        }
-        return sum;
     }
 
     turns(): TurnUsage[]
