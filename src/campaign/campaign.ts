@@ -12,6 +12,7 @@ import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
 import { coverageOf, novelClusters, shouldContinue, verifiableClusters } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
+import { lensFor } from '../review/lenses.js';
 import { runReview } from '../review/review.js';
 import { ReviewStore } from '../store/store.js';
 import type { Consolidation } from '../store/store.js';
@@ -38,6 +39,18 @@ export interface CampaignOptions
 {
     maxRuns: number;
     model?: string;
+    // Diversity knobs. Chao1 assumes independent samples and identical
+    // rounds are anything but — same model, same prompt, same walk through
+    // the same files. Rotating a lens into each round's prompt (on by
+    // default: it redistributes attention, not budget) and cycling the
+    // review model (opt-in: it changes what bills) are how the campaign
+    // manufactures the independence the estimator wants, and cross-model
+    // agreement is a stronger confirmation signal than one model repeating
+    // itself. `models` cycles per round and overrides `model`; rotation
+    // forfeits cross-round cache sharing between different models, a cost
+    // accepted because cache-warm repetition is the correlation being fixed.
+    models?: string[];
+    rotateLenses?: boolean;
     // Role overrides; unset, the judge and verifier fall to their own
     // defaults (src/sdk/models.ts) rather than inheriting the reviewer's.
     judgeModel?: string;
@@ -46,7 +59,7 @@ export interface CampaignOptions
     patience?: number;
     verify: boolean;
     reverify?: boolean;
-    onRoundStart?: (round: number, of: number) => void;
+    onRoundStart?: (round: number, of: number, lens?: string, model?: string) => void;
     onReviewProgress?: (event: string) => void;
     onRun?: (outcome: RoundOutcome) => void;
     onBaseline?: (consolidationId: ConsolidationId, coverage: Coverage) => void;
@@ -61,6 +74,8 @@ export interface RoundOutcome
 {
     round: number;
     runId?: RunId;      // absent when the review threw before anything could be stored
+    lens?: string;      // the rotation's focus this round; absent = generalist
+    model?: string;     // resolved review model, when the caller chose one
     findings: number;
     turns: number;
     costUsd: number;
@@ -124,13 +139,26 @@ export async function runCampaign(
 
     for (let round = 1; round <= opts.maxRuns; round++)
     {
-        opts.onRoundStart?.(round, opts.maxRuns);
+        // The round's slice of the rotation. Lenses cycle unless switched
+        // off; models cycle only when a list was given. Both are functions
+        // of the round number alone, so an unusable round still consumes
+        // its slot — determinism over backfilling.
+        const lens = (opts.rotateLenses ?? true) ? lensFor(round) : undefined;
+        const model = opts.models !== undefined && opts.models.length > 0
+            ? opts.models[(round - 1) % opts.models.length]!
+            : opts.model;
+        opts.onRoundStart?.(round, opts.maxRuns, lens?.name, model);
 
-        const outcome: RoundOutcome = { round, findings: 0, turns: 0, costUsd: 0, novelClusters: 0 };
+        const outcome: RoundOutcome = {
+            round, findings: 0, turns: 0, costUsd: 0, novelClusters: 0,
+            ...(lens !== undefined ? { lens: lens.name } : {}),
+            ...(model !== undefined ? { model } : {}),
+        };
         try
         {
             const result = await review(client, reviewTarget, {
-                model: opts.model,
+                model,
+                ...(lens !== undefined ? { lens } : {}),
                 ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
                 ...(opts.onReviewProgress !== undefined ? { onProgress: opts.onReviewProgress } : {}),
             });
@@ -148,7 +176,8 @@ export async function runCampaign(
                 repo: target.repo,
                 head: target.head,
                 base: target.base,
-                model: opts.model ?? 'default',
+                model: model ?? 'default',
+                ...(lens !== undefined ? { lens: lens.name } : {}),
                 status: result.status === 'submitted' ? 'submitted' : 'aborted',
                 ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
                 turns: result.stats.turns,

@@ -33,6 +33,10 @@ export interface Run extends Identified<'Run'>, Created
     // How many files the branch diff touched. Absent on rows saved before
     // the column existed; 0 is the empty-diff tell (merged or stale head).
     filesChanged?: number;
+    // The campaign lens this run reviewed under (src/review/lenses.ts).
+    // Absent on generalist runs and on rows from before rotation existed —
+    // both honestly mean "no lens was asked for".
+    lens?: string;
 }
 
 export type NewRun = New<Run>;
@@ -187,7 +191,8 @@ CREATE TABLE IF NOT EXISTS runs (
     output_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     cache_creation_tokens INTEGER NOT NULL,
-    files_changed INTEGER
+    files_changed INTEGER,
+    lens TEXT
 );
 CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,6 +264,7 @@ interface RunRow
     cache_read_tokens: number;
     cache_creation_tokens: number;
     files_changed: number | null;
+    lens: string | null;
 }
 
 interface FindingRow
@@ -306,6 +312,7 @@ export class ReviewStore
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
         this.migrateRunFilesChanged();
+        this.migrateRunLens();
         this.migrateFindingConfidence();
         this.migrateClusterLapsedVerdict();
         this.migrateConsolidationCost();
@@ -353,6 +360,17 @@ export class ReviewStore
         if (!columns.some(c => c.name === 'files_changed'))
         {
             this.db.exec('ALTER TABLE runs ADD COLUMN files_changed INTEGER');
+        }
+    }
+
+    // Databases from before lens rotation lack the column; NULL is the same
+    // fact for old rows as for new generalist ones — no lens was asked for.
+    private migrateRunLens(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('runs') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'lens'))
+        {
+            this.db.exec('ALTER TABLE runs ADD COLUMN lens TEXT');
         }
     }
 
@@ -405,8 +423,8 @@ export class ReviewStore
             const result = this.db.prepare(
                 `INSERT INTO runs (created_at, owner, repo, head, base, model, status, reason, summary,
                                    turns, cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                                   files_changed)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                   files_changed, lens)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ).run(
                 new Date().toISOString(), run.owner, run.repo, run.head, run.base,
                 run.model, run.status, run.reason ?? null, run.review?.summary ?? null,
@@ -414,6 +432,7 @@ export class ReviewStore
                 run.usage.inputTokens, run.usage.outputTokens,
                 run.usage.cacheReadInputTokens, run.usage.cacheCreationInputTokens,
                 run.filesChanged ?? null,
+                run.lens ?? null,
             );
             const id = runId(Number(result.lastInsertRowid));
 
@@ -536,6 +555,7 @@ export class ReviewStore
             ...(row.reason !== null ? { reason: row.reason } : {}),
             ...(row.summary !== null ? { review: { summary: row.summary, findings } } : {}),
             ...(row.files_changed !== null ? { filesChanged: row.files_changed } : {}),
+            ...(row.lens !== null ? { lens: row.lens } : {}),
             turns: row.turns,
             costUsd: row.cost_usd,
             usage: {

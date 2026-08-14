@@ -7,13 +7,14 @@ import type { CampaignResult } from '../campaign/campaign.js';
 import type { Target } from '../types/target.js';
 import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
-import { judgeModel, reviewModel, verifyModel } from '../sdk/models.js';
+import { judgeModel, reviewModels, verifyModel } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { requirePositiveInt, requireValue, runMain } from './main.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
-    + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]';
+    + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]'
+    + ' [--models a,b] [--no-lenses]';
 
 const DEFAULT_MAX_RUNS = 3;
 
@@ -24,6 +25,8 @@ interface CampaignArgs extends Target
     maxTurns?: number;
     verify: boolean;
     reverify: boolean;
+    models?: string[];
+    lenses: boolean;
 }
 
 function parseArgs(argv: string[]): CampaignArgs
@@ -35,6 +38,8 @@ function parseArgs(argv: string[]): CampaignArgs
     let maxTurns: number | undefined;
     let verify = true;
     let reverify = false;
+    let models: string[] | undefined;
+    let lenses = true;
 
     for (let i = 0; i < argv.length; i++)
     {
@@ -54,6 +59,18 @@ function parseArgs(argv: string[]): CampaignArgs
         else if (arg === '--max-turns')
         {
             maxTurns = requirePositiveInt(argv[++i], arg, USAGE);
+        }
+        else if (arg === '--models')
+        {
+            models = requireValue(argv[++i], arg, USAGE).split(',').map(m => m.trim()).filter(m => m !== '');
+            if (models.length === 0)
+            {
+                throw new Error(USAGE);
+            }
+        }
+        else if (arg === '--no-lenses')
+        {
+            lenses = false;
         }
         else if (arg === '--no-verify')
         {
@@ -76,7 +93,8 @@ function parseArgs(argv: string[]): CampaignArgs
         throw new Error(USAGE);
     }
     return {
-        owner, repo, head, base, maxRuns, verify, reverify,
+        owner, repo, head, base, maxRuns, verify, reverify, lenses,
+        ...(models !== undefined ? { models } : {}),
         ...(patience !== undefined ? { patience } : {}),
         ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
@@ -118,19 +136,24 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
 async function main(): Promise<number>
 {
     const args = parseArgs(process.argv.slice(2));
-    const model = reviewModel();
+    // --models wins; otherwise REVIEW_MODELS (or the single reviewer model).
+    // One entry means every round bills the same model, exactly as before.
+    const models = args.models ?? reviewModels();
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);
 
     console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}"`);
-    console.log(`models: review ${model}, judge ${judgeModel()}, verify ${verifyModel()}`);
+    console.log(`models: review ${models.length > 1 ? `${models.join(' / ')} (rotating per round)` : models[0]}, `
+        + `judge ${judgeModel()}, verify ${verifyModel()}`);
     console.log(`up to ${args.maxRuns} run(s), stopping early after ${args.patience ?? 2} round(s) without a new finding`
+        + `${args.lenses ? '; lens rotates per round' : '; lenses off'}`
         + `${args.verify ? '; occurrence-1 findings verified at the end' : '; verification skipped'}\n`);
 
     try
     {
         const campaign = await runCampaign(store, github, args, {
-            model,
+            models,
+            rotateLenses: args.lenses,
             judgeModel: judgeModel(),
             verifyModel: verifyModel(),
             maxRuns: args.maxRuns,
@@ -146,9 +169,11 @@ async function main(): Promise<number>
             {
                 console.error(`  clustering degraded (${violation}) — one cluster per finding this round`);
             },
-            onRoundStart: (round, of) =>
+            onRoundStart: (round, of, lens, roundModel) =>
             {
-                console.log(`round ${round}/${of}: reviewing...`);
+                const focus = lens ?? 'generalist';
+                const withModel = models.length > 1 ? `, ${roundModel}` : '';
+                console.log(`round ${round}/${of}: reviewing (${focus}${withModel})...`);
             },
             onReviewProgress: (event) =>
             {

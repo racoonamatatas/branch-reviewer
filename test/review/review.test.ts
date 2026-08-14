@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RepoClient } from '../../src/github/github.js';
-import { runReview } from '../../src/review/review.js';
+import { LENSES } from '../../src/review/lenses.js';
+import { reviewPrompt, runReview } from '../../src/review/review.js';
 
 // runReview asserts subscription credit before anything else; isolate the
 // suite from the real shell env the same way the sdk tests do.
@@ -52,5 +53,33 @@ describe('runReview', () =>
         expect(result).toMatchObject({ status: 'aborted', reason: 'empty-diff', filesChanged: 0 });
         expect(result.stats.costUsd).toBe(0);
         expect(result.stats.turns).toBe(0);
+    });
+});
+
+describe('reviewPrompt', () =>
+{
+    const target = { base: 'main', head: 'feature/x' };
+
+    it('should name only the branches when no context or lens is given', () =>
+    {
+        // Act & Assert: byte-identical prompts are what lets campaign rounds
+        // share the prompt cache, so the bare shape must stay bare.
+        expect(reviewPrompt(target, {})).toBe('Review branch "feature/x" against "main".');
+    });
+
+    it('should append the lens with its full-scope reminder, after any context', () =>
+    {
+        // Arrange
+        const lens = LENSES[0]!;
+
+        // Act
+        const prompt = reviewPrompt(target, { context: 'Adds rate limiting', lens });
+
+        // Assert: the lens directs attention but must not narrow the
+        // recall-first contract — the reminder rides with every lens.
+        expect(prompt).toContain('What this change is meant to do: Adds rate limiting');
+        expect(prompt).toContain(`This run's lens — ${lens.name}: ${lens.instruction}`);
+        expect(prompt).toContain('every issue you find is still in scope');
+        expect(prompt.indexOf('meant to do')).toBeLessThan(prompt.indexOf('lens'));
     });
 });

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { campaignCost, clusterGrowth, runCampaign } from '../../src/campaign/campaign.js';
 import type { CampaignResult, RoundOutcome } from '../../src/campaign/campaign.js';
 import type { RepoClient } from '../../src/github/github.js';
-import type { ReviewResult } from '../../src/review/review.js';
+import { LENSES } from '../../src/review/lenses.js';
+import type { ReviewResult, ReviewRunOptions } from '../../src/review/review.js';
 import type { NewFinding } from '../../src/schema/schema.js';
 import { ReviewStore } from '../../src/store/store.js';
 import type { Consolidation, Run } from '../../src/store/store.js';
@@ -220,6 +221,63 @@ describe('runCampaign', () =>
         expect(campaign.judgeCostUsd).toBeCloseTo(0.25);
         expect(campaign.runIds).toHaveLength(2);
         expect(verify).toHaveBeenCalledTimes(1);
+    });
+
+    it('should rotate lens and model per round and record both on the stored run', async () =>
+    {
+        // Arrange: capture exactly what each round asks the reviewer for.
+        let n = 0;
+        const seen: ReviewRunOptions[] = [];
+        const review = async (_c: RepoClient, _t: unknown, reviewOpts: ReviewRunOptions = {}): Promise<ReviewResult> =>
+        {
+            seen.push(reviewOpts);
+            n++;
+            return submittedResult([finding(`round-${n}`)]);
+        };
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 3,
+            models: ['model-a', 'model-b'],
+            verify: false,
+            runners: { review, consolidate: identityConsolidate() },
+        });
+
+        // Assert: round 1 is the generalist baseline, later rounds take the
+        // next lens; models cycle independently on their own shorter list.
+        expect(seen.map(o => o.lens?.name)).toEqual([undefined, LENSES[0]?.name, LENSES[1]?.name]);
+        expect(seen.map(o => o.model)).toEqual(['model-a', 'model-b', 'model-a']);
+
+        // The run rows carry the same rotation — occurrence downstream can
+        // read cross-model agreement only if the model is recorded per run.
+        const stored = campaign.rounds.map(r => store.getRun(r.runId!)!);
+        expect(stored.map(r => r.model)).toEqual(['model-a', 'model-b', 'model-a']);
+        expect(stored.map(r => r.lens)).toEqual([undefined, LENSES[0]?.name, LENSES[1]?.name]);
+        expect(campaign.rounds.map(r => r.lens)).toEqual([undefined, LENSES[0]?.name, LENSES[1]?.name]);
+    });
+
+    it('should keep every round identical when lenses are off and one model is given', async () =>
+    {
+        // Arrange
+        const seen: ReviewRunOptions[] = [];
+        const review = async (_c: RepoClient, _t: unknown, reviewOpts: ReviewRunOptions = {}): Promise<ReviewResult> =>
+        {
+            seen.push(reviewOpts);
+            return submittedResult([]);
+        };
+
+        // Act
+        await runCampaign(store, fakeClient, target, {
+            maxRuns: 2,
+            model: 'model-a',
+            rotateLenses: false,
+            verify: false,
+            runners: { review, consolidate: identityConsolidate() },
+        });
+
+        // Assert: the pre-rotation behavior is still reachable, exactly.
+        expect(seen.map(o => o.lens)).toEqual([undefined, undefined]);
+        expect(seen.map(o => o.model)).toEqual(['model-a', 'model-a']);
     });
 });
 

@@ -14,6 +14,19 @@ export function reviewModel(): string
     return process.env.REVIEW_MODEL ?? DEFAULT_MODEL;
 }
 
+// The campaign's model-rotation roster: REVIEW_MODELS as a comma-separated
+// list, falling back to the single reviewer model. Rotation is opt-in by
+// construction — until the env names more than one model, the roster has one
+// entry and every round bills the model the user already chose.
+export function reviewModels(): string[]
+{
+    const roster = process.env.REVIEW_MODELS
+        ?.split(',')
+        .map(entry => entry.trim())
+        .filter(entry => entry !== '');
+    return roster !== undefined && roster.length > 0 ? roster : [reviewModel()];
+}
+
 export function judgeModel(): string
 {
     return process.env.JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL;

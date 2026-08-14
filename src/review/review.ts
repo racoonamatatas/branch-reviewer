@@ -5,6 +5,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { ModelUsage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { RepoClient } from '../github/github.js';
+import type { Lens } from './lenses.js';
 import { reviewModel } from '../sdk/models.js';
 import { assertSubscriptionCredit, previewArgs, rethrowUnlessResultExplains, requireResult } from '../sdk/sdk.js';
 import { reviewJsonSchema, reviewSchema } from '../schema/schema.js';
@@ -55,6 +56,11 @@ export interface ReviewRunOptions
     // most of what makes a review useful. Free text, caller-supplied: the
     // trigger knows the PR, the CLI usually does not.
     context?: string;
+    // A campaign round's focus (src/review/lenses.ts). Rides the user
+    // message, not the system prompt: the system prompt is the prefix every
+    // round shares in the prompt cache, and rotating text into it would fork
+    // that cache per lens for no gain.
+    lens?: Lens;
     onProgress?: (event: string) => void;
 }
 
@@ -82,6 +88,18 @@ export type ReviewResult =
     | { status: 'submitted'; review: Review; filesChanged: number; stats: ReviewRunStats }
     | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats };
 
+// Exported for its tests: the prompt is the one part of the paid call whose
+// assembly can be checked without spending anything.
+export function reviewPrompt(target: ReviewTarget, opts: ReviewRunOptions): string
+{
+    return `Review branch "${target.head}" against "${target.base}".`
+        + (opts.context !== undefined ? `\n\nWhat this change is meant to do: ${opts.context}` : '')
+        + (opts.lens !== undefined
+            ? `\n\nThis run's lens — ${opts.lens.name}: ${opts.lens.instruction}`
+                + ' The lens directs where you look first; every issue you find is still in scope.'
+            : '');
+}
+
 export async function runReview(client: RepoClient, target: ReviewTarget, opts: ReviewRunOptions = {}): Promise<ReviewResult>
 {
     assertSubscriptionCredit();
@@ -107,8 +125,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     }
 
     const stream = query({
-        prompt: `Review branch "${target.head}" against "${target.base}".`
-            + (opts.context !== undefined ? `\n\nWhat this change is meant to do: ${opts.context}` : ''),
+        prompt: reviewPrompt(target, opts),
         options: {
             systemPrompt: SYSTEM_PROMPT,
             model: opts.model ?? reviewModel(),

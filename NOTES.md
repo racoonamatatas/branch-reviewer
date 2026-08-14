@@ -16,6 +16,30 @@ blueprint-styled page (target sheet expands in place, route still carries
 the selection). **Slice 11 (mission-control operations) in progress** —
 see below. After that, per the roadmap: deploy.
 
+**Finishing pass (2026-08-14):** four slices shipped in one day — A
+(correctness: drain chain, judge-failure salvage, POST hardening), B (thesis
+fixes: recall-first prompt + finding confidence, list_files, symmetric
+verifier, lapsed verdicts, judge metering, per-role models), C (src/sdk/
+extraction, injectable stage runners, money-path tests, dead-weight
+deletion), D (README as the portfolio artifact). **Diversity sampling**
+landed next (same day): campaigns rotate a per-round reviewer lens
+(generalist → security → concurrency → config-and-deploy → tests, on by
+default, `--no-lenses` to disable; `src/review/lenses.ts`) and optionally
+cycle the review model per round (`--models a,b` or `REVIEW_MODELS`),
+converting Chao1's broken independence assumption into a designed ensemble —
+occurrence becomes readable as cross-model agreement. The lens rides the
+user prompt so the system prompt stays the shared cache prefix; lens and
+resolved model are recorded on the run (nullable `lens` column, resolved
+model never saved as 'default' when rotating). Round 1 is deliberately
+lens-free so the baseline stays comparable with stored runs; rotation is a
+function of round number alone (an aborted round consumes its slot). Model
+rotation forfeits cross-model cache sharing on purpose — cache-warm
+repetition is the correlation being fixed. Worker campaign jobs keep a
+single model (params carry one); a job-level roster is a later decision.
+Remaining, in order: graceful shutdown, `eval:judge --trials N`, README
+reframe (limitations → design boundaries + the correlated-sampling insight
+promoted into the thesis), visual pass, paid smoke campaign.
+
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
 and a per-target "blueprint" view shaped like the pipeline itself (review →

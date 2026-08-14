@@ -207,7 +207,8 @@ export class Worker
                         this.jobs.recordRun(job.id, outcome.runId);
                     }
                 },
-                onRoundStart: (round, of) => this.onEvent?.(job.id, `round ${round}/${of}`),
+                onRoundStart: (round, of, lens) =>
+                    this.onEvent?.(job.id, `round ${round}/${of}${lens !== undefined ? ` (${lens} lens)` : ''}`),
                 onJudgeDegraded: violation => this.onEvent?.(job.id, `clustering degraded: ${violation}`),
             },
         );

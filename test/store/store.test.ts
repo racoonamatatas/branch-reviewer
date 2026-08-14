@@ -122,6 +122,17 @@ describe('ReviewStore', () =>
         expect(findings[1]).not.toHaveProperty('confidence');
     });
 
+    it('should round-trip a run lens and keep it absent where no lens was asked for', () =>
+    {
+        // Arrange
+        const lensed = store.saveRun({ ...submittedRun, lens: 'security' });
+        const generalist = store.saveRun(submittedRun);
+
+        // Act & Assert
+        expect(store.getRun(lensed)?.lens).toBe('security');
+        expect(store.getRun(generalist)).not.toHaveProperty('lens');
+    });
+
     it('should keep optional finding fields absent, not null', () =>
     {
         // Arrange
