@@ -580,6 +580,23 @@ actions pending: stamp the slash-encoding cluster refuted in the dashboard
 process from today predates the day's last five commits; stopped cleanly
 at day's end).
 
+**Queued for the README (~20 min): a "When to use this" section.** The
+origin economics: a work PR took 6 review cycles with a single-pass
+precision-tuned bot before passing — incremental recall is what a sampler
+in denial looks like from the outside; this harness does the sampling
+deliberately (union in one cycle) so the author fixes once. Frame the
+anecdote as homage, not critique (the bot's owner encouraged this project).
+The unit is cost-per-merged-PR (cycles × context switches × calendar
+latency), not cost-per-pass. Name the three postures explicitly: trivial
+PR → no review; normal → one pass, findings labeled claims; high-risk →
+campaign + cross-model rotation + --verify-all, verified findings only.
+Claim calibrated *positive* confidence (everything handed over is verified
+or labeled), never absence-of-bugs — the coverage ceiling stays the honest
+cap. Cite the 1990s capture-recapture inspection literature (Eick, Wohlin,
+Briand) in the coverage section — multiple independent human reviewers,
+singleton/doubleton counts — so the estimator reads as grounded lineage,
+not novelty.
+
 **Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
 CLI: review job → auto-proposed held verify job → release → verdicts.
