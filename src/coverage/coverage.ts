@@ -29,6 +29,16 @@ export interface Coverage
     estimatedTotal: number;  // observed + undiscovered
 }
 
+// Coverage's own input rule, owned here instead of re-implemented by every
+// consumer: a refuted cluster is not a discovered finding, and counting it
+// would inflate both `observed` and the estimate of what remains unseen.
+// Verdicts inherit across consolidations by member set, so mid-campaign
+// refutations from earlier passes still apply wherever this is used.
+export function verifiableClusters<T extends { verificationStatus: string }>(clusters: T[]): T[]
+{
+    return clusters.filter(c => c.verificationStatus !== 'refuted');
+}
+
 export function coverageOf(clusters: Array<{ occurrence: number }>): Coverage
 {
     const observed = clusters.length;

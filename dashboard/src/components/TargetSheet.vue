@@ -14,6 +14,10 @@
 // A rev is a consolidation: clusters are one judge call's opinion, so the
 // picker switches whole partitions rather than pretending they compose.
 import { computed, ref, watch } from 'vue';
+// A value import from the server's pure coverage module — same standing as
+// the ids module: no node:* reachable, and it keeps the "novel" number here
+// computed by the exact code the campaign's stopping rule runs.
+import { novelClusters } from '@server/coverage/coverage';
 import type { Coverage } from '@server/coverage/coverage';
 import type { Severity } from '@server/schema/schema';
 import type { JobSummary } from '@server/server/jobs';
@@ -305,7 +309,7 @@ const hasOpenVerify = computed(() => targetJobs.value.some(
 const rounds = computed(() =>
     (consolidation.value?.runIds ?? []).map(id => ({
         runId: id,
-        novel: (consolidation.value?.clusters ?? []).filter(c => c.members.every(m => m.runId === id)).length,
+        novel: novelClusters(consolidation.value?.clusters ?? [], id),
     })));
 const reviewCostUsd = computed(() => revRuns.value.reduce((sum, r) => sum + r.costUsd, 0));
 const verifyCostUsd = computed(() =>

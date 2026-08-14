@@ -5,7 +5,7 @@
 // pass after a prompt edit is the difference between "we improved the
 // prompt" and "we think we improved the prompt".
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { runMain } from '../src/cli/main.js';
 import { runClustering } from '../src/consolidate/consolidate.js';
 import type { Finding } from '../src/store/store.js';
@@ -47,6 +47,14 @@ function pairs(groups: number[][]): Set<string>
 
 async function main(): Promise<number>
 {
+    // The fixture is gitignored (finding text contains repo internals), so a
+    // fresh clone has none — that is a setup state, not a crash.
+    if (!existsSync(FIXTURE_PATH))
+    {
+        console.error(`No golden fixture at ${FIXTURE_PATH}.`);
+        console.error('Freeze a human-verified consolidation first: npm run eval:freeze -- <consolidation-id>');
+        return 1;
+    }
     const fixture = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8')) as Fixture;
     console.log(fixture.description);
     console.log(`Clustering ${fixture.findings.length} findings...`);

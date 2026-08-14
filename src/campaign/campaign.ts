@@ -9,7 +9,7 @@
 // when to stop.
 
 import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
-import { coverageOf, novelClusters, shouldContinue } from '../coverage/coverage.js';
+import { coverageOf, novelClusters, shouldContinue, verifiableClusters } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
@@ -119,7 +119,7 @@ export async function runCampaign(
     if (latest !== undefined)
     {
         judgeCostUsd += latest.costUsd ?? 0;
-        opts.onBaseline?.(latest.id, coverageOf(verifiableClusters(latest)));
+        opts.onBaseline?.(latest.id, coverageOf(verifiableClusters(latest.clusters)));
     }
 
     for (let round = 1; round <= opts.maxRuns; round++)
@@ -199,7 +199,7 @@ export async function runCampaign(
                 latest = consolidation;
                 judgeCostUsd += consolidation.costUsd ?? 0;
                 outcome.consolidationId = consolidation.id;
-                outcome.coverage = coverageOf(verifiableClusters(consolidation));
+                outcome.coverage = coverageOf(verifiableClusters(consolidation.clusters));
                 outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
             }
         }
@@ -237,14 +237,6 @@ export async function runCampaign(
     }
 
     return campaign;
-}
-
-// Refuted clusters leave the estimator's input: a disproven claim is not a
-// discovered finding. Verdicts inherit across consolidations by member set,
-// so mid-campaign refutations from earlier passes still apply here.
-function verifiableClusters(consolidation: Consolidation): Consolidation['clusters']
-{
-    return consolidation.clusters.filter(c => c.verificationStatus !== 'refuted');
 }
 
 // Every stored submitted run of this target, re-clustered (the mechanics

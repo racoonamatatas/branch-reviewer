@@ -8,7 +8,7 @@
 import { createServer as createHttpServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import { coverageOf } from '../coverage/coverage.js';
+import { coverageOf, verifiableClusters } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { EventLog, PollStatus } from './events.js';
 import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
@@ -322,10 +322,8 @@ function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefin
 // Assembled per request: cluster counts are small and the store is
 // synchronous, so per-cluster verification lookups beat maintaining a
 // joined query. Coverage is recomputed rather than stored — it is a pure
-// function of the occurrence counts already in hand. Refuted clusters are
-// excluded from the estimator's input: a disproven claim is not a
-// discovered finding, and counting it inflates both observed and the
-// estimate of what remains unseen.
+// function of the occurrence counts already in hand, with the refuted
+// filter owned by the coverage module itself.
 function detailOf(store: ReviewStore, consolidation: Consolidation): { consolidation: ConsolidationDetail; coverage: Coverage }
 {
     return {
@@ -333,7 +331,7 @@ function detailOf(store: ReviewStore, consolidation: Consolidation): { consolida
             ...consolidation,
             clusters: consolidation.clusters.map(c => ({ ...c, verifications: store.getVerifications(c.id) })),
         },
-        coverage: coverageOf(consolidation.clusters.filter(c => c.verificationStatus !== 'refuted')),
+        coverage: coverageOf(verifiableClusters(consolidation.clusters)),
     };
 }
 
