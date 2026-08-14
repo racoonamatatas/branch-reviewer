@@ -51,9 +51,22 @@ pass rate; exit 0 only on N/N, sub-perfect is a signal to inspect), and the
 what motivated the rotation ensemble; "Known limitations" became "Design
 boundaries and next experiments", each with a trajectory; verifier eval
 stays a stated gap with the freeze-and-replay sketch over accumulated human
-verdicts; localhost/no-auth stays a decision). Still open: visual pass
-(lens/model per run reach the store but not the dashboard), paid smoke
-campaign (2–3 runs, small branch, exercising rotation live).
+verdicts; localhost/no-auth stays a decision). **Smoke campaign ran 2026-08-14** (~$13.7 total) on this repo's own PR #4
+(`finishing-pass`, 54 files): 3 rotated rounds (opus/generalist $3.05 → 10
+findings, sonnet/security $1.03 → 3, opus/concurrency $3.29 → 11) → rev 14
+(16 clusters, f1=10 f2=4, judge $0.06) → verify 10/10 occurrence-1 clusters
+($6.24): 8 confirmed, 2 refuted with high-quality contrary evidence. The
+smoke caught three pipeline bugs, all fixed same-day (`b4e4e1b`): the judge
+had been dead since slice B (maxTurns: 1, but Sonnet returns structured
+output in a second round-trip — every judge call aborted; cap now 4), and
+the worker dropped both round failures and consolidation failures silently
+(a campaign that consolidated nothing ended "succeeded" clean). Job #5 also
+proved the .env fine-grained PAT does not cover this repo (404) — serve ran
+with `gh auth token`. **Confirmed findings now queued as follow-ups** (see
+open items): campaign-aware shutdown, VERIFY_MODEL on the server path,
+baseline-failure reporting, usePolling guard; plus the unverified occ-3
+CRITICAL (release/cancel routes lack the CSRF gate) and occ-3 PR-title
+prompt-injection warning.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -486,6 +499,26 @@ taste) live in the user's own `~/.claude/CLAUDE.md`, deliberately not committed
 here.
 
 ## Open items
+
+**Smoke-campaign follow-ups (rev 14, 2026-08-14)** — verified queue, fix in
+roughly this order:
+
+1. **CSRF gate misses /jobs/:id/release and /cancel (critical, occ 3/3,
+   unverified — recurrence across all three lenses).** release is the
+   billing click; a cross-origin page can POST it with no preflight. Extend
+   slice A's content-type/Host gate to bodyless POST routes.
+2. **Shutdown lets an in-flight campaign keep spending (warning, confirmed).**
+   `Worker.stop()` awaits the whole campaign loop — up to maxRuns more paid
+   rounds after SIGTERM. Thread a stop signal into CampaignOptions, checked
+   at the top of each round.
+3. **VERIFY_MODEL ignored on the server path (warning, confirmed).**
+4. **usePolling inFlight guard does not cover act() (warning, confirmed).**
+5. Smaller confirmed nits: baseline-consolidation swallow (report via
+   callback), lapsed-verdict map-order, verifyReporting spread order, job
+   params validated only at read, lapsed re-queue cost cap; plus occ-2
+   unverified: PR-title prompt injection (occ 3), listFiles slash-branch
+   ref encoding, degraded-partition verify-spend fuse, list_files caveat
+   truncation, legacy-merge migration removal note.
 
 **Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
