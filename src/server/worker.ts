@@ -22,8 +22,12 @@ export interface WorkerDeps
     store: ReviewStore;
     clientFor: (owner: string, repo: string) => RepoClient;
     // Applied when a job's params carry no model — resolution happens here so
-    // the stored job keeps what the requester actually asked for.
+    // the stored job keeps what the requester actually asked for. Two knobs
+    // because the roles differ (src/sdk/models.ts): a verify job that fell
+    // back to the reviewer's model was silently ignoring VERIFY_MODEL
+    // (smoke rev 14, confirmed).
     defaultModel: string;
+    defaultVerifyModel: string;
     onEvent?: (id: JobId, event: string) => void;
     // The stage runners, injectable so the state machine is testable without
     // burning credit. Production callers omit them.
@@ -38,6 +42,7 @@ export class Worker
     private readonly store: ReviewStore;
     private readonly clientFor: (owner: string, repo: string) => RepoClient;
     private readonly defaultModel: string;
+    private readonly defaultVerifyModel: string;
     private readonly onEvent: ((id: JobId, event: string) => void) | undefined;
     private readonly review: typeof runReview;
     private readonly campaign: typeof runCampaign;
@@ -51,6 +56,7 @@ export class Worker
         this.store = deps.store;
         this.clientFor = deps.clientFor;
         this.defaultModel = deps.defaultModel;
+        this.defaultVerifyModel = deps.defaultVerifyModel;
         this.onEvent = deps.onEvent;
         this.review = deps.review ?? runReview;
         this.campaign = deps.campaign ?? runCampaign;
@@ -215,6 +221,10 @@ export class Worker
                 // maxRuns more paid rounds plus a verification pass.
                 shouldStop: () => this.stopping,
                 model: job.params.model ?? this.defaultModel,
+                // Without this the campaign's closing verification inherits
+                // the review model and VERIFY_MODEL never applies on the
+                // server path — the CLI passes it, so the worker must too.
+                verifyModel: this.defaultVerifyModel,
                 ...(job.params.models !== undefined ? { models: job.params.models } : {}),
                 ...(job.params.rotateLenses !== undefined ? { rotateLenses: job.params.rotateLenses } : {}),
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
@@ -253,6 +263,7 @@ export class Worker
                 onRoundStart: (round, of, lens) =>
                     this.onEvent?.(job.id, `round ${round}/${of}${lens !== undefined ? ` (${lens} lens)` : ''}`),
                 onJudgeDegraded: violation => this.onEvent?.(job.id, `clustering degraded: ${violation}`),
+                onBaselineFailed: error => this.onEvent?.(job.id, `baseline consolidation failed: ${error}`),
             },
         );
 
@@ -288,7 +299,7 @@ export class Worker
             this.clientFor(job.owner, job.repo),
             { owner: job.owner, repo: job.repo, head: job.head, base: job.base },
             {
-                model: job.params.model ?? this.defaultModel,
+                model: job.params.model ?? this.defaultVerifyModel,
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
                 onEvent: event => this.onEvent?.(job.id, event),

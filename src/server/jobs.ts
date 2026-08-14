@@ -54,6 +54,13 @@ export const verifyJobParamsSchema = z.strictObject({
     reverify: z.boolean().optional(),
 });
 
+// One lookup for both trust boundaries: enqueue() (writes) and toJob() (reads).
+const PARAMS_SCHEMAS = {
+    review: reviewJobParamsSchema,
+    campaign: campaignJobParamsSchema,
+    verify: verifyJobParamsSchema,
+} as const;
+
 export type ReviewJobParams = z.infer<typeof reviewJobParamsSchema>;
 export type CampaignJobParams = z.infer<typeof campaignJobParamsSchema>;
 export type VerifyJobParams = z.infer<typeof verifyJobParamsSchema>;
@@ -172,11 +179,17 @@ export class JobStore
     // human release (held) is decided by whoever enqueues.
     enqueue(job: NewJob, opts: { held?: boolean } = {}): JobId
     {
+        // Validated on the way in, not just the way out: params that only
+        // toJob() checks turn a bad write into a read-time crash on that
+        // job's page — a caller bypassing the HTTP schema (TS structural
+        // typing lets values past compile that the runtime constraints
+        // refuse) must be rejected here as its own error.
+        const params = PARAMS_SCHEMAS[job.kind].parse(job.params);
         const result = this.db.prepare(
             'INSERT INTO jobs (created_at, kind, owner, repo, head, base, params, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         ).run(
             new Date().toISOString(), job.kind, job.owner, job.repo, job.head, job.base,
-            JSON.stringify(job.params), opts.held === true ? 'held' : 'queued',
+            JSON.stringify(params), opts.held === true ? 'held' : 'queued',
         );
         return jobId(Number(result.lastInsertRowid));
     }

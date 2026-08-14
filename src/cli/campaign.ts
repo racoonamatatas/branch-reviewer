@@ -173,6 +173,11 @@ async function main(): Promise<number>
             {
                 console.error(`  clustering degraded (${violation}) — one cluster per finding this round`);
             },
+            onBaselineFailed: (error) =>
+            {
+                console.error(`baseline consolidation failed: ${error} — rounds will proceed; if this is a`
+                    + ' configuration problem it will hit them too');
+            },
             onRoundStart: (round, of, lens, roundModel) =>
             {
                 const focus = lens ?? 'generalist';

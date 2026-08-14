@@ -509,6 +509,44 @@ describe('ReviewStore', () =>
                 expect(regrouped?.lapsedVerdict).toBe('refuted');
             });
 
+            it('should lapse the verdict of the latest verification, not the first-adjudicated set', () =>
+            {
+                // Arrange: set A adjudicated first, then B, then A again —
+                // A's latest verdict is the newest of all, but A iterates
+                // first in the member-set map (first-insertion order), so a
+                // position-based scan would wrongly let B win.
+                const first = savedClusters();
+                const setA = first.clusters[0]!;
+                const setB = first.clusters[1]!;
+                const stamp = (cluster: typeof setA, verdict: 'confirmed' | 'refuted' | 'undetermined'): void =>
+                {
+                    store.saveVerification({
+                        source: 'agent',
+                        clusterId: cluster.id, verdict,
+                        rationale: `Pass for ${verdict}.`, confidence: 'High.', costUsd: 0.1,
+                    });
+                };
+                stamp(setA, 'refuted');
+                stamp(setB, 'undetermined');
+                stamp(setA, 'confirmed');
+
+                // Act: one cluster strictly absorbs both adjudicated sets.
+                const merged = store.saveConsolidation({
+                    owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+                    runIds: store.getConsolidation(first.consolidationId)!.runIds,
+                    clusters: [{
+                        memberIds: [...setA.members, ...setB.members].map(m => m.id),
+                        representativeId: setA.representative.id,
+                        severity: 'warning',
+                        occurrence: 2,
+                    }],
+                });
+
+                // Assert: A's re-adjudication is the most recently earned
+                // verdict of any lapsed subset.
+                expect(store.getConsolidation(merged)!.clusters[0]?.lapsedVerdict).toBe('confirmed');
+            });
+
             it('should not record a lapsed verdict on clusters unrelated to any adjudicated set', () =>
             {
                 // Arrange

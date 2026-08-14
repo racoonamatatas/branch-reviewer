@@ -73,6 +73,7 @@ function worker(overrides: Partial<WorkerDeps> = {}): Worker
         store,
         clientFor: () => new FakeRepoClient(),
         defaultModel: 'claude-opus-5',
+        defaultVerifyModel: 'verify-model-default',
         review: async () => submitted(),
         campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' }),
         ...overrides,
@@ -561,6 +562,48 @@ describe('verify jobs', () =>
 
         // Assert
         expect(jobs.get(id)).toMatchObject({ state: 'succeeded', consolidationId: cid });
+    });
+
+    it('should default a verify job to the verify-role model, not the reviewer default', async () =>
+    {
+        // Arrange: params omit the model — the common case, and the one that
+        // silently ignored VERIFY_MODEL on the server path (smoke rev 14).
+        jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} });
+        let received: string | undefined;
+
+        // Act
+        await worker({
+            verify: async (_store, _client, _target, opts) =>
+            {
+                received = opts?.model;
+                return { summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+            },
+        }).notify();
+
+        // Assert
+        expect(received).toBe('verify-model-default');
+    });
+
+    it('should hand the campaign the verify-role model so its closing pass honors VERIFY_MODEL', async () =>
+    {
+        // Arrange
+        jobs.enqueue({
+            kind: 'campaign', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main',
+            params: { maxRuns: 1, verify: true },
+        } as NewJob);
+        let received: CampaignOptions | undefined;
+
+        // Act
+        await worker({
+            campaign: async (_store, _client, _target, opts): Promise<CampaignResult> =>
+            {
+                received = opts;
+                return { rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' };
+            },
+        }).notify();
+
+        // Assert
+        expect(received?.verifyModel).toBe('verify-model-default');
     });
 
     it('should fail a verify job whose target has no submitted runs', async () =>

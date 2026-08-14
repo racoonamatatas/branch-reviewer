@@ -588,9 +588,9 @@ export class ReviewStore
         // past the occurrence-1 verification gate. Strict supersets record
         // the lapsed verdict so the queue can re-test them with that context.
         const inherited = this.verdictsByMemberSet();
-        const adjudicated = [...inherited].map(([key, verdict]) => ({
+        const adjudicated = [...inherited].map(([key, latest]) => ({
             ids: key.split(',').map(Number),
-            verdict,
+            ...latest,
         }));
 
         this.db.exec('BEGIN');
@@ -613,26 +613,29 @@ export class ReviewStore
             );
             for (const cluster of consolidation.clusters)
             {
-                const status = inherited.get(memberSetKey(cluster.memberIds));
-                // Only when nothing inherits exactly: iteration order is
-                // verification order, so of several lapsed subsets the most
-                // recently earned verdict wins — same latest-wins rule as
-                // inheritance itself.
-                let lapsed: Verdict | undefined;
+                const status = inherited.get(memberSetKey(cluster.memberIds))?.verdict;
+                // Only when nothing inherits exactly: of several lapsed
+                // subsets, the verdict earned by the latest verification
+                // wins — compared by verification id, not map order, because
+                // a Map keeps first-insertion order per key and a
+                // re-adjudicated set therefore iterates at its original
+                // position (smoke rev 14, confirmed).
+                let lapsed: { verdict: Verdict; verificationId: number } | undefined;
                 if (status === undefined)
                 {
                     const memberSet = new Set<number>(cluster.memberIds);
                     for (const past of adjudicated)
                     {
-                        if (past.ids.length < memberSet.size && past.ids.every(fid => memberSet.has(fid)))
+                        if (past.ids.length < memberSet.size && past.ids.every(fid => memberSet.has(fid))
+                            && (lapsed === undefined || past.verificationId > lapsed.verificationId))
                         {
-                            lapsed = past.verdict;
+                            lapsed = past;
                         }
                     }
                 }
                 const newClusterId = clusterId(Number(insertCluster.run(
                     id, cluster.representativeId, cluster.severity, cluster.occurrence,
-                    status ?? 'pending', lapsed ?? null,
+                    status ?? 'pending', lapsed?.verdict ?? null,
                 ).lastInsertRowid));
                 for (const memberId of cluster.memberIds)
                 {
@@ -774,23 +777,24 @@ export class ReviewStore
         }
     }
 
-    // The latest verdict for every member set that has ever been adjudicated.
-    // Ordered by verification id so the most recently earned verdict wins when
-    // two cluster rows over the same findings disagree — the same latest-wins
-    // rule the per-cluster status follows.
-    private verdictsByMemberSet(): Map<string, Verdict>
+    // The latest verdict for every member set that has ever been adjudicated,
+    // with the verification id that earned it. Later rows overwrite earlier
+    // ones (latest wins), and the id rides along because Map iteration keeps
+    // first-insertion order per key — anything comparing recency across sets
+    // must compare ids, never positions.
+    private verdictsByMemberSet(): Map<string, { verdict: Verdict; verificationId: number }>
     {
         const adjudicated = this.db.prepare(
-            'SELECT cluster_id, verdict FROM verifications ORDER BY id',
-        ).all() as unknown as Array<{ cluster_id: number; verdict: string }>;
+            'SELECT id, cluster_id, verdict FROM verifications ORDER BY id',
+        ).all() as unknown as Array<{ id: number; cluster_id: number; verdict: string }>;
         const members = this.db.prepare('SELECT finding_id FROM cluster_members WHERE cluster_id = ?');
 
-        const verdicts = new Map<string, Verdict>();
+        const verdicts = new Map<string, { verdict: Verdict; verificationId: number }>();
         for (const row of adjudicated)
         {
             const findingIds = (members.all(row.cluster_id) as unknown as Array<{ finding_id: number }>)
                 .map(m => findingId(m.finding_id));
-            verdicts.set(memberSetKey(findingIds), row.verdict as Verdict);
+            verdicts.set(memberSetKey(findingIds), { verdict: row.verdict as Verdict, verificationId: row.id });
         }
         return verdicts;
     }

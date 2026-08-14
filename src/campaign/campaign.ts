@@ -74,7 +74,14 @@ export interface CampaignOptions
     // The judge retried into the identity-partition fallback — the
     // consolidation is valid but degenerate (occurrence 1 everywhere).
     onJudgeDegraded?: (violation: string) => void;
-    verifyReporting?: VerifyPendingOptions;
+    // The baseline consolidation is forfeitable, not silent: a throw there
+    // often heralds a misconfiguration about to kill every round, and the
+    // operator deserves the message before the first review bills.
+    onBaselineFailed?: (error: string) => void;
+    // Callbacks only, deliberately: the full VerifyPendingOptions carries
+    // model/reverify/runner, and spreading those would override the
+    // campaign's own deliberate choices below (smoke rev 14, confirmed).
+    verifyReporting?: Pick<VerifyPendingOptions, 'onCluster' | 'onVerdict' | 'onFailure'>;
     runners?: CampaignRunners;
 }
 
@@ -135,9 +142,10 @@ export async function runCampaign(
     {
         latest = await consolidateTarget(store, target, opts);
     }
-    catch
+    catch (error)
     {
         latest = undefined;
+        opts.onBaselineFailed?.(error instanceof Error ? error.message : String(error));
     }
     if (latest !== undefined)
     {

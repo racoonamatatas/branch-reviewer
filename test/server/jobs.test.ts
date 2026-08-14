@@ -73,6 +73,25 @@ describe('enqueue and get', () =>
         expect(job?.params).toEqual({ maxRuns: 5, patience: 2, verify: true });
     });
 
+    it('should reject invalid params at the door instead of crashing the read later', () =>
+    {
+        // Act: TS structural typing lets this shape past compile, but the
+        // runtime constraint (positive int) must refuse it at write time —
+        // a row only toJob() validates turns into a read-time crash on
+        // whoever lists that job.
+        const write = (): void =>
+        {
+            store.enqueue({
+                kind: 'campaign', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main',
+                params: { maxRuns: -3, verify: true },
+            });
+        };
+
+        // Assert
+        expect(write).toThrow();
+        expect(store.list()).toEqual([]);
+    });
+
     it('should return undefined for an unknown id', () =>
     {
         // Act + Assert

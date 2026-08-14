@@ -3,26 +3,39 @@ import { onMounted, onUnmounted } from 'vue';
 // Refresh on an interval while the tab is visible; a hidden dashboard asks
 // the server for nothing. An SSE transport would replace this wholesale —
 // callers only hand over their refresh function.
-export function usePolling(refresh: () => Promise<void>, intervalMs: number): void
+//
+// Returns the serialized refresh, and callers' own refresh paths (act())
+// MUST go through it: two concurrent refreshes read the same event cursor
+// and double-append the feed tail. Interval ticks skip when one is already
+// in flight (another tick is imminent anyway); a returned-refresh call
+// queues behind it instead, because a click's refresh must not be dropped.
+export function usePolling(refresh: () => Promise<void>, intervalMs: number): () => Promise<void>
 {
     let timer: number | undefined;
+    let current: Promise<void> | undefined;
 
-    // One refresh at a time: the interval, visibilitychange, and callers'
-    // own act() paths can all fire while a slow response is still in
-    // flight, and two concurrent refreshes double-append the event tail.
-    let inFlight = false;
+    function refreshNow(): Promise<void>
+    {
+        const run = current === undefined
+            ? refresh()
+            : current.catch(() => undefined).then(() => refresh());
+        const guarded = run.finally(() =>
+        {
+            if (current === guarded)
+            {
+                current = undefined;
+            }
+        });
+        current = guarded;
+        return guarded;
+    }
 
     function tick(): void
     {
-        if (inFlight)
+        if (current === undefined)
         {
-            return;
+            void refreshNow();
         }
-        inFlight = true;
-        void refresh().finally(() =>
-        {
-            inFlight = false;
-        });
     }
 
     function start(): void
@@ -67,4 +80,6 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): vo
         stop();
         document.removeEventListener('visibilitychange', onVisibility);
     });
+
+    return refreshNow;
 }

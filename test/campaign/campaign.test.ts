@@ -256,6 +256,44 @@ describe('runCampaign', () =>
         expect(campaign.rounds.map(r => r.lens)).toEqual([undefined, LENSES[0]?.name, LENSES[1]?.name]);
     });
 
+    it('should report a baseline consolidation failure instead of swallowing it', async () =>
+    {
+        // Arrange: two stored runs make the baseline eligible, and the judge
+        // dies on it — often the first symptom of a misconfiguration that
+        // will hit every round too. The campaign proceeds; the operator hears.
+        for (const title of ['a', 'b'])
+        {
+            store.saveRun({
+                ...target, model: 'm', status: 'submitted',
+                review: { summary: 't', findings: [finding(title)] },
+                turns: 5, costUsd: 1, usage: ZERO,
+            });
+        }
+        let calls = 0;
+        const consolidate = async (s: ReviewStore, t: Target, runs: Run[]): Promise<Consolidation | undefined> =>
+        {
+            calls++;
+            if (calls === 1)
+            {
+                throw new Error('judge auth broken');
+            }
+            return identityConsolidate()(s, t, runs);
+        };
+        const baselineFailures: string[] = [];
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 1,
+            verify: false,
+            onBaselineFailed: error => baselineFailures.push(error),
+            runners: { review: async () => submittedResult([]), consolidate },
+        });
+
+        // Assert
+        expect(baselineFailures).toEqual(['judge auth broken']);
+        expect(campaign.rounds).toHaveLength(1);
+    });
+
     it('should stop between rounds when asked, keeping paid rounds and skipping paid verification', async () =>
     {
         // Arrange: the stop signal flips while round 1 is billing — the

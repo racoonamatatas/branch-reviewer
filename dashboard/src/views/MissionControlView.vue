@@ -146,10 +146,11 @@ const pollLabel = computed(() =>
     return `${ago}s ago · ${every}`;
 });
 
-usePolling(refresh, 3000);
+const refreshNow = usePolling(refresh, 3000);
 
 // Every action refreshes immediately — the poll would catch up in seconds,
-// but a click should feel synchronous.
+// but a click should feel synchronous. Through the serialized entry point,
+// never refresh() directly: overlapping a poll tick double-appends the feed.
 async function act(action: () => Promise<unknown>): Promise<void>
 {
     actionError.value = undefined;
@@ -161,7 +162,7 @@ async function act(action: () => Promise<unknown>): Promise<void>
     {
         actionError.value = describe(e);
     }
-    await refresh();
+    await refreshNow();
 }
 
 const cancel = (id: JobId): Promise<void> => act(() => api.cancelJob(id));
