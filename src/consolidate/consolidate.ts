@@ -138,6 +138,21 @@ export interface ClusteringOutcome
     costUsd: number;
 }
 
+// A structural judge failure still spent money — this attempt, and any
+// capped attempt before it. A bare throw discarded that meter (rev 21);
+// this error carries it so the caller's accounting can absorb it.
+export class ClusteringError extends Error
+{
+    readonly costUsd: number;
+
+    constructor(message: string, costUsd: number)
+    {
+        super(message);
+        this.name = 'ClusteringError';
+        this.costUsd = costUsd;
+    }
+}
+
 export async function runClustering(findings: Finding[], opts: ClusteringOptions = {}): Promise<ClusteringOutcome>
 {
     assertSubscriptionCredit();
@@ -157,12 +172,20 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
         costUsd += attempted.costUsd;
         if (attempted.failed !== undefined)
         {
-            // A structural failure (the run capped out on turns) billed like
-            // any attempt and must degrade like one — a throw here would
-            // lose the metered cost AND skip the fallback below. It is not a
-            // partition violation, so the retry keeps the base prompt.
+            if (attempted.structural === true)
+            {
+                // An outage, not a bad answer — no retry. The meter rides
+                // the throw: this attempt billed, and so did any capped
+                // attempt before it (rev 21).
+                throw new ClusteringError(`Clustering judge failed: ${attempted.failed}`, costUsd);
+            }
+            // A capped run billed like any attempt and must degrade like one
+            // — a throw would lose the meter AND skip the fallback below. A
+            // turn cap retries with the base prompt (nothing to feed back);
+            // a schema miss feeds the mismatch back so the retry is a
+            // correction, not a re-flip of the same coin (rev 21).
             problem = `judge run failed: ${attempted.failed}`;
-            violation = undefined;
+            violation = attempted.retryFeedback;
             continue;
         }
         violation = validatePartition(findings, attempted.clusters);
@@ -180,13 +203,14 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
     return { clusters: identityPartition(findings), costUsd };
 }
 
-// One judge call. `failed` carries a retryable attempt failure — the turn
-// cap, or output that missed the schema — with the cost the attempt still
-// billed; a throw is reserved for structural problems a retry cannot fix
-// (no credit, an unexplained stream death, an unknown result subtype).
+// One judge call. `failed` carries an attempt failure with the cost the
+// attempt still billed: retryable ones (the turn cap; output that missed the
+// schema, with the mismatch as retryFeedback), or `structural` ones the
+// caller turns into a ClusteringError so no meter is lost. A plain throw is
+// reserved for what never billed a result: no credit, a dead stream.
 type JudgeAttempt =
-    | { clusters: ClusterProposal[]; costUsd: number; failed?: undefined }
-    | { failed: string; costUsd: number; clusters?: undefined };
+    | { clusters: ClusterProposal[]; costUsd: number; failed?: undefined; structural?: undefined; retryFeedback?: undefined }
+    | { failed: string; costUsd: number; structural?: true; retryFeedback?: string; clusters?: undefined };
 
 async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<JudgeAttempt>
 {
@@ -232,14 +256,14 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Judge
     if (result.subtype !== 'success')
     {
         // Only the turn cap earns the retry-then-degrade path: it is the
-        // judge failing at this input, and both attempts' spend must stay
-        // metered. Any other subtype is structural, and degrading over it
-        // would dress an outage as a clustering (rev 19).
+        // judge failing at this input. Any other subtype is structural, and
+        // degrading over it would dress an outage as a clustering (rev 19) —
+        // but its cost is still real, so it goes back as data, not a throw.
         if (result.subtype === 'error_max_turns')
         {
             return { failed: result.subtype, costUsd: result.total_cost_usd };
         }
-        throw new Error(`Clustering judge failed: ${result.subtype}`);
+        return { failed: result.subtype, structural: true, costUsd: result.total_cost_usd };
     }
     // A response that missed the schema is the same class of attempt failure
     // as a capped run: paid for, worth one retry, never worth a throw that
@@ -247,7 +271,12 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Judge
     const parsed = clusterResponseSchema.safeParse(result.structured_output);
     if (!parsed.success)
     {
-        return { failed: 'structured output did not match the cluster schema', costUsd: result.total_cost_usd };
+        return {
+            failed: 'structured output did not match the cluster schema',
+            retryFeedback: 'the response did not match the required schema — '
+                + parsed.error.issues.map(i => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '),
+            costUsd: result.total_cost_usd,
+        };
     }
     return { clusters: parsed.data.clusters, costUsd: result.total_cost_usd };
 }

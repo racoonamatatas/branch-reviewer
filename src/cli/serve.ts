@@ -250,16 +250,32 @@ function main(): void
             return serverClosed.finally(() => clearTimeout(grace));
         }).then(() =>
         {
-            jobs.close();
-            store.close();
-            watches.close();
+            // Each close stands alone: three connections to one file, and a
+            // throw from the first must not leave the other two dangling —
+            // the failure gets named per store, then the exit code says so.
+            const failures: string[] = [];
+            for (const [name, close] of [['jobs', jobs], ['store', store], ['watches', watches]] as const)
+            {
+                try
+                {
+                    close.close();
+                }
+                catch (error)
+                {
+                    failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            if (failures.length > 0)
+            {
+                console.error(`shutdown incomplete — ${failures.join('; ')}`);
+                process.exit(1);
+            }
             console.log('shutdown complete');
             process.exit(0);
         }).catch((error: unknown) =>
         {
-            // Without this, a throwing close() (three connections to one
-            // file) dies as an unhandled rejection: raw stack, no exit code
-            // of ours, and any close() after the throwing one skipped.
+            // Without this, a rejection upstream of the closes dies
+            // unhandled: raw stack, no exit code of ours.
             console.error(`shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
             process.exit(1);
         });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { buildJudgePrompt, distinctRuns, identityPartition, maxSeverity, runClustering, validatePartition } from '../../src/consolidate/consolidate.js';
+import { buildJudgePrompt, ClusteringError, distinctRuns, identityPartition, maxSeverity, runClustering, validatePartition } from '../../src/consolidate/consolidate.js';
 import type { ClusterProposal } from '../../src/consolidate/consolidate.js';
 import type { Finding } from '../../src/store/store.js';
 import { findingId, runId } from '../../src/types/ids.js';
@@ -241,18 +241,34 @@ describe('runClustering', () =>
         expect(retryPrompt).not.toContain('previous partition was invalid');
     });
 
-    it('should throw on a structural subtype instead of dressing an outage as a clustering', async () =>
+    it('should throw a ClusteringError on a structural subtype, carrying every attempt\'s cost', async () =>
     {
-        // Arrange: not the turn cap — an execution error. Degrading here
-        // would send every finding to paid verification as a singleton.
-        async function* stream(): AsyncGenerator<unknown>
+        // Arrange: a capped first attempt (billed, retried), then an
+        // execution error. Degrading would send every finding to paid
+        // verification as a singleton; a bare throw would lose both meters.
+        async function* structural(): AsyncGenerator<unknown>
         {
             yield { type: 'result', subtype: 'error_during_execution', is_error: false, total_cost_usd: 0.1 };
         }
-        vi.mocked(query).mockReturnValueOnce(stream() as unknown as ReturnType<typeof query>);
+        vi.mocked(query)
+            .mockReturnValueOnce(cappedStream(0.2))
+            .mockReturnValueOnce(structural() as unknown as ReturnType<typeof query>);
 
-        // Act + Assert
-        await expect(runClustering(findings)).rejects.toThrow('Clustering judge failed: error_during_execution');
+        // Act
+        let thrown: unknown;
+        try
+        {
+            await runClustering(findings);
+        }
+        catch (error)
+        {
+            thrown = error;
+        }
+
+        // Assert: the outage is named, and the meter rode the throw.
+        expect(thrown).toBeInstanceOf(ClusteringError);
+        expect((thrown as ClusteringError).message).toContain('error_during_execution');
+        expect((thrown as ClusteringError).costUsd).toBeCloseTo(0.2 + 0.1);
     });
 
     it('should treat output that misses the schema as a paid retryable attempt, not a throw', async () =>
@@ -272,10 +288,14 @@ describe('runClustering', () =>
         // Act
         const outcome = await runClustering(findings, { onDegraded: v => degradations.push(v) });
 
-        // Assert: recovered on the retry, both attempts' spend metered.
+        // Assert: recovered on the retry, both attempts' spend metered, and
+        // the retry told the judge what was wrong instead of re-flipping
+        // the same coin.
         expect(outcome.clusters).toEqual(valid);
         expect(outcome.costUsd).toBeCloseTo(0.2 + 0.3);
         expect(degradations).toEqual([]);
+        const retryPrompt = (vi.mocked(query).mock.calls[1]![0] as { prompt: string }).prompt;
+        expect(retryPrompt).toContain('did not match the required schema');
     });
 
     it('should recover when a capped first attempt is followed by a valid partition', async () =>

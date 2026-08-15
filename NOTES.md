@@ -625,6 +625,26 @@ attempted, the usePolling stall deadline arms at actual start and clears
 on unmount, and MissionControlView's refresh is generation-stamped so an
 abandoned pass cannot clobber fresher state.
 
+**Campaign 4 (job #8, 2026-08-15, $6.43) — first job-API launch; the whole
+run lived in the dashboard feed, verification phase included (the rev-17
+fix, observed working).** Target: the rev-19 settlement layer
+(finishing-pass against 8936420). Rev 21: 7 clusters, --verify-all, 7/7
+confirmed. The convergence curve is now data: 15 clusters/$11.46 → 7
+clusters/$6.43, criticals moving from spend-and-shutdown to a poller edge
+case. Headline again a bug in the fix of the fix: the stall deadline moved
+to actual-start (rev 19 #280) left a *queued* refresh deadline-less while
+its hung predecessor held its start() hostage — forever-stall one layer
+deeper (#291, occ-2 cross-model, critical). Settled same-day (rev-21
+queue): the guard-holder is never deadline-less (arm at enqueue, re-arm at
+start, nothing re-arms after unmount); ClusteringError carries the metered
+cost through structural judge throws and the campaign absorbs it into
+judgeCostUsd; serve's closes stand alone (one throwing store no longer
+skips the rest); the schema-miss retry feeds the mismatch back to the
+judge; TargetSheet.refresh got its own generation stamp (the parent's
+cannot see into the component); and verifyPending's pre-guard store reads
+are documented as deliberate (queued-size must be known even under
+shutdown; stores close only after the worker settles).
+
 ~~Queued for the README: a "When to use this" section~~ — landed
 2026-08-15, with one deliberate departure from the queued spec: the
 six-cycle origin anecdote stays OUT of the README (decided on seeing it in

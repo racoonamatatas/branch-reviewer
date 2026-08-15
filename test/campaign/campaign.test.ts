@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { campaignCost, clusterGrowth, runCampaign } from '../../src/campaign/campaign.js';
 import type { CampaignResult, RoundOutcome } from '../../src/campaign/campaign.js';
+import { ClusteringError } from '../../src/consolidate/consolidate.js';
 import type { RepoClient } from '../../src/github/github.js';
 import { LENSES } from '../../src/review/lenses.js';
 import type { ReviewResult, ReviewRunOptions } from '../../src/review/review.js';
@@ -192,7 +193,7 @@ describe('runCampaign', () =>
             judgeCalls++;
             if (judgeCalls === 2)
             {
-                throw new Error('judge 502');
+                throw new ClusteringError('judge 502', 0.15);
             }
             return working(s, t, runs);
         };
@@ -213,12 +214,12 @@ describe('runCampaign', () =>
         // Assert: round 3 records the judge failure and stays out of the
         // stopping rule's input; the campaign's product is round 2's
         // consolidation, which is also what verification ran on. The failed
-        // judge attempt bills nothing it didn't report.
+        // judge attempt's own spend rides its error into the total.
         expect(campaign.stoppedBy).toBe('max-runs');
         expect(campaign.rounds[2]).toMatchObject({ consolidationFailed: 'judge 502' });
         expect(campaign.rounds[2]?.consolidationId).toBeUndefined();
         expect(campaign.consolidationId).toBe(captured[0]?.id);
-        expect(campaign.judgeCostUsd).toBeCloseTo(0.25);
+        expect(campaign.judgeCostUsd).toBeCloseTo(0.25 + 0.15);
         expect(campaign.runIds).toHaveLength(2);
         expect(verify).toHaveBeenCalledTimes(1);
     });

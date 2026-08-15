@@ -272,7 +272,11 @@ export async function verifyPending(
 ): Promise<VerifyPendingSummary>
 {
     // The corroboration test needs to know which model produced each run;
-    // the runs are already local rows, so this costs no network.
+    // the runs are already local rows, so this costs no network. These reads
+    // run even when the stop signal is already up — deliberately: the
+    // summary must still say whether anything was queued (an empty queue
+    // under shutdown is a completed plan), and the reads are safe because
+    // every shutdown path closes the stores only after the worker settles.
     const runModels = new Map<RunId, string>();
     for (const id of consolidation.runIds)
     {

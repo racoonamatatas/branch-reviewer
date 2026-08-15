@@ -75,8 +75,15 @@ function describe(e: unknown): string
     return e instanceof Error ? e.message : String(e);
 }
 
+// The parent's poller abandons a pass that outlives its stall deadline, but
+// the delegated sheet refresh keeps running — without its own stamp, a late
+// settle would overwrite runs/consolidations a fresher pass already wrote
+// (the parent's generation guard cannot see into this component — rev 21).
+let refreshGeneration = 0;
+
 async function refresh(): Promise<void>
 {
+    const generation = ++refreshGeneration;
     const filter = { owner: props.owner, repo: props.repo, head: props.head };
     // The selected rev's detail re-fetches every cycle: a consolidation row is
     // immutable but its verification history is not — agent verdicts and human
@@ -90,6 +97,10 @@ async function refresh(): Promise<void>
             api.listConsolidations(filter),
             revId !== undefined ? api.getConsolidation(revId) : undefined,
         ]);
+        if (generation !== refreshGeneration)
+        {
+            return;
+        }
         runs.value = runList;
         consolidations.value = revList;
         if (revId !== undefined && revDetail !== undefined)
@@ -104,6 +115,10 @@ async function refresh(): Promise<void>
     }
     catch (e)
     {
+        if (generation !== refreshGeneration)
+        {
+            return;
+        }
         connectionError.value = describe(e);
     }
 }

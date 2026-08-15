@@ -8,6 +8,7 @@
 // coverage reports what is probably still unseen while barren rounds decide
 // when to stop.
 
+import { ClusteringError } from '../consolidate/consolidate.js';
 import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
 import { coverageOf, novelClusters, shouldContinue, verifiableClusters } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
@@ -148,6 +149,12 @@ export async function runCampaign(
     catch (error)
     {
         latest = undefined;
+        // A failed judge call still billed its attempts; the error carries
+        // the meter so the headline number stays honest (rev 21).
+        if (error instanceof ClusteringError)
+        {
+            judgeCostUsd += error.costUsd;
+        }
         opts.onBaselineFailed?.(error instanceof Error ? error.message : String(error));
     }
     if (latest !== undefined)
@@ -259,6 +266,10 @@ export async function runCampaign(
         }
         catch (error)
         {
+            if (error instanceof ClusteringError)
+            {
+                judgeCostUsd += error.costUsd;
+            }
             outcome.consolidationFailed = error instanceof Error ? error.message : String(error);
         }
         rounds.push(outcome);

@@ -19,6 +19,7 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
 {
     let timer: number | undefined;
     let current: Promise<void> | undefined;
+    let unmounted = false;
     // Every armed stall deadline, so unmount can disarm the stragglers a
     // still-in-flight refresh would otherwise leave ticking for up to 30s
     // after the component is gone.
@@ -27,16 +28,28 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
     function refreshNow(): Promise<void>
     {
         let stallTimer: number | undefined;
-        // The deadline is armed when the refresh actually starts, not when
-        // it is enqueued — a call queued behind an in-flight pass gets its
-        // full budget, not whatever the predecessor left of it. Past the
-        // deadline the refresh is presumed dead and loses the guard: the
-        // next tick starts fresh. If it settles after all, its finally
-        // below is a no-op — the double-refresh race this risks is bounded
-        // to one abandoned fetch (the view's own generation guard keeps its
-        // late writes out), against a poller stalled forever.
-        const start = (): Promise<void> =>
+        // The guard-holder must never be deadline-less. A queued refresh
+        // arms at enqueue — its start() only runs when the predecessor
+        // settles, and a hung predecessor would otherwise leave the queued
+        // holder unbounded: the forever-stall one layer deeper (rev 21).
+        // start() re-arms so a refresh that actually runs gets its full
+        // budget, not whatever the wait consumed. Past a deadline the
+        // refresh is presumed dead and loses the guard; if it settles after
+        // all, the finally below is a no-op — the double-refresh race this
+        // risks is bounded to one abandoned fetch (the view's generation
+        // guard keeps its late writes out), against a poller stalled
+        // forever. After unmount nothing re-arms (rev 21).
+        const arm = (): void =>
         {
+            if (stallTimer !== undefined)
+            {
+                window.clearTimeout(stallTimer);
+                stallTimers.delete(stallTimer);
+            }
+            if (unmounted)
+            {
+                return;
+            }
             stallTimer = window.setTimeout(() =>
             {
                 stallTimers.delete(stallTimer!);
@@ -46,11 +59,22 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
                 }
             }, STALL_MS);
             stallTimers.add(stallTimer);
+        };
+        const start = (): Promise<void> =>
+        {
+            arm();
             return refresh();
         };
-        const run = current === undefined
-            ? start()
-            : current.catch(() => undefined).then(start);
+        let run: Promise<void>;
+        if (current === undefined)
+        {
+            run = start();
+        }
+        else
+        {
+            arm();
+            run = current.catch(() => undefined).then(start);
+        }
         const guarded = run.finally(() =>
         {
             if (stallTimer !== undefined)
@@ -114,6 +138,7 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
 
     onUnmounted(() =>
     {
+        unmounted = true;
         stop();
         for (const outstanding of stallTimers)
         {
