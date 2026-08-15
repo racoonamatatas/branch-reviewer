@@ -265,6 +265,17 @@ export class Worker
                     this.onEvent?.(job.id, `round ${round}/${of}${lens !== undefined ? ` (${lens} lens)` : ''}`),
                 onJudgeDegraded: violation => this.onEvent?.(job.id, `clustering degraded: ${violation}`),
                 onBaselineFailed: error => this.onEvent?.(job.id, `baseline consolidation failed: ${error}`),
+                // The closing verification is its own string of paid calls —
+                // without these the feed goes silent for the whole phase
+                // ($4 spent invisibly, campaign 2).
+                verifyReporting: {
+                    onCluster: cluster =>
+                        this.onEvent?.(job.id, `verifying cluster #${cluster.id}: ${cluster.representative.title}`),
+                    onVerdict: (cluster, response, stats) =>
+                        this.onEvent?.(job.id, `cluster #${cluster.id}: ${response.verdict} ($${stats.costUsd.toFixed(2)})`),
+                    onFailure: (cluster, reason) =>
+                        this.onEvent?.(job.id, `cluster #${cluster.id} failed: ${reason}`),
+                },
             },
         );
 
@@ -276,12 +287,13 @@ export class Worker
             this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed');
             return;
         }
-        // A shutdown cut the plan short: not a success (the sampling plan
-        // did not complete) and not silently re-runnable (completed rounds
-        // billed and are saved) — the abort path, with the reason stored.
+        // A shutdown cut the plan short — during a round, or during or just
+        // before the closing verification: not a success (the plan did not
+        // complete) and not silently re-runnable (completed rounds and
+        // verdicts billed and are saved) — the abort path, reason stored.
         if (result.stoppedBy === 'stopped')
         {
-            this.jobs.abort(job.id, 'stopped: shutdown interrupted the campaign — completed rounds are saved; re-enqueue to continue');
+            this.jobs.abort(job.id, 'stopped: shutdown interrupted the campaign — completed rounds and verdicts are saved; re-enqueue to continue');
             return;
         }
         this.jobs.succeed(job.id, {
@@ -304,11 +316,21 @@ export class Worker
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
                 ...(job.params.verifyAll !== undefined ? { verifyAll: job.params.verifyAll } : {}),
+                // Each cluster is its own paid call: a shutdown stops the
+                // queue at the next boundary instead of billing the tail.
+                shouldStop: () => this.stopping,
                 onEvent: event => this.onEvent?.(job.id, event),
             },
         );
         this.onEvent?.(job.id, `verified ${result.summary.verified}/${result.summary.attempted} cluster(s), `
             + `${result.summary.failures} failure(s), $${result.summary.costUsd.toFixed(2)}`);
+        // A stop signal cut the queue short: verdicts recorded so far are
+        // saved, but the job must not read as a completed verification plan.
+        if (result.summary.stopped === true)
+        {
+            this.jobs.abort(job.id, 'stopped: shutdown interrupted verification — verdicts recorded so far are saved; re-enqueue to continue');
+            return;
+        }
         this.jobs.succeed(job.id, {
             ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
         });

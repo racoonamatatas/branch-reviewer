@@ -606,6 +606,67 @@ describe('verify jobs', () =>
         expect(received?.verifyModel).toBe('verify-model-default');
     });
 
+    it('should hand a verify job the worker\'s stop signal and abort it when the pass was cut short', async () =>
+    {
+        // Arrange: the runner behaves like the real verifyTarget under a
+        // shutdown — it consults shouldStop and reports a cut-short summary.
+        const id = jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} });
+        let sawStopSignal: boolean | undefined;
+
+        // Act
+        await worker({
+            verify: async (_store, _client, _target, opts) =>
+            {
+                sawStopSignal = typeof opts?.shouldStop === 'function';
+                return { summary: { attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true } };
+            },
+        }).notify();
+
+        // Assert: verdicts already recorded are saved, but the job must not
+        // read as a completed verification plan.
+        expect(sawStopSignal).toBe(true);
+        expect(jobs.get(id)).toMatchObject({
+            state: 'aborted',
+            error: expect.stringContaining('shutdown interrupted verification') as string,
+        });
+    });
+
+    it('should surface the campaign\'s verification phase in the job feed', async () =>
+    {
+        // Arrange: the closing verification is its own string of paid calls —
+        // without wired reporting the feed goes silent for the whole phase.
+        const id = jobs.enqueue({
+            kind: 'campaign', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main',
+            params: { maxRuns: 1, verify: true },
+        } as NewJob);
+        const events: string[] = [];
+        const clusterStub = {
+            id: 7,
+            representative: { title: 'loose end' },
+        } as unknown as Parameters<NonNullable<NonNullable<CampaignOptions['verifyReporting']>['onCluster']>>[0];
+
+        // Act
+        await worker({
+            campaign: async (_store, _client, _target, opts): Promise<CampaignResult> =>
+            {
+                opts.verifyReporting?.onCluster?.(clusterStub);
+                opts.verifyReporting?.onVerdict?.(clusterStub,
+                    { verdict: 'confirmed', rationale: 'because', confidence: 'sure' },
+                    { turns: 3, costUsd: 0.5, usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } });
+                opts.verifyReporting?.onFailure?.(clusterStub, 'GitHub 502');
+                return { rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' };
+            },
+            onEvent: (jobId, event) => events.push(`#${jobId} ${event}`),
+        }).notify();
+
+        // Assert
+        expect(events).toEqual([
+            `#${id} verifying cluster #7: loose end`,
+            `#${id} cluster #7: confirmed ($0.50)`,
+            `#${id} cluster #7 failed: GitHub 502`,
+        ]);
+    });
+
     it('should fail a verify job whose target has no submitted runs', async () =>
     {
         // Arrange

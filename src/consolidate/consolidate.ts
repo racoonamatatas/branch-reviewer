@@ -143,6 +143,7 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
 
     const basePrompt = buildJudgePrompt(findings);
     let violation: string | undefined;
+    let problem: string | undefined;
     let costUsd = 0;
 
     for (let attempt = 1; attempt <= 2; attempt++)
@@ -153,21 +154,39 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
 
         const attempted = await judgeOnce(prompt, opts);
         costUsd += attempted.costUsd;
+        if (attempted.failed !== undefined)
+        {
+            // A structural failure (the run capped out on turns) billed like
+            // any attempt and must degrade like one — a throw here would
+            // lose the metered cost AND skip the fallback below. It is not a
+            // partition violation, so the retry keeps the base prompt.
+            problem = `judge run failed: ${attempted.failed}`;
+            violation = undefined;
+            continue;
+        }
         violation = validatePartition(findings, attempted.clusters);
         if (violation === undefined)
         {
             return { clusters: attempted.clusters, costUsd };
         }
+        problem = violation;
     }
 
-    // Two invalid partitions in a row: the judge cannot be trusted with this
+    // Two failed attempts in a row: the judge cannot be trusted with this
     // input today, but the findings are already paid for and a campaign's
     // whole product hangs off the consolidation. Degrade instead of throwing.
-    opts.onDegraded?.(violation!);
+    opts.onDegraded?.(problem!);
     return { clusters: identityPartition(findings), costUsd };
 }
 
-async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<ClusteringOutcome>
+// One judge call. `failed` carries a non-success result subtype (max turns)
+// with the cost the attempt still billed; a throw is reserved for structural
+// problems a retry cannot fix (no credit, a stream that died mid-flight).
+type JudgeAttempt =
+    | { clusters: ClusterProposal[]; costUsd: number; failed?: undefined }
+    | { failed: string; costUsd: number; clusters?: undefined };
+
+async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<JudgeAttempt>
 {
     const stream = query({
         prompt,
@@ -195,7 +214,7 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Clust
             throwIfErrorResult(message);
             if (message.subtype !== 'success')
             {
-                throw new Error(`Clustering judge failed: ${message.subtype}`);
+                return { failed: message.subtype, costUsd: message.total_cost_usd };
             }
             return {
                 clusters: clusterResponseSchema.parse(message.structured_output).clusters,

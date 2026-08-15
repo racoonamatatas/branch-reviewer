@@ -210,6 +210,55 @@ describe('runClustering', () =>
         expect(degradations).toEqual([]);
     });
 
+    // A result message that ended without a partition — the max-turns cap.
+    function cappedStream(costUsd: number): ReturnType<typeof query>
+    {
+        async function* stream(): AsyncGenerator<unknown>
+        {
+            yield { type: 'result', subtype: 'error_max_turns', is_error: false, total_cost_usd: costUsd };
+        }
+        return stream() as unknown as ReturnType<typeof query>;
+    }
+
+    it('should degrade instead of throwing when the judge caps out on turns, keeping the metered cost', async () =>
+    {
+        // Arrange: both attempts die on the turn cap — each still billed.
+        vi.mocked(query)
+            .mockReturnValueOnce(cappedStream(0.2))
+            .mockReturnValueOnce(cappedStream(0.3));
+        const degradations: string[] = [];
+
+        // Act
+        const outcome = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+
+        // Assert: identity fallback, both attempts' spend accounted for, and
+        // the retry got the base prompt — a turn cap is not a partition
+        // violation to feed back.
+        expect(outcome.clusters).toEqual(identityPartition(findings));
+        expect(outcome.costUsd).toBeCloseTo(0.2 + 0.3);
+        expect(degradations).toEqual(['judge run failed: error_max_turns']);
+        const retryPrompt = (vi.mocked(query).mock.calls[1]![0] as { prompt: string }).prompt;
+        expect(retryPrompt).not.toContain('previous partition was invalid');
+    });
+
+    it('should recover when a capped first attempt is followed by a valid partition', async () =>
+    {
+        // Arrange
+        const valid = [cluster([1, 3], 3), cluster([2], 2)];
+        vi.mocked(query)
+            .mockReturnValueOnce(cappedStream(0.2))
+            .mockReturnValueOnce(judgeStream(valid, 0.3));
+        const degradations: string[] = [];
+
+        // Act
+        const outcome = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+
+        // Assert
+        expect(outcome.clusters).toEqual(valid);
+        expect(outcome.costUsd).toBeCloseTo(0.2 + 0.3);
+        expect(degradations).toEqual([]);
+    });
+
     it('should fall back to the identity partition after two invalid attempts and report the degradation', async () =>
     {
         // Arrange

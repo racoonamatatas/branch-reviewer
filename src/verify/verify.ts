@@ -232,6 +232,11 @@ export interface VerifyPendingOptions extends VerifyRunOptions
 {
     reverify?: boolean;
     verifyAll?: boolean;
+    // Polled before each cluster fires. Every cluster is its own paid call,
+    // so a shutdown mid-queue must stop at the next boundary instead of
+    // billing the whole tail (a SIGTERM'd verification pass kept spending
+    // per pending cluster — rev 17). Verdicts already recorded stay saved.
+    shouldStop?: () => boolean;
     // The per-cluster runner, injectable so the record-and-continue loop is
     // testable without burning credit — the same seam WorkerDeps gives the
     // job runners. Production callers omit it.
@@ -247,6 +252,9 @@ export interface VerifyPendingSummary
     verified: number;
     failures: number;
     costUsd: number;
+    // A stop signal cut the queue short: the summary describes an incomplete
+    // pass, and the caller must not report a completed plan.
+    stopped?: boolean;
 }
 
 // Record-and-continue: each verdict is saved as it lands, and a cluster whose
@@ -279,9 +287,15 @@ export async function verifyPending(
     const totalRuns = consolidation.runIds.length;
 
     const run = opts.runner ?? verifyCluster;
-    const summary: VerifyPendingSummary = { attempted: pending.length, verified: 0, failures: 0, costUsd: 0 };
+    const summary: VerifyPendingSummary = { attempted: 0, verified: 0, failures: 0, costUsd: 0 };
     for (const cluster of pending)
     {
+        if (opts.shouldStop?.() === true)
+        {
+            summary.stopped = true;
+            break;
+        }
+        summary.attempted++;
         opts.onCluster?.(cluster);
         try
         {
@@ -313,6 +327,8 @@ export interface VerifyTargetOptions extends VerifyRunOptions
 {
     reverify?: boolean;
     verifyAll?: boolean;
+    // Forwarded to the per-cluster loop; see VerifyPendingOptions.
+    shouldStop?: () => boolean;
     // For the consolidate-if-needed step; unset, the judge falls to its own
     // default rather than inheriting the verifier's model.
     judgeModel?: string;
@@ -392,6 +408,7 @@ export async function verifyTarget(
         ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
         ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
         ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
+        ...(opts.shouldStop !== undefined ? { shouldStop: opts.shouldStop } : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         onCluster: cluster => opts.onEvent?.(`verifying cluster #${cluster.id}: ${cluster.representative.title}`),
         onVerdict: (cluster, response, stats) =>

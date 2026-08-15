@@ -123,6 +123,24 @@ describe('listFiles', () =>
         expect(requested).toContain('/repos/acme/widgets/git/trees/feature%2Fx?recursive=1');
     });
 
+    it('should encode owner and repo so untrusted job input cannot rewrite the request path', async () =>
+    {
+        // Arrange: owner/repo reach the client verbatim from an HTTP body or
+        // a stored job row — path metacharacters must not survive into the URL.
+        let requested = '';
+        vi.stubGlobal('fetch', vi.fn(async (url: string | URL) =>
+        {
+            requested = String(url);
+            return new Response(JSON.stringify({ tree: [], truncated: false }), { status: 200 });
+        }));
+
+        // Act
+        await new GitHubClient('acme/../evil', 'widgets?x=1').listFiles('main');
+
+        // Assert
+        expect(requested).toContain('/repos/acme%2F..%2Fevil/widgets%3Fx%3D1/git/trees/main');
+    });
+
     it('should surface GitHub\'s truncation flag', async () =>
     {
         // Arrange

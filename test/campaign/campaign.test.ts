@@ -323,6 +323,92 @@ describe('runCampaign', () =>
         expect(verify).not.toHaveBeenCalled();
     });
 
+    // A stored submitted run for the target: with it, one campaign round is
+    // enough for consolidateTarget's two-run minimum, so `latest` exists and
+    // the closing verification gate is actually reached.
+    function seedStoredRun(): void
+    {
+        store.saveRun({
+            ...target, model: 'm', status: 'submitted',
+            review: { summary: 't', findings: [finding('stored')] },
+            turns: 5, costUsd: 1, usage: ZERO,
+        });
+    }
+
+    it('should surface a shutdown during the final round as stopped: the skipped verification is not a completed plan', async () =>
+    {
+        // Arrange: the signal lands while the last planned round is billing —
+        // the loop exits by the run cap, never seeing the signal itself.
+        seedStoredRun();
+        let stopping = false;
+        const review = async (): Promise<ReviewResult> =>
+        {
+            stopping = true;
+            return submittedResult([finding('round-1')]);
+        };
+        const verify = vi.fn(noVerify);
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 1,
+            verify: true,
+            shouldStop: () => stopping,
+            runners: { review, consolidate: identityConsolidate(), verifyPending: verify },
+        });
+
+        // Assert: verification was requested, skipped by the shutdown, and
+        // the campaign says so instead of reading 'max-runs' (rev 17).
+        expect(campaign.stoppedBy).toBe('stopped');
+        expect(verify).not.toHaveBeenCalled();
+    });
+
+    it('should mark the campaign stopped when the verification pass itself is cut short mid-queue', async () =>
+    {
+        // Arrange: the signal arrives after the rounds are done, while the
+        // closing verification is walking its per-cluster paid calls.
+        seedStoredRun();
+        const review = async (): Promise<ReviewResult> => submittedResult([finding('round-1')]);
+        const verify = vi.fn(async (): Promise<VerifyPendingSummary> =>
+            ({ attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true }));
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 1,
+            verify: true,
+            shouldStop: () => false,
+            runners: { review, consolidate: identityConsolidate(), verifyPending: verify },
+        });
+
+        // Assert: the partial summary is kept (its verdicts billed and
+        // saved), and the plan still reads as cut short.
+        expect(campaign.stoppedBy).toBe('stopped');
+        expect(campaign.verification).toMatchObject({ verified: 1, stopped: true });
+    });
+
+    it('should hand its stop signal to the verification pass', async () =>
+    {
+        // Arrange
+        seedStoredRun();
+        const shouldStop = (): boolean => false;
+        let received: unknown;
+        const verify = vi.fn(async (_s: ReviewStore, _c: RepoClient, _con: Consolidation, verifyOpts?: { shouldStop?: () => boolean }): Promise<VerifyPendingSummary> =>
+        {
+            received = verifyOpts?.shouldStop;
+            return { attempted: 0, verified: 0, failures: 0, costUsd: 0 };
+        });
+
+        // Act
+        await runCampaign(store, fakeClient, target, {
+            maxRuns: 1,
+            verify: true,
+            shouldStop,
+            runners: { review: async () => submittedResult([finding('a')]), consolidate: identityConsolidate(), verifyPending: verify },
+        });
+
+        // Assert
+        expect(received).toBe(shouldStop);
+    });
+
     it('should keep every round identical when lenses are off and one model is given', async () =>
     {
         // Arrange

@@ -338,6 +338,36 @@ describe('verifyPending', () =>
         expect(reread.clusters.map(c => c.verificationStatus)).toEqual(['confirmed', 'pending', 'pending']);
     });
 
+    it('should stop at the next cluster boundary when the stop signal flips, keeping verdicts already recorded', async () =>
+    {
+        // Arrange: three pending singletons; the signal flips while the
+        // first cluster's verification is billing — the SIGTERM shape.
+        const run = store.saveRun(newRun('feature-x', [
+            { ...someFinding, title: 'first' },
+            { ...someFinding, title: 'second' },
+            { ...someFinding, title: 'third' },
+        ]));
+        const consolidation = savedIdentityConsolidation([run]);
+        let stopping = false;
+        const runner = async (): Promise<VerifyResult> =>
+        {
+            stopping = true;
+            return verified('confirmed', 0.5);
+        };
+
+        // Act
+        const summary = await verifyPending(store, fakeClient, consolidation, {
+            runner,
+            shouldStop: () => stopping,
+        });
+
+        // Assert: the in-flight cluster finished and its verdict is durable;
+        // the tail was never billed and stays pending for a later re-run.
+        expect(summary).toEqual({ attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true });
+        const reread = store.getConsolidation(consolidation.id)!;
+        expect(reread.clusters.map(c => c.verificationStatus)).toEqual(['confirmed', 'pending', 'pending']);
+    });
+
     it('should verify nothing when every cluster is settled and reverify is off', async () =>
     {
         // Arrange
@@ -399,6 +429,21 @@ describe('verifyTarget', () =>
         expect(consolidate).not.toHaveBeenCalled();
         expect(result.consolidationId).toBe(existing.id);
         expect(result.summary.verified).toBe(2);
+    });
+
+    it('should forward the stop signal so a shutdown bills no cluster at all', async () =>
+    {
+        // Arrange: the signal is already up when the job starts verifying.
+        const runA = store.saveRun(newRun('feature-x', [someFinding]));
+        savedIdentityConsolidation([runA]);
+        const runner = vi.fn();
+
+        // Act
+        const result = await verifyTarget(store, fakeClient, target, { runner, shouldStop: () => true });
+
+        // Assert
+        expect(runner).not.toHaveBeenCalled();
+        expect(result.summary).toEqual({ attempted: 0, verified: 0, failures: 0, costUsd: 0, stopped: true });
     });
 
     it('should re-consolidate when a newer run is not covered by the latest consolidation', async () =>

@@ -12,6 +12,8 @@ class FakeRepoClient implements RepoClient
 {
     compareCalls = 0;
     listFilesCalls = 0;
+    compareFailures = 0;
+    listFilesFailures = 0;
     files: ChangedFile[] = changedFiles;
     fileContents: Record<string, string> = { 'src/session.ts': 'export const refresh = () => {};' };
     treePaths: string[] = ['src/auth.ts', 'src/session.ts', '.github/workflows/deploy.yml', 'README.md'];
@@ -20,6 +22,11 @@ class FakeRepoClient implements RepoClient
     async compare(): Promise<ChangedFile[]>
     {
         this.compareCalls++;
+        if (this.compareFailures > 0)
+        {
+            this.compareFailures--;
+            throw new Error('GitHub API 502');
+        }
         return this.files;
     }
 
@@ -36,6 +43,11 @@ class FakeRepoClient implements RepoClient
     async listFiles(): Promise<{ paths: string[]; truncated: boolean }>
     {
         this.listFilesCalls++;
+        if (this.listFilesFailures > 0)
+        {
+            this.listFilesFailures--;
+            throw new Error('GitHub API 502');
+        }
         return { paths: this.treePaths, truncated: this.treeTruncated };
     }
 }
@@ -220,6 +232,41 @@ describe('createReviewTools', () =>
 
         // Assert
         expect(client.listFilesCalls).toBe(1);
+    });
+
+    it('should not cache a failed comparison — a retry after a transient error succeeds', async () =>
+    {
+        // Arrange
+        const { client, tools } = setup();
+        client.compareFailures = 1;
+
+        // Act
+        await expect(execute(tools, 'list_changed_files')).rejects.toThrow('GitHub API 502');
+        const callsAfterFailure = client.compareCalls;
+        const oneFreshFetchOnRetry = callsAfterFailure + 1;
+        const result = await execute(tools, 'list_changed_files');
+
+        // Assert: the retry issued a fresh fetch instead of replaying the
+        // cached rejection.
+        expect(result).toContain('src/auth.ts');
+        expect(client.compareCalls).toBe(oneFreshFetchOnRetry);
+    });
+
+    it('should not cache a failed tree fetch — a retry after a transient error succeeds', async () =>
+    {
+        // Arrange
+        const { client, tools } = setup();
+        client.listFilesFailures = 1;
+
+        // Act
+        await expect(execute(tools, 'list_files')).rejects.toThrow('GitHub API 502');
+        const callsAfterFailure = client.listFilesCalls;
+        const oneFreshFetchOnRetry = callsAfterFailure + 1;
+        const result = await execute(tools, 'list_files');
+
+        // Assert
+        expect(result).toContain('README.md');
+        expect(client.listFilesCalls).toBe(oneFreshFetchOnRetry);
     });
 
     it('should truncate oversized results with an explicit marker', async () =>

@@ -46,10 +46,17 @@ export interface ReviewTools
 export function createReviewTools(client: RepoClient, target: ReviewTarget): ReviewTools
 {
     // One comparison per review run: every tool shares the same snapshot.
+    // Success is memoized, rejection is not — a cached rejection would turn
+    // one transient GitHub error into "every later tool call this run fails
+    // the same way", when the agent's natural retry would have succeeded.
     let comparePromise: Promise<ChangedFile[]> | undefined;
     const changedFiles = (): Promise<ChangedFile[]> =>
     {
-        comparePromise ??= client.compare(target.base, target.head);
+        comparePromise ??= client.compare(target.base, target.head).catch((error: unknown) =>
+        {
+            comparePromise = undefined;
+            throw error;
+        });
         return comparePromise;
     };
 
@@ -57,7 +64,11 @@ export function createReviewTools(client: RepoClient, target: ReviewTarget): Rev
     let treePromise: Promise<{ paths: string[]; truncated: boolean }> | undefined;
     const repoTree = (): Promise<{ paths: string[]; truncated: boolean }> =>
     {
-        treePromise ??= client.listFiles(target.head);
+        treePromise ??= client.listFiles(target.head).catch((error: unknown) =>
+        {
+            treePromise = undefined;
+            throw error;
+        });
         return treePromise;
     };
 

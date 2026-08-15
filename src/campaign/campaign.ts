@@ -271,30 +271,45 @@ export async function runCampaign(
         }
     }
 
-    const campaign: CampaignResult = {
+    // Verification is its own string of paid calls, so the stop signal
+    // gates it exactly like a round; the pending queue survives in the
+    // consolidation and a later verify picks it up. A skipped or cut-short
+    // verification pass is a plan that did not complete: it must surface as
+    // 'stopped', or a shutdown landing during the final round reads as a
+    // succeeded campaign whose verification silently never ran (rev 17).
+    let verification: VerifyPendingSummary | undefined;
+    if (opts.verify && latest !== undefined)
+    {
+        if (stoppedBy === 'stopped' || opts.shouldStop?.() === true)
+        {
+            stoppedBy = 'stopped';
+        }
+        else
+        {
+            // `latest` is already the read-back entity consolidateRuns
+            // returned — fresh rows, inherited statuses and all. No re-read.
+            verification = await verify(store, client, latest, {
+                model: opts.verifyModel ?? opts.model,
+                ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+                ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
+                ...(opts.shouldStop !== undefined ? { shouldStop: opts.shouldStop } : {}),
+                ...opts.verifyReporting,
+            });
+            if (verification.stopped === true)
+            {
+                stoppedBy = 'stopped';
+            }
+        }
+    }
+
+    return {
         rounds,
         ...(latest !== undefined ? { consolidationId: latest.id, runIds: latest.runIds } : { runIds: [] }),
         reviewCostUsd,
         judgeCostUsd,
+        ...(verification !== undefined ? { verification } : {}),
         stoppedBy,
     };
-
-    // Verification is its own string of paid calls, so the stop signal
-    // gates it exactly like a round; the pending queue survives in the
-    // consolidation and a later verify picks it up.
-    if (opts.verify && latest !== undefined && stoppedBy !== 'stopped' && opts.shouldStop?.() !== true)
-    {
-        // `latest` is already the read-back entity consolidateRuns returned —
-        // fresh rows, inherited statuses and all. No re-read.
-        campaign.verification = await verify(store, client, latest, {
-            model: opts.verifyModel ?? opts.model,
-            ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
-            ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
-            ...opts.verifyReporting,
-        });
-    }
-
-    return campaign;
 }
 
 // Every stored submitted run of this target, re-clustered (the mechanics

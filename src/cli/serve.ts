@@ -113,8 +113,11 @@ function main(): void
     // The trigger: poll on an interval, kick the worker when anything landed.
     // Overlapping passes are skipped rather than queued — two concurrent
     // passes could both see a head SHA as unseen and enqueue it twice.
+    // The in-flight pass is tracked so shutdown can wait for it: closing the
+    // stores under a pass that is mid-write is a crash, not a shutdown.
     let polling = false;
     let lastPollAt: string | undefined;
+    let pollInFlight: Promise<void> = Promise.resolve();
     const poll = async (): Promise<void> =>
     {
         if (polling)
@@ -187,10 +190,11 @@ function main(): void
         activityLog.push('server', `server started — model ${model}, polling every ${args.pollIntervalMs / 1000}s`);
     });
 
-    const pollTimer = setInterval(() =>
+    const kickPoll = (): void =>
     {
-        void poll();
-    }, args.pollIntervalMs);
+        pollInFlight = poll();
+    };
+    const pollTimer = setInterval(kickPoll, args.pollIntervalMs);
 
     // Graceful shutdown: stop polling and claiming, let the in-flight job
     // record its outcome (the credit is already spent — killing the process
@@ -211,8 +215,14 @@ function main(): void
         shuttingDown = true;
         console.log(`${signal}: no new jobs will start; waiting for any in-flight job (signal again to abandon it)`);
         clearInterval(pollTimer);
-        server.close();
-        void worker.stop().then(() =>
+        // The stores close only after everything that touches them has
+        // settled: the worker's in-flight job, the trigger pass mid-write,
+        // and every HTTP handler still running — a close under any of them
+        // is a crash dressed as a shutdown. server.close() waits for active
+        // requests and (Node ≥ 19) drops idle keep-alive sockets, so its
+        // callback is the "no handler is running" signal.
+        const serverClosed = new Promise<void>(resolve => server.close(() => resolve()));
+        void Promise.all([worker.stop(), pollInFlight, serverClosed]).then(() =>
         {
             jobs.close();
             store.close();
@@ -227,7 +237,7 @@ function main(): void
     // Jobs queued before a restart are still owed a run, and watches are
     // owed a pass without waiting out the first interval.
     kick();
-    void poll();
+    kickPoll();
 }
 
 main();

@@ -568,17 +568,30 @@ code, I owe it to them to verify what I say." Opt-in for now; should become
 the default of the read→write path (posting findings to PRs) if that lands.
 The dashboard job-schema drift from the rev-17 queue was fixed in the same
 commit (params now mirror every field; the satisfies guard's optional-field
-blind spot is documented at the schema). Rev-17 queue still open:
-verifyPending stop hook + last-round-shutdown verify skip (job should not
-read as a completed plan), store close under in-flight HTTP/poll, memoized
-compare/tree rejection caching, judge cost lost on max-turns throw,
-owner/repo URL encoding from untrusted job input, never-settling refresh
-stalls the poller, campaign verify phase invisible in the job feed. User
-actions pending: stamp the slash-encoding cluster refuted in the dashboard
-(rev 17; the probe is the rationale — it WILL recur otherwise), widen the
-.env fine-grained PAT to cover this repo, restart `npm run serve` (the
-process from today predates the day's last five commits; stopped cleanly
-at day's end).
+blind spot is documented at the schema). ~~Rev-17 queue still open~~ — all
+seven settled 2026-08-15: `shouldStop` now threads verifyPending →
+verifyTarget → worker, so a SIGTERM stops the verification queue at the
+next cluster boundary and a cut-short pass surfaces as `stopped`/aborted
+instead of a completed plan (including the shutdown-lands-during-the-last-
+round hole, which now flips `stoppedBy` to 'stopped' at the verification
+gate); serve's shutdown closes the stores only after `Promise.all` of the
+worker drain, the in-flight poll pass, and the server-closed callback
+(Node ≥ 19 close() drops idle keep-alives); the memoized compare/tree
+promises drop themselves on rejection so one transient GitHub error no
+longer poisons the whole run; a judge attempt that caps out on turns
+returns its subtype-with-cost instead of throwing, so both attempts'
+spend is metered and the identity-partition degrade path runs (retry
+keeps the base prompt — a turn cap is not a partition violation to feed
+back); GitHubClient encodes owner/repo (and compare's base/head) at every
+URL site; usePolling gives an unsettled refresh a 30s stall deadline
+before the guard is released (one bounded abandoned fetch beats a poller
+stalled for the tab's life); and the worker wires verifyReporting so the
+campaign's closing verification streams per-cluster events into the job
+feed. User actions pending: stamp the slash-encoding cluster refuted in
+the dashboard (rev 17; the probe is the rationale — it WILL recur
+otherwise), widen the .env fine-grained PAT to cover this repo, restart
+`npm run serve` (the process from today predates the day's last five
+commits; stopped cleanly at day's end).
 
 **Queued for the README (~20 min): a "When to use this" section.** The
 origin economics: a work PR took 6 review cycles with a single-pass

@@ -84,13 +84,21 @@ export class GitHubClient implements RepoClient, PullSource
         this.token = token;
     }
 
+    // owner/repo arrive from untrusted job input (an HTTP body, a stored
+    // params column) — interpolated raw, a crafted value rewrites the
+    // request path. Encoded, the worst a bad value can do is 404.
+    private repoPath(): string
+    {
+        return `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}`;
+    }
+
     async compare(base: string, head: string): Promise<ChangedFile[]>
     {
         const files: ChangedFile[] = [];
         for (let page = 1; files.length < MAX_FILES; page++)
         {
             const data = await this.request(
-                `/repos/${this.owner}/${this.repo}/compare/${base}...${head}?per_page=${PAGE_SIZE}&page=${page}`,
+                `${this.repoPath()}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=${PAGE_SIZE}&page=${page}`,
             ) as { files?: RawChangedFile[] };
             const batch = data.files ?? [];
             for (const f of batch)
@@ -115,7 +123,7 @@ export class GitHubClient implements RepoClient, PullSource
     {
         const encodedPath = path.split('/').map(encodeURIComponent).join('/');
         const data = await this.request(
-            `/repos/${this.owner}/${this.repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+            `${this.repoPath()}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
         ) as { type?: string; content?: string; encoding?: string };
         if (data.type !== 'file' || typeof data.content !== 'string' || data.encoding !== 'base64')
         {
@@ -127,7 +135,7 @@ export class GitHubClient implements RepoClient, PullSource
     async listFiles(ref: string): Promise<{ paths: string[]; truncated: boolean }>
     {
         const data = await this.request(
-            `/repos/${this.owner}/${this.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+            `${this.repoPath()}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
         ) as { tree?: Array<{ path: string; type: string }>; truncated?: boolean };
         return {
             paths: (data.tree ?? []).filter(entry => entry.type === 'blob').map(entry => entry.path),
@@ -141,7 +149,7 @@ export class GitHubClient implements RepoClient, PullSource
         for (let page = 1; ; page++)
         {
             const batch = await this.request(
-                `/repos/${this.owner}/${this.repo}/pulls?state=open&per_page=${PAGE_SIZE}&page=${page}`,
+                `${this.repoPath()}/pulls?state=open&per_page=${PAGE_SIZE}&page=${page}`,
             ) as RawPull[];
             for (const p of batch)
             {
