@@ -92,7 +92,7 @@ function identityConsolidate(judgeCostUsd = 0.1)
     };
 }
 
-const noVerify = async (): Promise<VerifyPendingSummary> => ({ attempted: 0, verified: 0, failures: 0, costUsd: 0 });
+const noVerify = async (): Promise<VerifyPendingSummary> => ({ queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 });
 
 let store: ReviewStore;
 
@@ -200,7 +200,7 @@ describe('runCampaign', () =>
         const verify = vi.fn(async (_s: ReviewStore, _c: RepoClient, consolidation: Consolidation) =>
         {
             captured.push(consolidation);
-            return { attempted: 0, verified: 0, failures: 0, costUsd: 0 };
+            return { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 };
         });
 
         // Act
@@ -335,10 +335,43 @@ describe('runCampaign', () =>
         });
     }
 
-    it('should surface a shutdown during the final round as stopped: the skipped verification is not a completed plan', async () =>
+    it('should surface a shutdown during the final round as stopped: the cut-short verification is not a completed plan', async () =>
     {
         // Arrange: the signal lands while the last planned round is billing —
-        // the loop exits by the run cap, never seeing the signal itself.
+        // the loop exits by the run cap, never seeing the signal itself. The
+        // verify runner behaves like the real one: with the signal up and a
+        // non-empty queue, it stops at the first boundary, billing nothing.
+        seedStoredRun();
+        let stopping = false;
+        const review = async (): Promise<ReviewResult> =>
+        {
+            stopping = true;
+            return submittedResult([finding('round-1')]);
+        };
+        const verify = vi.fn(async (_s: ReviewStore, _c: RepoClient, _con: Consolidation, o?: { shouldStop?: () => boolean }): Promise<VerifyPendingSummary> =>
+            ({ queued: 2, attempted: 0, verified: 0, failures: 0, costUsd: 0, ...(o?.shouldStop?.() === true ? { stopped: true } : {}) }));
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 1,
+            verify: true,
+            shouldStop: () => stopping,
+            runners: { review, consolidate: identityConsolidate(), verifyPending: verify },
+        });
+
+        // Assert: the pass was entered (the per-cluster guard is what bills
+        // nothing), came back cut short, and the campaign says so instead of
+        // reading 'max-runs' (rev 17).
+        expect(campaign.stoppedBy).toBe('stopped');
+        expect(verify).toHaveBeenCalledTimes(1);
+        expect(campaign.verification).toMatchObject({ queued: 2, attempted: 0, stopped: true });
+    });
+
+    it('should stay a completed plan when the shutdown lands after the last round but nothing was left to verify', async () =>
+    {
+        // Arrange: same signal timing, but the queue is empty — every
+        // cluster already corroborated or settled. Reporting 'stopped'
+        // here would tell the operator work was cut short when none was.
         seedStoredRun();
         let stopping = false;
         const review = async (): Promise<ReviewResult> =>
@@ -356,10 +389,9 @@ describe('runCampaign', () =>
             runners: { review, consolidate: identityConsolidate(), verifyPending: verify },
         });
 
-        // Assert: verification was requested, skipped by the shutdown, and
-        // the campaign says so instead of reading 'max-runs' (rev 17).
-        expect(campaign.stoppedBy).toBe('stopped');
-        expect(verify).not.toHaveBeenCalled();
+        // Assert
+        expect(campaign.stoppedBy).toBe('max-runs');
+        expect(campaign.verification).toMatchObject({ queued: 0, attempted: 0 });
     });
 
     it('should mark the campaign stopped when the verification pass itself is cut short mid-queue', async () =>
@@ -369,7 +401,7 @@ describe('runCampaign', () =>
         seedStoredRun();
         const review = async (): Promise<ReviewResult> => submittedResult([finding('round-1')]);
         const verify = vi.fn(async (): Promise<VerifyPendingSummary> =>
-            ({ attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true }));
+            ({ queued: 3, attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true }));
 
         // Act
         const campaign = await runCampaign(store, fakeClient, target, {
@@ -394,7 +426,7 @@ describe('runCampaign', () =>
         const verify = vi.fn(async (_s: ReviewStore, _c: RepoClient, _con: Consolidation, verifyOpts?: { shouldStop?: () => boolean }): Promise<VerifyPendingSummary> =>
         {
             received = verifyOpts?.shouldStop;
-            return { attempted: 0, verified: 0, failures: 0, costUsd: 0 };
+            return { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 };
         });
 
         // Act
@@ -484,7 +516,7 @@ describe('campaignCost', () =>
             runIds: [runId(101), runId(102)],
             reviewCostUsd: 5,
             judgeCostUsd: 0.4,
-            verification: { attempted: 3, verified: 3, failures: 0, costUsd: 2.5 },
+            verification: { queued: 3, attempted: 3, verified: 3, failures: 0, costUsd: 2.5 },
             stoppedBy: 'dry',
         };
 

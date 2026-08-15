@@ -194,9 +194,18 @@ function main(): void
         activityLog.push('server', `server started — model ${model}, polling every ${args.pollIntervalMs / 1000}s`);
     });
 
+    // The overlap guard lives HERE, not only inside poll(): poll's own
+    // early-return hands back a trivial resolved promise, and assigning that
+    // over pollInFlight would leave shutdown waiting on nothing while the
+    // real pass is still mid-write (rev 19, confirmed). kickPoll is poll's
+    // only caller, so checking before the call keeps the tracked promise
+    // pointing at the pass that is actually running.
     const kickPoll = (): void =>
     {
-        pollInFlight = poll();
+        if (!polling)
+        {
+            pollInFlight = poll();
+        }
     };
     const pollTimer = setInterval(kickPoll, args.pollIntervalMs);
 
@@ -228,9 +237,11 @@ function main(): void
         // neither close() nor closeIdleConnections() (probed live: an idle
         // nc connection held the close callback hostage until it died). So
         // once the worker and poller have settled, lingering sockets get a
-        // grace window and are then destroyed: route handlers run
-        // synchronously, so by that point nothing store-touching can be in
-        // flight, and a destroyed socket only costs its client a response.
+        // grace window and are then destroyed. The store-safety guarantee is
+        // the close callback itself — it fires only after active requests
+        // end, and the handlers' store calls are synchronous even where the
+        // handlers themselves await body reads — so a destroyed socket only
+        // costs its client a response, never a write.
         const serverClosed = new Promise<void>(resolve => server.close(() => resolve()));
         server.closeIdleConnections();
         void Promise.all([worker.stop(), pollInFlight]).then(() =>
@@ -244,6 +255,13 @@ function main(): void
             watches.close();
             console.log('shutdown complete');
             process.exit(0);
+        }).catch((error: unknown) =>
+        {
+            // Without this, a throwing close() (three connections to one
+            // file) dies as an unhandled rejection: raw stack, no exit code
+            // of ours, and any close() after the throwing one skipped.
+            console.error(`shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+            process.exit(1);
         });
     };
     process.on('SIGINT', () => shutdown('SIGINT'));

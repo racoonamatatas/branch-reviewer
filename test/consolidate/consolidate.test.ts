@@ -241,6 +241,43 @@ describe('runClustering', () =>
         expect(retryPrompt).not.toContain('previous partition was invalid');
     });
 
+    it('should throw on a structural subtype instead of dressing an outage as a clustering', async () =>
+    {
+        // Arrange: not the turn cap — an execution error. Degrading here
+        // would send every finding to paid verification as a singleton.
+        async function* stream(): AsyncGenerator<unknown>
+        {
+            yield { type: 'result', subtype: 'error_during_execution', is_error: false, total_cost_usd: 0.1 };
+        }
+        vi.mocked(query).mockReturnValueOnce(stream() as unknown as ReturnType<typeof query>);
+
+        // Act + Assert
+        await expect(runClustering(findings)).rejects.toThrow('Clustering judge failed: error_during_execution');
+    });
+
+    it('should treat output that misses the schema as a paid retryable attempt, not a throw', async () =>
+    {
+        // Arrange: attempt 1 emits well-formed JSON that fails the cluster
+        // schema; attempt 2 is valid. The first attempt still billed.
+        async function* malformed(): AsyncGenerator<unknown>
+        {
+            yield { type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.2, structured_output: { clusters: 'not-an-array' } };
+        }
+        const valid = [cluster([1, 3], 3), cluster([2], 2)];
+        vi.mocked(query)
+            .mockReturnValueOnce(malformed() as unknown as ReturnType<typeof query>)
+            .mockReturnValueOnce(judgeStream(valid, 0.3));
+        const degradations: string[] = [];
+
+        // Act
+        const outcome = await runClustering(findings, { onDegraded: v => degradations.push(v) });
+
+        // Assert: recovered on the retry, both attempts' spend metered.
+        expect(outcome.clusters).toEqual(valid);
+        expect(outcome.costUsd).toBeCloseTo(0.2 + 0.3);
+        expect(degradations).toEqual([]);
+    });
+
     it('should recover when a capped first attempt is followed by a valid partition', async () =>
     {
         // Arrange

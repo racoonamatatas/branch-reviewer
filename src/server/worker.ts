@@ -284,7 +284,9 @@ export class Worker
         // out of runs are both successful completions of the sampling plan.
         if (result.stoppedBy === 'no-usable-runs')
         {
-            this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed');
+            this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed', {
+                ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
+            });
             return;
         }
         // A shutdown cut the plan short — during a round, or during or just
@@ -293,7 +295,12 @@ export class Worker
         // verdicts billed and are saved) — the abort path, reason stored.
         if (result.stoppedBy === 'stopped')
         {
-            this.jobs.abort(job.id, 'stopped: shutdown interrupted the campaign — completed rounds and verdicts are saved; re-enqueue to continue');
+            // The consolidation rides along: completed rounds bought it, and
+            // an abort that dropped the pointer would orphan that paid work
+            // from the job's own page (rev 19).
+            this.jobs.abort(job.id, 'stopped: shutdown interrupted the campaign — completed rounds and verdicts are saved; re-enqueue to continue', {
+                ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
+            });
             return;
         }
         this.jobs.succeed(job.id, {
@@ -322,13 +329,15 @@ export class Worker
                 onEvent: event => this.onEvent?.(job.id, event),
             },
         );
-        this.onEvent?.(job.id, `verified ${result.summary.verified}/${result.summary.attempted} cluster(s), `
+        this.onEvent?.(job.id, `verified ${result.summary.verified}/${result.summary.queued} queued cluster(s), `
             + `${result.summary.failures} failure(s), $${result.summary.costUsd.toFixed(2)}`);
         // A stop signal cut the queue short: verdicts recorded so far are
         // saved, but the job must not read as a completed verification plan.
         if (result.summary.stopped === true)
         {
-            this.jobs.abort(job.id, 'stopped: shutdown interrupted verification — verdicts recorded so far are saved; re-enqueue to continue');
+            this.jobs.abort(job.id, 'stopped: shutdown interrupted verification — verdicts recorded so far are saved; re-enqueue to continue', {
+                ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
+            });
             return;
         }
         this.jobs.succeed(job.id, {

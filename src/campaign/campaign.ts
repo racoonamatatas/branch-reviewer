@@ -272,33 +272,28 @@ export async function runCampaign(
     }
 
     // Verification is its own string of paid calls, so the stop signal
-    // gates it exactly like a round; the pending queue survives in the
-    // consolidation and a later verify picks it up. A skipped or cut-short
-    // verification pass is a plan that did not complete: it must surface as
-    // 'stopped', or a shutdown landing during the final round reads as a
-    // succeeded campaign whose verification silently never ran (rev 17).
+    // gates it exactly like a round — but the gate is delegated, never
+    // pre-empted: the per-cluster guard in verifyPending bills nothing when
+    // the signal is already up, and it alone knows whether anything was
+    // actually left to verify. A cut-short pass surfaces as 'stopped' (a
+    // shutdown during the final round otherwise reads as a succeeded
+    // campaign whose verification silently never ran — rev 17), while a
+    // shutdown over an empty queue stays a completed plan (rev 19).
     let verification: VerifyPendingSummary | undefined;
     if (opts.verify && latest !== undefined)
     {
-        if (stoppedBy === 'stopped' || opts.shouldStop?.() === true)
+        // `latest` is already the read-back entity consolidateRuns
+        // returned — fresh rows, inherited statuses and all. No re-read.
+        verification = await verify(store, client, latest, {
+            model: opts.verifyModel ?? opts.model,
+            ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+            ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
+            ...(opts.shouldStop !== undefined ? { shouldStop: opts.shouldStop } : {}),
+            ...opts.verifyReporting,
+        });
+        if (verification.stopped === true)
         {
             stoppedBy = 'stopped';
-        }
-        else
-        {
-            // `latest` is already the read-back entity consolidateRuns
-            // returned — fresh rows, inherited statuses and all. No re-read.
-            verification = await verify(store, client, latest, {
-                model: opts.verifyModel ?? opts.model,
-                ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
-                ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
-                ...(opts.shouldStop !== undefined ? { shouldStop: opts.shouldStop } : {}),
-                ...opts.verifyReporting,
-            });
-            if (verification.stopped === true)
-            {
-                stoppedBy = 'stopped';
-            }
         }
     }
 

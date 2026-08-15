@@ -84,24 +84,41 @@ const refreshedAtMs = ref<number>();
 // so awaiting it can't throw into ours.
 const sheet = ref<InstanceType<typeof TargetSheet>>();
 
+// The poller abandons a refresh that outlives the stall deadline, but it
+// cannot cancel the underlying fetches — if they settle late, their writes
+// would land on top of a fresher pass's state (and re-append a feed tail a
+// newer cursor already holds). The generation stamp keeps abandoned passes
+// write-less: every await is followed by a "still the newest?" check.
+let refreshGeneration = 0;
+
 async function refresh(): Promise<void>
 {
+    const generation = ++refreshGeneration;
     const sheetRefresh = sheet.value?.refresh();
     // The feed degrades independently: a hiccup on /events must not blank
     // the queue, and a queue error must not lose feed continuity.
     const feedPromise = api.listEvents(cursor.value).catch(() => undefined);
     try
     {
-        [jobs.value, watches.value, targets.value] = await Promise.all([
+        const [freshJobs, freshWatches, freshTargets] = await Promise.all([
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
         ]);
+        if (generation !== refreshGeneration)
+        {
+            return;
+        }
+        [jobs.value, watches.value, targets.value] = [freshJobs, freshWatches, freshTargets];
         refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
     }
     catch (e)
     {
+        if (generation !== refreshGeneration)
+        {
+            return;
+        }
         connectionError.value = describe(e);
     }
 
@@ -111,6 +128,10 @@ async function refresh(): Promise<void>
         // New process life: our cursor named the old ring, so this response
         // may be a partial tail. Refetch whole instead of appending lives.
         feed = await api.listEvents(0).catch(() => undefined);
+    }
+    if (generation !== refreshGeneration)
+    {
+        return;
     }
     if (feed !== undefined)
     {

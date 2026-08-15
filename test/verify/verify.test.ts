@@ -333,7 +333,7 @@ describe('verifyPending', () =>
 
         // Assert: the confirmed verdict is durable, the failures stay pending
         // for a later re-run, and the aborted attempt's cost still counts.
-        expect(summary).toEqual({ attempted: 3, verified: 1, failures: 2, costUsd: 0.8 });
+        expect(summary).toEqual({ queued: 3, attempted: 3, verified: 1, failures: 2, costUsd: 0.8 });
         const reread = store.getConsolidation(consolidation.id)!;
         expect(reread.clusters.map(c => c.verificationStatus)).toEqual(['confirmed', 'pending', 'pending']);
     });
@@ -362,8 +362,9 @@ describe('verifyPending', () =>
         });
 
         // Assert: the in-flight cluster finished and its verdict is durable;
-        // the tail was never billed and stays pending for a later re-run.
-        expect(summary).toEqual({ attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true });
+        // the tail was never billed and stays pending for a later re-run —
+        // queued vs attempted is the "how much was left" signal.
+        expect(summary).toEqual({ queued: 3, attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true });
         const reread = store.getConsolidation(consolidation.id)!;
         expect(reread.clusters.map(c => c.verificationStatus)).toEqual(['confirmed', 'pending', 'pending']);
     });
@@ -409,7 +410,7 @@ describe('verifyTarget', () =>
         // Assert: nothing existed to consolidate, so nothing was saved and
         // nothing was billed.
         expect(result.consolidationId).toBeUndefined();
-        expect(result.summary).toEqual({ attempted: 0, verified: 0, failures: 0, costUsd: 0 });
+        expect(result.summary).toEqual({ queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 });
         expect(store.listConsolidations()).toEqual([]);
     });
 
@@ -443,7 +444,7 @@ describe('verifyTarget', () =>
 
         // Assert
         expect(runner).not.toHaveBeenCalled();
-        expect(result.summary).toEqual({ attempted: 0, verified: 0, failures: 0, costUsd: 0, stopped: true });
+        expect(result.summary).toEqual({ queued: 1, attempted: 0, verified: 0, failures: 0, costUsd: 0, stopped: true });
     });
 
     it('should re-consolidate when a newer run is not covered by the latest consolidation', async () =>

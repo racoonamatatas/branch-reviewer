@@ -420,7 +420,8 @@ describe('notify', () =>
                 inRound();
                 await gate;
                 return {
-                    rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0,
+                    rounds: [], runIds: [], consolidationId: consolidationId(9),
+                    reviewCostUsd: 0, judgeCostUsd: 0,
                     stoppedBy: opts.shouldStop?.() === true ? 'stopped' : 'max-runs',
                 };
             },
@@ -435,8 +436,9 @@ describe('notify', () =>
         await pass;
 
         // Assert: the campaign saw the signal and the cut-short plan is an
-        // abort with the reason stored, never a clean success.
-        expect(jobs.get(id)?.state).toBe('aborted');
+        // abort with the reason stored, never a clean success — and the
+        // consolidation the completed rounds bought stays on the job.
+        expect(jobs.get(id)).toMatchObject({ state: 'aborted', consolidationId: 9 });
         expect(jobs.get(id)?.error).toContain('stopped: shutdown interrupted the campaign');
     });
 
@@ -557,7 +559,7 @@ describe('verify jobs', () =>
 
         // Act
         await worker({
-            verify: async () => ({ consolidationId: cid, summary: { attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
+            verify: async () => ({ consolidationId: cid, summary: { queued: 2, attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
         }).notify();
 
         // Assert
@@ -576,7 +578,7 @@ describe('verify jobs', () =>
             verify: async (_store, _client, _target, opts) =>
             {
                 received = opts?.model;
-                return { summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+                return { summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
             },
         }).notify();
 
@@ -610,6 +612,7 @@ describe('verify jobs', () =>
     {
         // Arrange: the runner behaves like the real verifyTarget under a
         // shutdown — it consults shouldStop and reports a cut-short summary.
+        const cid = consolidationId(11);
         const id = jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} });
         let sawStopSignal: boolean | undefined;
 
@@ -618,15 +621,17 @@ describe('verify jobs', () =>
             verify: async (_store, _client, _target, opts) =>
             {
                 sawStopSignal = typeof opts?.shouldStop === 'function';
-                return { summary: { attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true } };
+                return { consolidationId: cid, summary: { queued: 3, attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true } };
             },
         }).notify();
 
-        // Assert: verdicts already recorded are saved, but the job must not
+        // Assert: verdicts already recorded are saved, the consolidation the
+        // pass ran on stays reachable from the job, and the job must not
         // read as a completed verification plan.
         expect(sawStopSignal).toBe(true);
         expect(jobs.get(id)).toMatchObject({
             state: 'aborted',
+            consolidationId: cid,
             error: expect.stringContaining('shutdown interrupted verification') as string,
         });
     });

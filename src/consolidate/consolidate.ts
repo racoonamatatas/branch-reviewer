@@ -6,9 +6,10 @@
 // is ours, same trust boundary as reviewSchema.parse in the review path.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { judgeModel } from '../sdk/models.js';
-import { assertSubscriptionCredit, throwIfErrorResult } from '../sdk/sdk.js';
+import { assertSubscriptionCredit, requireResult, rethrowUnlessResultExplains } from '../sdk/sdk.js';
 import type { Severity } from '../schema/schema.js';
 import type { Finding } from '../store/store.js';
 import { findingId, toTypedId } from '../types/ids.js';
@@ -179,9 +180,10 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
     return { clusters: identityPartition(findings), costUsd };
 }
 
-// One judge call. `failed` carries a non-success result subtype (max turns)
-// with the cost the attempt still billed; a throw is reserved for structural
-// problems a retry cannot fix (no credit, a stream that died mid-flight).
+// One judge call. `failed` carries a retryable attempt failure — the turn
+// cap, or output that missed the schema — with the cost the attempt still
+// billed; a throw is reserved for structural problems a retry cannot fix
+// (no credit, an unexplained stream death, an unknown result subtype).
 type JudgeAttempt =
     | { clusters: ClusterProposal[]; costUsd: number; failed?: undefined }
     | { failed: string; costUsd: number; clusters?: undefined };
@@ -204,23 +206,48 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Judge
         },
     });
 
-    for await (const message of stream)
+    // The stream is consumed to the end, with the same rescue the review and
+    // verify sites use: after an error result the SDK errors the stream, and
+    // an early return would leave that rejection to iterator.return() —
+    // whose behavior we'd rather not depend on (rev 19).
+    let seen: SDKResultMessage | undefined;
+    try
     {
-        if (message.type === 'result')
+        for await (const message of stream)
         {
-            // Catches the unauthenticated is_error 'success' result, which
-            // otherwise dies below as a Zod parse of an absent
-            // structured_output.
-            throwIfErrorResult(message);
-            if (message.subtype !== 'success')
+            if (message.type === 'result')
             {
-                return { failed: message.subtype, costUsd: message.total_cost_usd };
+                seen = message;
             }
-            return {
-                clusters: clusterResponseSchema.parse(message.structured_output).clusters,
-                costUsd: message.total_cost_usd,
-            };
         }
     }
-    throw new Error('The SDK stream ended without a result message.');
+    catch (error)
+    {
+        rethrowUnlessResultExplains(seen, error);
+    }
+    // requireResult also catches the unauthenticated is_error 'success'
+    // result, which otherwise dies below as a schema check of an absent
+    // structured_output.
+    const result = requireResult(seen);
+    if (result.subtype !== 'success')
+    {
+        // Only the turn cap earns the retry-then-degrade path: it is the
+        // judge failing at this input, and both attempts' spend must stay
+        // metered. Any other subtype is structural, and degrading over it
+        // would dress an outage as a clustering (rev 19).
+        if (result.subtype === 'error_max_turns')
+        {
+            return { failed: result.subtype, costUsd: result.total_cost_usd };
+        }
+        throw new Error(`Clustering judge failed: ${result.subtype}`);
+    }
+    // A response that missed the schema is the same class of attempt failure
+    // as a capped run: paid for, worth one retry, never worth a throw that
+    // loses the meter.
+    const parsed = clusterResponseSchema.safeParse(result.structured_output);
+    if (!parsed.success)
+    {
+        return { failed: 'structured output did not match the cluster schema', costUsd: result.total_cost_usd };
+    }
+    return { clusters: parsed.data.clusters, costUsd: result.total_cost_usd };
 }

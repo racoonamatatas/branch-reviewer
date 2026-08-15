@@ -287,11 +287,14 @@ export class JobStore
     }
 
     // The capped outcome from the locked taxonomy: the model ran out of turn
-    // budget. Not a success (no review landed) and not our failure (the
-    // request was fine) — its own terminal state, mirroring run status.
-    abort(id: JobId, reason: string): void
+    // budget, or a shutdown cut the plan short. Not a success and not our
+    // failure — its own terminal state, mirroring run status. An aborted
+    // campaign/verify may still have produced a consolidation (completed
+    // rounds are saved), and losing that pointer would orphan paid work
+    // from the job that bought it (rev 19).
+    abort(id: JobId, reason: string, result: { consolidationId?: ConsolidationId } = {}): void
     {
-        this.finish(id, 'aborted', { error: reason });
+        this.finish(id, 'aborted', { error: reason, ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}) });
     }
 
     fail(id: JobId, error: string): void

@@ -248,6 +248,10 @@ export interface VerifyPendingOptions extends VerifyRunOptions
 
 export interface VerifyPendingSummary
 {
+    // What the queue held and what was actually faced: `queued` is the
+    // "how much work existed" signal, `attempted` counts clusters the loop
+    // reached — they differ exactly when a stop signal cut the pass short.
+    queued: number;
     attempted: number;
     verified: number;
     failures: number;
@@ -287,7 +291,7 @@ export async function verifyPending(
     const totalRuns = consolidation.runIds.length;
 
     const run = opts.runner ?? verifyCluster;
-    const summary: VerifyPendingSummary = { attempted: 0, verified: 0, failures: 0, costUsd: 0 };
+    const summary: VerifyPendingSummary = { queued: pending.length, attempted: 0, verified: 0, failures: 0, costUsd: 0 };
     for (const cluster of pending)
     {
         if (opts.shouldStop?.() === true)
@@ -400,7 +404,7 @@ export async function verifyTarget(
     if (consolidation === undefined)
     {
         opts.onEvent?.('no findings on any submitted run — nothing to verify');
-        return { summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+        return { summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
     }
 
     const summary = await verifyPending(store, client, consolidation, {

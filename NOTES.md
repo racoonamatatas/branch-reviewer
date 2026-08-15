@@ -598,6 +598,33 @@ otherwise), widen the .env fine-grained PAT to cover this repo, restart
 `npm run serve` (the process from today predates the day's last five
 commits; stopped cleanly at day's end).
 
+**Campaign 3 (2026-08-15, ~$11.46, CLI — the last CLI launch: launching via
+the job API is the standing default now, so progress lands in the
+dashboard).** Target: the rev-17 settlement layer itself (finishing-pass
+against c05ea59, exactly the day's commits). Three rounds
+(generalist/opus, security/sonnet, concurrency/opus), rev 19, 15 clusters,
+--verify-all: 12 confirmed / 1 refuted / 2 undetermined, 0 incomplete.
+Headline: **the reviewer caught a real bug in a same-day fix** — kickPoll
+reassigned pollInFlight over an overlapping tick's early-return promise,
+defeating the shutdown tracking that fix existed to add. The refutation
+(#272) earned its keep too: a statement-by-statement synchronous-chain
+trace proving the suggested guard would be dead code. Two "confirmed"
+clusters were praise (the URL-encoding fix judged correct and well
+tested — verify-all's cost includes verifying compliments). Undetermined
+pair for a human: #274 (SDK iterator.return() semantics — settled in code
+by consuming the stream fully instead) and #275 (does GitHub's compare
+accept %2F refs — needs a live probe, still open). The rev-19 confirmed
+queue was settled same-day: kickPoll guards before calling, the shutdown
+chain has a .catch (exit 1, close error named), aborted campaign/verify
+jobs keep their consolidationId, the judge degrade is scoped to
+error_max_turns (other subtypes throw; schema-missing output retries with
+cost kept; the stream is consumed fully with the standard rescue), the
+campaign delegates the stop gate to verifyPending (empty queue + shutdown
+= completed plan, not 'stopped'), VerifyPendingSummary carries queued vs
+attempted, the usePolling stall deadline arms at actual start and clears
+on unmount, and MissionControlView's refresh is generation-stamped so an
+abandoned pass cannot clobber fresher state.
+
 ~~Queued for the README: a "When to use this" section~~ — landed
 2026-08-15, with one deliberate departure from the queued spec: the
 six-cycle origin anecdote stays OUT of the README (decided on seeing it in
