@@ -574,9 +574,14 @@ verifyTarget → worker, so a SIGTERM stops the verification queue at the
 next cluster boundary and a cut-short pass surfaces as `stopped`/aborted
 instead of a completed plan (including the shutdown-lands-during-the-last-
 round hole, which now flips `stoppedBy` to 'stopped' at the verification
-gate); serve's shutdown closes the stores only after `Promise.all` of the
-worker drain, the in-flight poll pass, and the server-closed callback
-(Node ≥ 19 close() drops idle keep-alives); the memoized compare/tree
+gate); serve's shutdown closes the stores only after the worker drain, the
+in-flight poll pass, and the server-closed callback — where the live test
+of this very fix caught a hole: a socket that never sent a request (a
+browser preconnect; reproduced with an idle `nc`) is closed by neither
+close() nor closeIdleConnections(), and held shutdown hostage until the
+socket died, so after the worker and poller settle lingering sockets get
+a 2s grace and are then destroyed via closeAllConnections() (handlers are
+synchronous — nothing store-touching can be in flight by then); the memoized compare/tree
 promises drop themselves on rejection so one transient GitHub error no
 longer poisons the whole run; a judge attempt that caps out on turns
 returns its subtype-with-cost instead of throwing, so both attempts'

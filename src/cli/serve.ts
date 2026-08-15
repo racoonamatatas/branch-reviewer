@@ -23,6 +23,10 @@ const HOST = '127.0.0.1';
 // labeled push rarely needs a sub-5-minute pickup.
 const DEFAULT_POLL_INTERVAL_S = 300;
 const MIN_POLL_INTERVAL_S = 10;
+// How long shutdown lets open sockets settle before destroying them. Long
+// enough for an in-flight response to flush; short enough that a browser's
+// preconnect socket (see shutdown below) cannot hold the process hostage.
+const SERVER_CLOSE_GRACE_MS = 2000;
 
 // The built dashboard, located relative to this module so the server finds
 // it from any working directory. index.html is the tell for "built": serving
@@ -219,10 +223,21 @@ function main(): void
         // settled: the worker's in-flight job, the trigger pass mid-write,
         // and every HTTP handler still running — a close under any of them
         // is a crash dressed as a shutdown. server.close() waits for active
-        // requests and (Node ≥ 19) drops idle keep-alive sockets, so its
-        // callback is the "no handler is running" signal.
+        // requests and drops idle keep-alives, but a socket that never sent
+        // a request — the shape of a browser preconnect — is closed by
+        // neither close() nor closeIdleConnections() (probed live: an idle
+        // nc connection held the close callback hostage until it died). So
+        // once the worker and poller have settled, lingering sockets get a
+        // grace window and are then destroyed: route handlers run
+        // synchronously, so by that point nothing store-touching can be in
+        // flight, and a destroyed socket only costs its client a response.
         const serverClosed = new Promise<void>(resolve => server.close(() => resolve()));
-        void Promise.all([worker.stop(), pollInFlight, serverClosed]).then(() =>
+        server.closeIdleConnections();
+        void Promise.all([worker.stop(), pollInFlight]).then(() =>
+        {
+            const grace = setTimeout(() => server.closeAllConnections(), SERVER_CLOSE_GRACE_MS);
+            return serverClosed.finally(() => clearTimeout(grace));
+        }).then(() =>
         {
             jobs.close();
             store.close();
