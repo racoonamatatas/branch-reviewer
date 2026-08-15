@@ -13,8 +13,9 @@ This is a learning project, not a delivery: build in small slices, propose a sho
 ## Commands
 
 ```
-npm test                    # vitest run (unit suite, fast, no network/model calls)
+npm test                    # vitest run (unit suite, fast, no network/model calls; excludes dashboard/)
 npx vitest run test/store   # single test dir; any vitest filter works
+npm test --prefix dashboard # dashboard suite (happy-dom; usePolling guard/deadline semantics)
 npm run typecheck           # tsc --noEmit
 npm run lint                # eslint .
 ```

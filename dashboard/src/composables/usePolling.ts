@@ -28,24 +28,28 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
     function refreshNow(): Promise<void>
     {
         let stallTimer: number | undefined;
-        // The guard-holder must never be deadline-less. A queued refresh
-        // arms at enqueue — its start() only runs when the predecessor
-        // settles, and a hung predecessor would otherwise leave the queued
-        // holder unbounded: the forever-stall one layer deeper (rev 21).
-        // start() re-arms so a refresh that actually runs gets its full
-        // budget, not whatever the wait consumed. Past a deadline the
-        // refresh is presumed dead and loses the guard; if it settles after
-        // all, the finally below is a no-op — the double-refresh race this
-        // risks is bounded to one abandoned fetch (the view's generation
-        // guard keeps its late writes out), against a poller stalled
-        // forever. After unmount nothing re-arms (rev 21).
-        const arm = (): void =>
+        const disarm = (): void =>
         {
             if (stallTimer !== undefined)
             {
                 window.clearTimeout(stallTimer);
                 stallTimers.delete(stallTimer);
+                stallTimer = undefined;
             }
+        };
+        // The guard-holder must never be deadline-less, and a queued caller
+        // must never be un-startable. The deadline has two meanings, told
+        // apart by onFire: while waiting on a predecessor it declares the
+        // WAIT over (the queued refresh keeps the guard and starts now, with
+        // its full budget re-armed by start() — rev 21); while running it
+        // declares this refresh dead and releases the guard so ticks resume.
+        // If an abandoned refresh settles after all, the finally below is a
+        // no-op — the overlap this risks is bounded to one extra fetch, and
+        // the views' generation guards keep its late writes out. After
+        // unmount nothing re-arms (rev 21).
+        const arm = (onFire?: () => void): void =>
+        {
+            disarm();
             if (unmounted)
             {
                 return;
@@ -53,6 +57,12 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
             stallTimer = window.setTimeout(() =>
             {
                 stallTimers.delete(stallTimer!);
+                stallTimer = undefined;
+                if (onFire !== undefined)
+                {
+                    onFire();
+                    return;
+                }
                 if (current === guarded)
                 {
                     current = undefined;
@@ -72,16 +82,21 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): ()
         }
         else
         {
-            arm();
-            run = current.catch(() => undefined).then(start);
+            // Waiting on the predecessor OR the enqueue deadline, whichever
+            // settles first: chained bare on a permanently hung predecessor,
+            // this refresh would never run and never settle — and a click's
+            // await on it would hang with it (rev 23).
+            const predecessor = current;
+            const released = new Promise<void>((resolve) =>
+            {
+                arm(resolve);
+                void predecessor.catch(() => undefined).then(resolve);
+            });
+            run = released.then(start);
         }
         const guarded = run.finally(() =>
         {
-            if (stallTimer !== undefined)
-            {
-                window.clearTimeout(stallTimer);
-                stallTimers.delete(stallTimer);
-            }
+            disarm();
             if (current === guarded)
             {
                 current = undefined;

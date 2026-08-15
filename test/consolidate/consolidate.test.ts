@@ -295,7 +295,8 @@ describe('runClustering', () =>
         expect(outcome.costUsd).toBeCloseTo(0.2 + 0.3);
         expect(degradations).toEqual([]);
         const retryPrompt = (vi.mocked(query).mock.calls[1]![0] as { prompt: string }).prompt;
-        expect(retryPrompt).toContain('did not match the required schema');
+        expect(retryPrompt).toContain('did not match the required output schema');
+        expect(retryPrompt).not.toContain('partition was invalid');
     });
 
     it('should recover when a capped first attempt is followed by a valid partition', async () =>

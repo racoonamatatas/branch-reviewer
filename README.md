@@ -104,6 +104,25 @@ every finding it hands over has been adversarially settled or carries its
 status on its face. It never claims absence of bugs — the coverage estimate
 stays an optimistic ceiling on what's left, not a certificate.
 
+### The loop, measured
+
+Three campaigns ran against this repository's own development branch, each
+reviewing exactly the layer of fixes the previous round's verdicts had
+produced — reviewer and verifier pointed at their own code. The verified
+results: 15 clusters for $11.46, then 7 for $6.43, then 10 for $7.01. The
+*count* did not fall monotonically — `--verify-all` props it up with
+ever-smaller findings — but the *depth* did: round one's confirmed findings
+included jobs that kept billing after a shutdown; round two's single
+critical was a dashboard-poller edge case; round three had no criticals at
+all, and its tail was naming and test-hygiene nits. Two rounds confirmed a
+real bug in a fix shipped that same day — the loop catching its own
+regressions is what the high-risk posture above is buying. The marginal
+round's yield is exactly the number a team needs to decide when the next
+pass isn't worth its price; here it said stop, and the loop stopped.
+Caveats in the same spirit as the coverage ceiling: three points, one
+codebase, each round reviewing a smaller diff than the last — a suggestive
+trend, not proof.
+
 ## Cost posture
 
 Everything that calls a model bills real subscription credit, so the

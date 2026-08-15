@@ -41,6 +41,9 @@ export const clusterResponseSchema = z.object({
 // a transform and throws at module load.
 export const clusterResponseJsonSchema = z.toJSONSchema(clusterResponseSchema, { target: 'draft-7', io: 'input' });
 
+// Enough schema issues for the judge to see the pattern; more is repetition.
+const MAX_FEEDBACK_ISSUES = 3;
+
 const JUDGE_SYSTEM_PROMPT = `You are a code-review finding deduplicator. You receive findings collected from several independent review runs of the same branch diff.
 
 Group findings that describe the same underlying defect into one cluster. Judge the defect, not the text: the same issue recurs across runs with different wording, a different angle of attack, different severity, and different line anchors. Two findings belong together only if fixing one would fix the other.
@@ -138,16 +141,20 @@ export interface ClusteringOutcome
     costUsd: number;
 }
 
-// A structural judge failure still spent money — this attempt, and any
-// capped attempt before it. A bare throw discarded that meter (rev 21);
-// this error carries it so the caller's accounting can absorb it.
+// A consolidation failure after the judge billed — a structural subtype, or
+// a save that threw under a successful clustering — still spent money. A
+// bare throw discarded that meter (rev 21); this error carries it as data
+// for callers that account (the campaign), and names it in the message for
+// every caller that only prints or stores the error (the CLI, a failed
+// job's error column) — otherwise the meter survived exactly one of the
+// paths it died on (rev 23).
 export class ClusteringError extends Error
 {
     readonly costUsd: number;
 
-    constructor(message: string, costUsd: number)
+    constructor(reason: string, costUsd: number)
     {
-        super(message);
+        super(`${reason} ($${costUsd.toFixed(4)} judge spend already incurred)`);
         this.name = 'ClusteringError';
         this.costUsd = costUsd;
     }
@@ -158,15 +165,22 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
     assertSubscriptionCredit();
 
     const basePrompt = buildJudgePrompt(findings);
+    // What to feed back on retry, in the vocabulary of what went wrong: a
+    // partition violation is about the answer's content, a schema miss is
+    // about its shape — calling the second "an invalid partition" sends the
+    // judge hunting in the wrong layer (rev 23).
     let violation: string | undefined;
+    let schemaFeedback: string | undefined;
     let problem: string | undefined;
     let costUsd = 0;
 
     for (let attempt = 1; attempt <= 2; attempt++)
     {
-        const prompt = violation === undefined
-            ? basePrompt
-            : `${basePrompt}\n\nYour previous partition was invalid: ${violation}. Produce a valid partition.`;
+        const prompt = violation !== undefined
+            ? `${basePrompt}\n\nYour previous partition was invalid: ${violation}. Produce a valid partition.`
+            : schemaFeedback !== undefined
+                ? `${basePrompt}\n\nYour previous response did not match the required output schema: ${schemaFeedback}. Produce a valid partition.`
+                : basePrompt;
 
         const attempted = await judgeOnce(prompt, opts);
         costUsd += attempted.costUsd;
@@ -185,10 +199,12 @@ export async function runClustering(findings: Finding[], opts: ClusteringOptions
             // a schema miss feeds the mismatch back so the retry is a
             // correction, not a re-flip of the same coin (rev 21).
             problem = `judge run failed: ${attempted.failed}`;
-            violation = attempted.retryFeedback;
+            violation = undefined;
+            schemaFeedback = attempted.retryFeedback;
             continue;
         }
         violation = validatePartition(findings, attempted.clusters);
+        schemaFeedback = undefined;
         if (violation === undefined)
         {
             return { clusters: attempted.clusters, costUsd };
@@ -271,10 +287,14 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Judge
     const parsed = clusterResponseSchema.safeParse(result.structured_output);
     if (!parsed.success)
     {
+        // A handful of issues is a correction; hundreds (one per bad id in a
+        // big partition) is a paid prompt stuffed with repetition.
+        const shown = parsed.error.issues.slice(0, MAX_FEEDBACK_ISSUES)
+            .map(i => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
+        const omitted = parsed.error.issues.length - MAX_FEEDBACK_ISSUES;
         return {
             failed: 'structured output did not match the cluster schema',
-            retryFeedback: 'the response did not match the required schema — '
-                + parsed.error.issues.map(i => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '),
+            retryFeedback: omitted > 0 ? `${shown} (and ${omitted} more)` : shown,
             costUsd: result.total_cost_usd,
         };
     }

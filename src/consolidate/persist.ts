@@ -4,7 +4,7 @@
 // this module owns the mechanics of findings → judge → validated partition
 // → rows.
 
-import { distinctRuns, maxSeverity, runClustering } from './consolidate.js';
+import { ClusteringError, distinctRuns, maxSeverity, runClustering } from './consolidate.js';
 import type { ClusteringOptions } from './consolidate.js';
 import type { Consolidation, Finding, ReviewStore, Run } from '../store/store.js';
 import type { Target } from '../types/target.js';
@@ -47,27 +47,38 @@ export async function consolidateRuns(
     }
 
     const { clusters: proposals, costUsd } = await runClustering(findings, opts);
-    const byId = new Map(findings.map(f => [f.id, f]));
-    const id = store.saveConsolidation({
-        owner: target.owner,
-        repo: target.repo,
-        head: target.head,
-        base: target.base,
-        runIds: runs.map(run => run.id),
-        costUsd,
-        clusters: proposals.map((proposal) =>
-        {
-            const members = proposal.memberIds.map(memberId => byId.get(memberId)!);
-            return {
-                memberIds: proposal.memberIds,
-                representativeId: proposal.representativeId,
-                severity: maxSeverity(members.map(m => m.severity)),
-                occurrence: distinctRuns(members),
-            };
-        }),
-    });
+    // From here the judge has billed: a throw below (a save that fails, a
+    // read-back that doesn't) must carry the meter out with it, or a
+    // successful clustering whose persistence failed loses its cost with
+    // nothing to show for it (rev 23).
+    try
+    {
+        const byId = new Map(findings.map(f => [f.id, f]));
+        const id = store.saveConsolidation({
+            owner: target.owner,
+            repo: target.repo,
+            head: target.head,
+            base: target.base,
+            runIds: runs.map(run => run.id),
+            costUsd,
+            clusters: proposals.map((proposal) =>
+            {
+                const members = proposal.memberIds.map(memberId => byId.get(memberId)!);
+                return {
+                    memberIds: proposal.memberIds,
+                    representativeId: proposal.representativeId,
+                    severity: maxSeverity(members.map(m => m.severity)),
+                    occurrence: distinctRuns(members),
+                };
+            }),
+        });
 
-    // Read back rather than trust the in-memory proposal: the stored rows are
-    // what every later step (coverage, verification, the report) sees.
-    return store.getConsolidation(id)!;
+        // Read back rather than trust the in-memory proposal: the stored rows
+        // are what every later step (coverage, verification, the report) sees.
+        return store.getConsolidation(id)!;
+    }
+    catch (error)
+    {
+        throw new ClusteringError(error instanceof Error ? error.message : String(error), costUsd);
+    }
 }

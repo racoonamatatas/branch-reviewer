@@ -645,6 +645,30 @@ cannot see into the component); and verifyPending's pre-guard store reads
 are documented as deliberate (queued-size must be known even under
 shutdown; stores close only after the worker settles).
 
+**Campaign 5 (job #9, 2026-08-15, $7.01) — the curve bends, and the loop's
+own economics called the stop.** Target: the rev-21 settlement layer
+(finishing-pass against 912f604). Rev 23: 10 clusters, --verify-all, 10/10
+confirmed — count UP from 7 (verify-all props it with ever-smaller
+findings) while depth kept falling: 0 criticals, 3 warnings (all one
+family: cost-metering leaks introduced with ClusteringError — judge cost
+lost when the save throws after a successful clustering; the carried cost
+absorbed only by the campaign; a refresh queued behind a permanently hung
+predecessor never settling), 7 nits including "these fixes ship with no
+tests" and a naming complaint. Marginal round bought zero criticals →
+stopped the loop, settled rev 23 in code without a campaign 6:
+consolidateRuns wraps post-judge throws in ClusteringError (meter rides
+out), the error's message itself names the spend (every path that only
+prints or stores the error now carries it), schema-miss retry feedback is
+framed as a schema problem and capped at 3 issues, a queued refresh races
+its predecessor against the enqueue deadline (always starts, always
+settles; the deadline means "the wait is over", not "release the guard" —
+found by the new test), stamp() bumps the generation so in-flight
+refreshes can't overwrite a fresh verdict, and the dashboard got its own
+vitest suite (happy-dom + @vue/test-utils; root config now excludes it) —
+4 fake-timer tests over usePolling's guard/deadline semantics. Three-
+campaign total: ~$24.90. README gained "The loop, measured" with the bent
+curve told honestly.
+
 ~~Queued for the README: a "When to use this" section~~ — landed
 2026-08-15, with one deliberate departure from the queued spec: the
 six-cycle origin anecdote stays OUT of the README (decided on seeing it in

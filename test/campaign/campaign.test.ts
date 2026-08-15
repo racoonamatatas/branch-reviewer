@@ -216,7 +216,9 @@ describe('runCampaign', () =>
         // consolidation, which is also what verification ran on. The failed
         // judge attempt's own spend rides its error into the total.
         expect(campaign.stoppedBy).toBe('max-runs');
-        expect(campaign.rounds[2]).toMatchObject({ consolidationFailed: 'judge 502' });
+        expect(campaign.rounds[2]).toMatchObject({
+            consolidationFailed: expect.stringContaining('judge 502') as string,
+        });
         expect(campaign.rounds[2]?.consolidationId).toBeUndefined();
         expect(campaign.consolidationId).toBe(captured[0]?.id);
         expect(campaign.judgeCostUsd).toBeCloseTo(0.25 + 0.15);

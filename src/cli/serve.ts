@@ -254,11 +254,11 @@ function main(): void
             // throw from the first must not leave the other two dangling —
             // the failure gets named per store, then the exit code says so.
             const failures: string[] = [];
-            for (const [name, close] of [['jobs', jobs], ['store', store], ['watches', watches]] as const)
+            for (const [name, resource] of [['jobs', jobs], ['store', store], ['watches', watches]] as const)
             {
                 try
                 {
-                    close.close();
+                    resource.close();
                 }
                 catch (error)
                 {

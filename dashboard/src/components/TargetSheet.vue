@@ -366,6 +366,9 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
         const fetched = await api.getConsolidation(revId);
         detailCache.set(revId, fetched);
         detail.value = fetched;
+        // The stamp is the freshest truth on screen; a refresh already in
+        // flight predates it and must not overwrite it when it settles.
+        refreshGeneration++;
     }
     catch (e)
     {
