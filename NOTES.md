@@ -593,22 +593,17 @@ otherwise), widen the .env fine-grained PAT to cover this repo, restart
 `npm run serve` (the process from today predates the day's last five
 commits; stopped cleanly at day's end).
 
-**Queued for the README (~20 min): a "When to use this" section.** The
-origin economics: a work PR took 6 review cycles with a single-pass
-precision-tuned bot before passing — incremental recall is what a sampler
-in denial looks like from the outside; this harness does the sampling
-deliberately (union in one cycle) so the author fixes once. Frame the
-anecdote as homage, not critique (the bot's owner encouraged this project).
-The unit is cost-per-merged-PR (cycles × context switches × calendar
-latency), not cost-per-pass. Name the three postures explicitly: trivial
-PR → no review; normal → one pass, findings labeled claims; high-risk →
-campaign + cross-model rotation + --verify-all, verified findings only.
-Claim calibrated *positive* confidence (everything handed over is verified
-or labeled), never absence-of-bugs — the coverage ceiling stays the honest
-cap. Cite the 1990s capture-recapture inspection literature (Eick, Wohlin,
-Briand) in the coverage section — multiple independent human reviewers,
-singleton/doubleton counts — so the estimator reads as grounded lineage,
-not novelty.
+~~Queued for the README: a "When to use this" section~~ — landed
+2026-08-15, with one deliberate departure from the queued spec: the
+six-cycle origin anecdote stays OUT of the README (decided on seeing it in
+place — the personal story doesn't belong in the published artifact; the
+economics stand without it). What shipped: the sampler-in-denial framing
+stated impersonally, cost-per-merged-PR vs cost-per-pass, the three
+postures (trivial → skip; normal → one pass, findings as labeled claims;
+high-risk → campaign + cross-model rotation + --verify-all), calibrated
+positive confidence never absence-of-bugs, and the capture-recapture
+lineage citation (Eick 1992, Wohlin & Runeson 1998, Briand 2000) in
+thesis §3.
 
 **Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no

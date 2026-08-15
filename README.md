@@ -44,7 +44,11 @@ If runs are samples, three things follow, and each is a pipeline stage:
    target repeatedly (rounds ride each other's prompt cache), re-consolidates
    after every round, and stops when rounds stop yielding novel defects —
    with a capture-recapture estimate (Chao1 over occurrence counts) reported
-   alongside as an *optimistic ceiling* on what remains unseen. See
+   alongside as an *optimistic ceiling* on what remains unseen. The idea has
+   lineage: 1990s software-inspection research estimated residual defect
+   content from the overlap between independent human reviewers — the same
+   singleton/doubleton arithmetic (Eick et al. 1992; Wohlin & Runeson 1998;
+   Briand et al. 2000). This pipeline mechanizes the reviewers. See
    [design boundaries](#design-boundaries-and-next-experiments) for why it's
    a ceiling and why it never gates the loop.
 
@@ -68,6 +72,37 @@ adjudicated group with new reports, the lapsed verdict is recorded and the
 merged cluster re-enters the verification queue with that verdict as
 context — a refuted finding can neither resurrect silently nor hide from
 re-testing.
+
+## When to use this
+
+A single-pass reviewer *is* a sampler, whether or not it is run as one —
+and tuning it for precision doesn't change that: it spreads the recall
+across review cycles, one layer of genuine findings per round-trip, the PR
+going back to the author once per layer. From the outside that looks like
+thoroughness; economically it is sampling in denial.
+
+The unit that matters is **cost-per-merged-PR**, not cost-per-pass. A pass
+costs model credit; a *cycle* costs a context switch and calendar latency —
+the author has moved on, the fix waits out the next round-trip, the reviewer
+re-reads a diff it has already seen. Collapsing incremental recall into
+one deliberate sampling campaign moves the spend from the expensive column
+(human cycles) into the cheap one (model calls), and the author fixes once.
+
+That framing prices three postures:
+
+- **Trivial PR** — a rename, a version bump: no model review at all.
+  Sampling a diff with nothing to find is pure cost.
+- **Normal PR** — one review pass. Its findings are *claims*, each labeled
+  with the reviewer's confidence: useful leads, priced as leads.
+- **High-risk PR** — the auth change, the migration, the release branch: a
+  campaign with cross-model rotation and `--verify-all`, so everything
+  handed to a human is verified or explicitly `undetermined`, with the
+  coverage ceiling alongside as the honest bound on what may remain.
+
+What the pipeline claims at the end is calibrated *positive* confidence:
+every finding it hands over has been adversarially settled or carries its
+status on its face. It never claims absence of bugs — the coverage estimate
+stays an optimistic ceiling on what's left, not a certificate.
 
 ## Cost posture
 
