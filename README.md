@@ -9,10 +9,7 @@ it makes many reviews composable: sample repeatedly, merge what recurs,
 adversarially test what doesn't, and account for every dollar spent doing it.
 
 Read-and-report only: it reviews a GitHub branch against its merge base and
-reports structured findings. No editing, no fixing. Fresh-start successor to
-[branch-reviewer-api](https://github.com/racoonamatatas/branch-reviewer-api),
-which hand-rolls the same agent loop against the raw Messages API — kept as
-the comparison baseline, so the two projects differ only in harness.
+reports structured findings. No editing, no fixing.
 
 ## The thesis
 
