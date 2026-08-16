@@ -65,6 +65,11 @@ If runs are samples, three things follow, and each is a pipeline stage:
    (`--models a,b`), which upgrades an occurrence count from "one model
    repeating itself" to **cross-model agreement**. Both are recorded on
    every run, so the union knows which lens and which model saw what.
+   The direction has independent support: an equal-token-cost comparison
+   of test-time methods (small open models, checkable math — a narrower
+   setting than this one) found repeated independent sampling never lost
+   to self-refinement loops, and often beat them
+   ([arXiv:2607.28576](https://arxiv.org/abs/2607.28576)).
 
 Verdicts are earned by *defects*, not by cluster rows: they inherit across
 re-clusterings by exact member set, and when a re-clustering merges an
