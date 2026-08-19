@@ -509,6 +509,13 @@ was itself REFUTED by the adversary; no action.)
   lean: keep deriving until a real consumer of as-it-happened rounds shows
   up; either way, the dashboard's re-implementation of `novelClusters`
   should become a value import from the pure coverage module.
+- **CLI campaigns are invisible as campaigns.** The loop band's campaign
+  identity is a campaign *job*, so `npm run campaign` targets render as
+  "Ad-hoc runs — no campaign yet" even mid-loop (seen live 2026-08-19: a
+  3-round CLI campaign showed only its runs/consolidations). A real
+  consumer for the bullet above, and the same fix: a `campaigns` table
+  written by both the CLI and the worker — which is also where per-round
+  novelty and `stoppedBy` would naturally persist.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
