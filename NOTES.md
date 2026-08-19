@@ -543,6 +543,14 @@ base rules. Still open (deliberately deferred):
   novelty and `stoppedBy` would naturally persist.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
+- **Areas to explore (finding presentation, unscheduled):**
+  - Simplified Technical English (STE) — could the reviewer's prose
+    (finding detail/rationale text) be constrained to it, or checked
+    against it?
+  - Render code distinctly from prose in finding text (Stack
+    Exchange-style code formatting) instead of one undifferentiated blob.
+  - Numbered points each on their own line, indented, rather than run
+    together in a paragraph.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
