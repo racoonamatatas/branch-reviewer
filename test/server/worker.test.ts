@@ -380,6 +380,33 @@ describe('verify jobs', () =>
         expect(events).toContain(`#${id}: could not propose a verify job: disk full`);
     });
 
+    it('should cost one drain, not the queue, when a listener throws after succeed()', async () =>
+    {
+        // Arrange: an onEvent that always throws. After succeed() the job has
+        // left `running`, so the throw escapes execute() and rejects the drain.
+        let review = submittedWithFindings();
+        const resilient = worker({
+            review: async () => review,
+            onEvent: () =>
+            {
+                throw new Error('listener bug');
+            },
+        });
+        const first = jobs.enqueue(reviewJob());
+
+        // Act + Assert: the rejection reaches this drain's caller (serve's
+        // crash log), but the job itself stayed succeeded.
+        await expect(resilient.notify()).rejects.toThrow('listener bug');
+        expect(jobs.get(first)?.state).toBe('succeeded');
+
+        // The chain healed: the next notify drains the next job instead of
+        // short-circuiting on the dead tail forever.
+        review = submitted();
+        const second = jobs.enqueue(reviewJob({ head: 'feature/y' }));
+        await expect(resilient.notify()).resolves.toBe(1);
+        expect(jobs.get(second)?.state).toBe('succeeded');
+    });
+
     it('should not propose verification when the review found nothing', async () =>
     {
         // Arrange: the default submitted() carries zero findings.

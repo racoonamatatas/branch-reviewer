@@ -29,7 +29,11 @@ const errorBodySchema = z.object({ error: z.string() });
 
 async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T>
 {
-    const res = await fetch(path, init);
+    // Every request must settle: usePolling's in-flight guard clears in a
+    // finally(), so one fetch that never resolves (stalled connection,
+    // server wedged mid-response) would latch the guard and kill the poll
+    // loop for the life of the tab. 10s is more than three poll intervals.
+    const res = await fetch(path, { signal: AbortSignal.timeout(10_000), ...init });
     const body: unknown = await res.json().catch(() =>
     {
         throw new ApiError(res.status, `${res.status} with a non-JSON body.`);
@@ -58,6 +62,12 @@ function targetQuery(filter?: TargetFilter): string
         return '';
     }
     const params = new URLSearchParams({ owner: filter.owner, repo: filter.repo, head: filter.head });
+    // base is the filter's one optional field — dropping it here would make
+    // the type lie (a caller that pins base would get unfiltered results).
+    if (filter.base !== undefined)
+    {
+        params.set('base', filter.base);
+    }
     return `?${params.toString()}`;
 }
 

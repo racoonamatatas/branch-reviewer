@@ -474,6 +474,24 @@ REFUTED by the adversary, no action). What each fix became:
    fuse (zero turns, zero credit, canned "Empty diff" submitted review).
 7. Dead kick (#137): deleted; the release endpoint kicks the worker itself.
 
+**PR #5 campaign follow-ups** — a 3-run campaign over the slice-11 branch
+(consolidation #22: 10 distinct findings, all 7 singletons verified
+CONFIRMED, $12.27) found real defects in the follow-ups themselves. Fixed on
+the branch: empty-diff runs excluded from the union (`submittedRunsFor`),
+base plumbed over HTTP, a 10s fetch timeout so the poll guard cannot latch,
+the campaign CTA gated like the verify button (`ActionGate`), an SDK mock so
+the runReview test cannot bill on regression, a self-healing worker drain
+chain, ZERO_USAGE deduped. Still open (nits, deliberately deferred):
+
+- A failed verify proposal survives only in the in-memory event ring — a
+  durable note wants the same slice as "needs human eyes" / job-result
+  fields.
+- A campaign against an empty diff burns its run cap storing identical
+  empty runs (free since the short-circuit, but noisy) — wants a 'dry'
+  stop condition in the campaign loop.
+- `act()` bypasses usePolling's in-flight guard — cosmetic last-writer-wins
+  on jobs/watches/targets, self-corrects next tick.
+
 - "Needs human eyes" has no answer path — a human-verdict row on top of agent
   verdicts (append-only makes overrule natural).
 - Server has no graceful shutdown — an in-flight run dies with the process

@@ -9,7 +9,7 @@ import { reviewJsonSchema, reviewSchema } from '../schema/schema.js';
 import type { Review } from '../schema/schema.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
-import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
+import { UsageAccumulator, ZERO_USAGE, fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage, TurnUsage } from '../usage/usage.js';
 
 // A review of the reference target streams ~30 tool calls, and `num_turns`
@@ -123,12 +123,11 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
     // answered here instead — zero turns, zero credit.
     if (filesChanged === 0)
     {
-        const zero: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
         return {
             status: 'submitted',
             review: { summary: 'Empty diff: the branch has no changes against the base, so nothing was reviewed.', findings: [] },
             filesChanged: 0,
-            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, streamed: zero, turnUsage: [], compactions: 0 },
+            stats: { turns: 0, costUsd: 0, usage: ZERO_USAGE, perModel: {}, streamed: ZERO_USAGE, turnUsage: [], compactions: 0 },
         };
     }
 

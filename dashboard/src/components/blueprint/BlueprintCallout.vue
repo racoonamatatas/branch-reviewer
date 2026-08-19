@@ -11,10 +11,11 @@ export type CalloutSubject =
     | { kind: 'cluster'; cluster: ClusterDetail }
     | { kind: 'finding'; finding: Finding };
 
-// Whether "verify now" may enqueue, and — when it may not — the reason the
-// tooltip shows. A union rather than a bare boolean so a blocked button can
-// name its blocker (a held verify job wants ▶, not a second job).
-export type VerifyGate =
+// Whether a billing button ("verify now", the campaign CTA) may enqueue,
+// and — when it may not — the reason the tooltip shows. A union rather than
+// a bare boolean so a blocked button can name its blocker (a held job of
+// the same kind wants ▶, not a second job).
+export type ActionGate =
     | { allowed: true }
     | { allowed: false; reason: string };
 </script>
@@ -32,7 +33,7 @@ import { usd } from '../../format';
 // ids into R-numbers so the callout speaks the same language as the sheet.
 // verifyGate is the parent's call (no base yet, a job already active, or a
 // held verify job awaiting its release).
-const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[]; verifyGate: VerifyGate }>();
+const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[]; verifyGate: ActionGate }>();
 
 const emit = defineEmits<{
     stamp: [verdict: 'confirmed' | 'refuted', rationale: string];

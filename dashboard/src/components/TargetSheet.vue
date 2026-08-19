@@ -25,7 +25,7 @@ import { api, ApiError } from '../api/client';
 import type { NewJobRequest } from '../api/client';
 import { usd } from '../format';
 import BlueprintCallout from './blueprint/BlueprintCallout.vue';
-import type { CalloutSubject, VerifyGate } from './blueprint/BlueprintCallout.vue';
+import type { ActionGate, CalloutSubject } from './blueprint/BlueprintCallout.vue';
 import BlueprintIntake from './blueprint/BlueprintIntake.vue';
 import LoopBand from './blueprint/LoopBand.vue';
 
@@ -301,22 +301,30 @@ const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queu
 // one after a review with findings, and a click that ignored it would stack
 // a second job for the same work — the held job's ▶ is the click that bills.
 const heldVerifyJob = computed(() => targetJobs.value.find(j => j.kind === 'verify' && j.state === 'held'));
-const verifyGate = computed<VerifyGate>(() =>
+const verifyGate = computed<ActionGate>(() => gateFor(heldVerifyJob.value, 'Verify'));
+
+// The campaign CTA carries the same gate: promote() parks its campaign held,
+// so straight after a promote the button would otherwise be live and a click
+// would bill a full duplicate campaign while the held one awaits its ▶.
+const heldCampaignJob = computed(() => targetJobs.value.find(j => j.kind === 'campaign' && j.state === 'held'));
+const campaignGate = computed<ActionGate>(() => gateFor(heldCampaignJob.value, 'Campaign'));
+
+function gateFor(held: JobSummary | undefined, kind: string): ActionGate
 {
     if (hasActiveJob.value)
     {
         return { allowed: false, reason: 'A job for this target is already queued or running.' };
     }
-    if (heldVerifyJob.value !== undefined)
+    if (held !== undefined)
     {
-        return { allowed: false, reason: `Verify job #${heldVerifyJob.value.id} is already proposed — release it (▶) in the intake stage instead.` };
+        return { allowed: false, reason: `${kind} job #${held.id} is already proposed — release it (▶) in the intake stage instead.` };
     }
     if (base.value === undefined)
     {
         return { allowed: false, reason: 'No base known for this target yet.' };
     }
     return { allowed: true };
-});
+}
 
 const rounds = computed(() =>
     (consolidation.value?.runIds ?? []).map(id => ({
@@ -559,10 +567,9 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                         <div class="cta">
                             <button
                                 class="bp-btn chalk"
-                                :disabled="hasActiveJob || base === undefined"
-                                :title="hasActiveJob ? 'A job for this target is already queued or running.'
-                                    : base === undefined ? 'No base known for this target yet.'
-                                        : 'Enqueue a campaign for this target — bills subscription credit.'"
+                                :disabled="!campaignGate.allowed"
+                                :title="campaignGate.allowed ? 'Enqueue a campaign for this target — bills subscription credit.'
+                                    : campaignGate.reason"
                                 @click="resumeCampaign"
                             >↺ {{ campaignJob ? 'resume' : 'start' }} campaign</button>
                         </div>

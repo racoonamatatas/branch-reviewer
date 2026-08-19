@@ -60,10 +60,15 @@ export class Worker
     // Drains chain rather than overlap, so a job enqueued in the race window
     // between the final empty claimNext and the drain resolving is still
     // picked up by the chained pass instead of stranded until the next kick.
+    // The catch heals a rejected tail before chaining: an escaped throw (a
+    // worker bug — e.g. an onEvent listener throwing after the job left
+    // `running`) still reaches the caller that owned that drain, but must
+    // cost one drain, not every future one — an unhealed rejection would
+    // short-circuit all later notifies and silently kill the queue.
     // Resolves with the number of jobs this drain processed.
     notify(): Promise<number>
     {
-        this.tail = this.tail.then(() => this.drain());
+        this.tail = this.tail.catch(() => 0).then(() => this.drain());
         return this.tail;
     }
 

@@ -416,6 +416,31 @@ describe('GET /runs', () =>
         // Act + Assert
         expect((await fetch(`${base}/runs?owner=acme`)).status).toBe(400);
     });
+
+    it('should pin the base when the query carries one', async () =>
+    {
+        // Arrange: same triple, two bases — two review series.
+        seedRun('feature/x', []);
+        store.saveRun({
+            owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'develop', model: 'test-model',
+            status: 'submitted',
+            review: { summary: 'a summary', findings: [] },
+            turns: 5,
+            costUsd: 1.25,
+            usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        });
+
+        // Act
+        const triple = await (await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x`))
+            .json() as { runs: unknown[] };
+        const pinned = await (await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x&base=develop`))
+            .json() as { runs: Array<{ target: string }> };
+
+        // Assert
+        expect(triple.runs).toHaveLength(2);
+        expect(pinned.runs).toHaveLength(1);
+        expect(pinned.runs[0]?.target).toBe('acme/widgets feature/x → develop');
+    });
 });
 
 describe('GET /runs/:id/findings', () =>

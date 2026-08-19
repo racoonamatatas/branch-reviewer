@@ -272,7 +272,8 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
 }
 
 // The target filter is all-or-nothing (see TargetFilter): a partial triple
-// is a caller mistake, not a broader query.
+// is a caller mistake, not a broader query. base rides optionally on top of
+// a complete triple — it pins the comparison, it never widens the query.
 function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefined } | { ok: false }
 {
     const owner = url.searchParams.get('owner');
@@ -286,7 +287,8 @@ function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefin
     {
         return { ok: false };
     }
-    return { ok: true, filter: { owner, repo, head } };
+    const base = url.searchParams.get('base');
+    return { ok: true, filter: { owner, repo, head, ...(base !== null ? { base } : {}) } };
 }
 
 // Assembled per request: cluster counts are small and the store is
