@@ -357,6 +357,56 @@ describe('verify jobs', () =>
         expect(verify).toMatchObject({ state: 'held', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main' });
     });
 
+    it('should keep the review succeeded when proposing the verify job fails', async () =>
+    {
+        // Arrange: the review's own writes work; the follow-up proposal hits
+        // a broken store. Persistence never changes an outcome — a run that
+        // ran, billed, and saved must stay succeeded.
+        const id = jobs.enqueue(reviewJob());
+        const events: string[] = [];
+        jobs.enqueue = () =>
+        {
+            throw new Error('disk full');
+        };
+
+        // Act
+        await worker({
+            review: async () => submittedWithFindings(),
+            onEvent: (jobId, event) => events.push(`#${jobId}: ${event}`),
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)?.state).toBe('succeeded');
+        expect(events).toContain(`#${id}: could not propose a verify job: disk full`);
+    });
+
+    it('should cost one drain, not the queue, when a listener throws after succeed()', async () =>
+    {
+        // Arrange: an onEvent that always throws. After succeed() the job has
+        // left `running`, so the throw escapes execute() and rejects the drain.
+        let review = submittedWithFindings();
+        const resilient = worker({
+            review: async () => review,
+            onEvent: () =>
+            {
+                throw new Error('listener bug');
+            },
+        });
+        const first = jobs.enqueue(reviewJob());
+
+        // Act + Assert: the rejection reaches this drain's caller (serve's
+        // crash log), but the job itself stayed succeeded.
+        await expect(resilient.notify()).rejects.toThrow('listener bug');
+        expect(jobs.get(first)?.state).toBe('succeeded');
+
+        // The chain healed: the next notify drains the next job instead of
+        // short-circuiting on the dead tail forever.
+        review = submitted();
+        const second = jobs.enqueue(reviewJob({ head: 'feature/y' }));
+        await expect(resilient.notify()).resolves.toBe(1);
+        expect(jobs.get(second)?.state).toBe('succeeded');
+    });
+
     it('should not propose verification when the review found nothing', async () =>
     {
         // Arrange: the default submitted() carries zero findings.
@@ -366,6 +416,26 @@ describe('verify jobs', () =>
         await worker().notify();
 
         // Assert
+        expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
+    });
+
+    it('should succeed an empty-diff review with an empty run and no verify proposal', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(reviewJob());
+
+        // Act
+        await worker({
+            review: async () => ({ status: 'empty', filesChanged: 0, stats: stats() }),
+        }).notify();
+
+        // Assert: a completed job over a run that reviewed nothing — stored
+        // as 'empty', so nothing downstream can read it as a clean review.
+        const job = jobs.get(id);
+        expect(job?.state).toBe('succeeded');
+        const run = store.getRun(job!.runIds[0]!);
+        expect(run?.status).toBe('empty');
+        expect(run?.review).toBeUndefined();
         expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
     });
 

@@ -65,6 +65,11 @@ function show(store: ReviewStore, id: RunId): number
         console.log(`aborted: ${run.reason ?? 'unknown'}`);
         return 0;
     }
+    if (run.status === 'empty')
+    {
+        console.log('empty diff: the compare listed no changed files — nothing was reviewed');
+        return 0;
+    }
     if (run.review !== undefined)
     {
         printReview(run.review);

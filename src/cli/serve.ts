@@ -145,10 +145,8 @@ function main(): void
             // a dead poller look identical without it.
             activityLog.push('trigger', `poll pass: ${watches.list().length} watch(es) — `
                 + `${report.enqueued.length} enqueued, ${report.skipped} seen before, ${report.capped} deferred`);
-            if (report.enqueued.length > 0)
-            {
-                kick();
-            }
+            // No kick: trigger enqueues all land held, so nothing is claimable
+            // until a human release — and the release endpoint kicks itself.
         }
         catch (error)
         {

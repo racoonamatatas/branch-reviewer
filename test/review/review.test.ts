@@ -1,6 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { assertSubscriptionCredit, throwIfErrorResult } from '../../src/review/review.js';
+import type { RepoClient } from '../../src/github/github.js';
+import { assertSubscriptionCredit, runReview, throwIfErrorResult } from '../../src/review/review.js';
+
+// The runReview test below calls the real function, and only the empty-diff
+// short-circuit keeps it away from the paid query() — the very branch under
+// test. Mock the boundary so a regression fails loudly instead of spawning
+// the SDK (and possibly billing) from the unit suite. tool() and
+// createSdkMcpServer stay real: createReviewTools runs before the guard.
+vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('@anthropic-ai/claude-agent-sdk')>();
+    return {
+        ...original,
+        query: () =>
+        {
+            throw new Error('query() must not be reached: the empty-diff short-circuit has regressed.');
+        },
+    };
+});
 
 // Every credential variable the assertions read; saved and restored around
 // each test so the suite never depends on (or leaks into) the real shell env.
@@ -150,5 +168,27 @@ describe('throwIfErrorResult', () =>
         // Act + Assert
         expect(() => throwIfErrorResult(other)).toThrow('Some other terminal failure');
         expect(() => throwIfErrorResult(other)).not.toThrow('claude setup-token');
+    });
+});
+
+describe('runReview', () =>
+{
+    it('should answer an empty diff as its own status: zero turns, zero credit, no fabricated review', async () =>
+    {
+        // Arrange: a merged or stale head — the compare comes back empty.
+        const client: RepoClient = {
+            compare: async () => [],
+            readFile: async () => '',
+        };
+
+        // Act: never reaches the SDK — the pre-flight count short-circuits.
+        const result = await runReview(client, { base: 'main', head: 'feature-x' });
+
+        // Assert: 'empty', not a submitted review with zero findings — no
+        // model ran, so there is no review for the result to carry.
+        expect(result.status).toBe('empty');
+        expect(result.filesChanged).toBe(0);
+        expect(result.stats).toMatchObject({ turns: 0, costUsd: 0 });
+        expect(result).not.toHaveProperty('review');
     });
 });

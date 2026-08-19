@@ -55,12 +55,19 @@ export interface RoundOutcome
     costUsd: number;
     aborted?: string;   // the SDK ended the run early (max turns)
     failed?: string;    // the round threw — network, API, or a save that did not land
+    consolidationFailed?: string;   // the run saved but the judge call threw — no consolidation this round
     consolidationId?: ConsolidationId;
     coverage?: Coverage;
     novelClusters: number;  // clusters only this run reported — the round's marginal yield
 }
 
-export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs';
+// 'empty-diff' is a stop, not a failure: the compare listed no files, and
+// every later round would compare the same base/head — but it is also not
+// saturation, so it must never masquerade as 'dry'.
+// 'no-consolidation' is the judge's counterpart to 'no-usable-runs': the
+// union is unusable without a judge, so a persistently failing one must not
+// keep billing review credit for rounds nothing can consolidate.
+export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff' | 'no-consolidation';
 
 export interface CampaignResult
 {
@@ -83,6 +90,7 @@ export async function runCampaign(
     const rounds: RoundOutcome[] = [];
     let reviewCostUsd = 0;
     let consecutiveAborts = 0;
+    let consecutiveJudgeFailures = 0;
     let stoppedBy: StoppedBy = 'max-runs';
 
     // Runs already stored for this target are part of the union, so the
@@ -121,13 +129,27 @@ export async function runCampaign(
                 head: target.head,
                 base: target.base,
                 model: opts.model ?? 'default',
-                status: result.status === 'submitted' ? 'submitted' : 'aborted',
-                ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
+                status: result.status,
+                ...(result.status === 'aborted' ? { reason: result.reason } : {}),
+                ...(result.status === 'submitted' ? { review: result.review } : {}),
                 turns: result.stats.turns,
                 costUsd: result.stats.costUsd,
                 usage: result.stats.usage,
                 filesChanged: result.filesChanged,
             });
+
+            // An empty compare ends the campaign, not just the round: every
+            // later round would compare the same base/head, so looping to
+            // maxRuns would only store identical reviewed-nothing rows. It
+            // never reaches shouldContinue — a merged or stale head says
+            // nothing about saturation, and must not report as 'dry'.
+            if (result.status === 'empty')
+            {
+                rounds.push(outcome);
+                opts.onRun?.(outcome);
+                stoppedBy = 'empty-diff';
+                break;
+            }
 
             if (result.status === 'aborted')
             {
@@ -158,17 +180,40 @@ export async function runCampaign(
         }
         consecutiveAborts = 0;
 
-        const consolidation = await consolidateTarget(store, target, opts.model);
-        if (consolidation !== undefined)
+        // The judge is its own paid call, and its failure says nothing about
+        // this round's review: the run is already saved, and the next round's
+        // judge re-unions every stored run, so a transient judge abort self-
+        // heals a round later. It must never kill the campaign — one did, on
+        // 2026-08-19, after two paid rounds. The round simply carries no
+        // consolidation, which also keeps it out of the patience count. But
+        // transient is a two-strike claim, same as ABORT_TOLERANCE: a judge
+        // failing every round would otherwise burn the whole run cap on
+        // reviews nothing can consolidate.
+        try
         {
-            latest = consolidation;
-            outcome.consolidationId = consolidation.id;
-            outcome.coverage = coverageOf(verifiableClusters(consolidation));
-            outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
+            const consolidation = await consolidateTarget(store, target, opts.model);
+            consecutiveJudgeFailures = 0;
+            if (consolidation !== undefined)
+            {
+                latest = consolidation;
+                outcome.consolidationId = consolidation.id;
+                outcome.coverage = coverageOf(verifiableClusters(consolidation));
+                outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
+            }
+        }
+        catch (error)
+        {
+            outcome.consolidationFailed = error instanceof Error ? error.message : String(error);
+            consecutiveJudgeFailures++;
         }
         rounds.push(outcome);
         opts.onRun?.(outcome);
 
+        if (consecutiveJudgeFailures >= ABORT_TOLERANCE)
+        {
+            stoppedBy = 'no-consolidation';
+            break;
+        }
         if (!shouldContinue(rounds.filter(r => r.consolidationId !== undefined), opts.patience))
         {
             stoppedBy = 'dry';

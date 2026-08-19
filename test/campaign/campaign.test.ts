@@ -1,7 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import { campaignCost, clusterGrowth } from '../../src/campaign/campaign.js';
+import { describe, expect, it, vi } from 'vitest';
+import { campaignCost, clusterGrowth, runCampaign } from '../../src/campaign/campaign.js';
 import type { CampaignResult, RoundOutcome } from '../../src/campaign/campaign.js';
+import type { RepoClient } from '../../src/github/github.js';
+import { ReviewStore } from '../../src/store/store.js';
+import type { Finding } from '../../src/store/store.js';
 import { consolidationId, runId } from '../../src/types/ids.js';
+
+// The loop's two paid boundaries, mocked so the loop itself runs real:
+// the reviewer returns canned submissions, the judge is scriptable per call.
+const runClusteringMock = vi.hoisted(() => vi.fn());
+const runReviewMock = vi.hoisted(() => vi.fn());
+vi.mock('../../src/consolidate/consolidate.js', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('../../src/consolidate/consolidate.js')>();
+    return { ...original, runClustering: runClusteringMock };
+});
+vi.mock('../../src/review/review.js', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('../../src/review/review.js')>();
+    return { ...original, runReview: runReviewMock };
+});
 
 function round(n: number, overrides: Partial<RoundOutcome> = {}): RoundOutcome
 {
@@ -111,5 +129,108 @@ describe('campaignCost', () =>
 
         // Assert
         expect(cost).toEqual({ reviews: 2.5, verification: 0, total: 2.5 });
+    });
+});
+
+describe('runCampaign', () =>
+{
+    it('should survive a judge failure: the round keeps its run, the campaign keeps going', async () =>
+    {
+        // Arrange: three submitted reviews; the first judge call (round 2 —
+        // the first with two runs to union) aborts, later calls succeed.
+        const store = new ReviewStore(':memory:');
+        const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+        const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        runReviewMock.mockResolvedValue({
+            status: 'submitted',
+            review: { summary: 'reviewed', findings: [{ file: 'src/a.ts', severity: 'warning', title: 'T', detail: 'd' }] },
+            filesChanged: 2,
+            stats: { turns: 5, costUsd: 1, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        });
+        runClusteringMock
+            .mockRejectedValueOnce(new Error('Clustering judge failed: error_max_turns'))
+            .mockImplementation(async (findings: Finding[]) =>
+                [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+
+        // Act
+        const result = await runCampaign(
+            store, client,
+            { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' },
+            { maxRuns: 3, verify: false },
+        );
+        store.close();
+
+        // Assert: round 2's judge abort is recorded on the round, its run
+        // survives, and round 3's judge re-unions all three runs.
+        expect(result.rounds).toHaveLength(3);
+        expect(result.rounds[1]).toMatchObject({
+            consolidationFailed: expect.stringContaining('error_max_turns') as string,
+        });
+        expect(result.rounds[1]?.runId).toBeDefined();
+        expect(result.rounds[1]?.consolidationId).toBeUndefined();
+        expect(result.consolidationId).toBeDefined();
+        expect(result.runIds).toHaveLength(3);
+    });
+
+    it('should stop after two consecutive judge failures instead of burning the run cap', async () =>
+    {
+        // Arrange: reviews keep succeeding (and billing), but the judge is
+        // persistently broken — every consolidation attempt throws.
+        const store = new ReviewStore(':memory:');
+        const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+        const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        runReviewMock.mockResolvedValue({
+            status: 'submitted',
+            review: { summary: 'reviewed', findings: [{ file: 'src/a.ts', severity: 'warning', title: 'T', detail: 'd' }] },
+            filesChanged: 2,
+            stats: { turns: 5, costUsd: 1, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        });
+        runClusteringMock.mockRejectedValue(new Error('Clustering judge failed: schema rejection'));
+
+        // Act
+        const result = await runCampaign(
+            store, client,
+            { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' },
+            { maxRuns: 5, verify: false },
+        );
+        store.close();
+
+        // Assert: round 1 has no judge call (one run is below the union
+        // guard); rounds 2 and 3 fail it — two strikes, stop, three rounds
+        // billed instead of five.
+        expect(result.stoppedBy).toBe('no-consolidation');
+        expect(result.rounds).toHaveLength(3);
+        expect(result.rounds.filter(r => r.consolidationFailed !== undefined)).toHaveLength(2);
+        expect(result.consolidationId).toBeUndefined();
+    });
+
+    it('should stop on the first empty-diff round instead of burning the run cap', async () =>
+    {
+        // Arrange: the compare lists no files — every later round would
+        // compare the same base/head.
+        const store = new ReviewStore(':memory:');
+        const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+        const usage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        runReviewMock.mockResolvedValue({
+            status: 'empty',
+            filesChanged: 0,
+            stats: { turns: 0, costUsd: 0, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        });
+
+        // Act
+        const result = await runCampaign(
+            store, client,
+            { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' },
+            { maxRuns: 3, verify: false },
+        );
+
+        // Assert: one round, its own stop reason — never 'dry' (an empty
+        // compare says nothing about saturation) and never three stored
+        // copies of the same nothing.
+        expect(result.rounds).toHaveLength(1);
+        expect(result.stoppedBy).toBe('empty-diff');
+        const runId = result.rounds[0]!.runId!;
+        expect(store.getRun(runId)?.status).toBe('empty');
+        store.close();
     });
 });

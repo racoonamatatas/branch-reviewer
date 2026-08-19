@@ -214,7 +214,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         const query = parseTargetFilter(url);
         return query.ok
             ? json(res, 200, { runs: deps.store.listRuns(query.filter) })
-            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+            : json(res, 400, { error: FILTER_400 });
     }
 
     // A run's own findings, ids and provenance included — the dashboard's
@@ -235,7 +235,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         const query = parseTargetFilter(url);
         return query.ok
             ? json(res, 200, { consolidations: deps.store.listConsolidations(query.filter) })
-            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+            : json(res, 400, { error: FILTER_400 });
     }
 
     const detail = /^\/consolidations\/(\d+)$/.exec(path);
@@ -271,22 +271,30 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     json(res, 404, { error: 'No such route.' });
 }
 
+// One string, used by every filtered route: the 400 must describe every
+// rejection parseTargetFilter produces, base rules included.
+const FILTER_400 = 'Filtering needs owner, repo, and head together, all non-empty; base is optional but must be non-empty and ride on the full triple.';
+
 // The target filter is all-or-nothing (see TargetFilter): a partial triple
-// is a caller mistake, not a broader query.
+// is a caller mistake, not a broader query, and a present-but-empty value
+// is rejected the same way — an empty string pins to a target that cannot
+// exist. base rides optionally on top of a complete triple: it pins the
+// comparison, it never widens the query, so a lone base is rejected too.
 function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefined } | { ok: false }
 {
     const owner = url.searchParams.get('owner');
     const repo = url.searchParams.get('repo');
     const head = url.searchParams.get('head');
+    const base = url.searchParams.get('base');
     if (owner === null && repo === null && head === null)
     {
-        return { ok: true, filter: undefined };
+        return base === null ? { ok: true, filter: undefined } : { ok: false };
     }
-    if (owner === null || repo === null || head === null)
+    if (owner === null || owner === '' || repo === null || repo === '' || head === null || head === '' || base === '')
     {
         return { ok: false };
     }
-    return { ok: true, filter: { owner, repo, head } };
+    return { ok: true, filter: { owner, repo, head, ...(base !== null ? { base } : {}) } };
 }
 
 // Assembled per request: cluster counts are small and the store is

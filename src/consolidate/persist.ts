@@ -16,7 +16,12 @@ export interface ConsolidationTarget
 }
 
 // Every stored submitted run of this target, oldest first — the round order
-// a campaign would have produced.
+// a campaign would have produced. 'empty' runs never qualify by the status
+// check alone: they are not samples, and letting them in would inflate the
+// verifier's "1 of N runs" denominator and churn the runIds set that
+// verifyTarget's reuse check compares, forcing paid re-consolidations of
+// unchanged findings. (The store migrates old submitted + filesChanged 0
+// rows to 'empty', so no second tell is needed here.)
 export function submittedRunsFor(store: ReviewStore, target: ConsolidationTarget): Run[]
 {
     const runs: Run[] = [];
