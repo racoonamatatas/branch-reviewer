@@ -172,6 +172,10 @@ async function main(): Promise<number>
                 }
                 console.log(`  run #${outcome.runId} saved — ${outcome.findings} finding(s), `
                     + `${outcome.turns} turn(s), $${outcome.costUsd.toFixed(4)}`);
+                if (outcome.consolidationFailed !== undefined)
+                {
+                    console.error(`  judge call failed: ${outcome.consolidationFailed} — the run is saved; the next round re-consolidates`);
+                }
                 if (outcome.coverage !== undefined)
                 {
                     console.log(`  consolidation #${outcome.consolidationId}: `

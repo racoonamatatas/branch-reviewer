@@ -55,6 +55,7 @@ export interface RoundOutcome
     costUsd: number;
     aborted?: string;   // the SDK ended the run early (max turns)
     failed?: string;    // the round threw — network, API, or a save that did not land
+    consolidationFailed?: string;   // the run saved but the judge call threw — no consolidation this round
     consolidationId?: ConsolidationId;
     coverage?: Coverage;
     novelClusters: number;  // clusters only this run reported — the round's marginal yield
@@ -158,13 +159,26 @@ export async function runCampaign(
         }
         consecutiveAborts = 0;
 
-        const consolidation = await consolidateTarget(store, target, opts.model);
-        if (consolidation !== undefined)
+        // The judge is its own paid call, and its failure says nothing about
+        // this round's review: the run is already saved, and the next round's
+        // judge re-unions every stored run, so a transient judge abort self-
+        // heals a round later. It must never kill the campaign — one did, on
+        // 2026-08-19, after two paid rounds. The round simply carries no
+        // consolidation, which also keeps it out of the patience count.
+        try
         {
-            latest = consolidation;
-            outcome.consolidationId = consolidation.id;
-            outcome.coverage = coverageOf(verifiableClusters(consolidation));
-            outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
+            const consolidation = await consolidateTarget(store, target, opts.model);
+            if (consolidation !== undefined)
+            {
+                latest = consolidation;
+                outcome.consolidationId = consolidation.id;
+                outcome.coverage = coverageOf(verifiableClusters(consolidation));
+                outcome.novelClusters = novelClusters(consolidation.clusters, outcome.runId!);
+            }
+        }
+        catch (error)
+        {
+            outcome.consolidationFailed = error instanceof Error ? error.message : String(error);
         }
         rounds.push(outcome);
         opts.onRun?.(outcome);

@@ -145,7 +145,12 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Clust
         options: {
             systemPrompt: JUDGE_SYSTEM_PROMPT,
             model: opts.model,
-            maxTurns: 1,
+            // Logically one turn — but structured output arrives as a tool
+            // call, so a harness retry (a truncated or invalid first attempt)
+            // needs a spare turn to land. A 1-turn budget aborted a real
+            // judge call with error_max_turns clustering 12 findings
+            // (2026-08-19); 4 keeps the call one-shot with retry headroom.
+            maxTurns: 4,
             tools: [],
             outputFormat: { type: 'json_schema', schema: clusterResponseJsonSchema },
         },

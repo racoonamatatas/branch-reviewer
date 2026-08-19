@@ -1,7 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import { campaignCost, clusterGrowth } from '../../src/campaign/campaign.js';
+import { describe, expect, it, vi } from 'vitest';
+import { campaignCost, clusterGrowth, runCampaign } from '../../src/campaign/campaign.js';
 import type { CampaignResult, RoundOutcome } from '../../src/campaign/campaign.js';
+import type { RepoClient } from '../../src/github/github.js';
+import { ReviewStore } from '../../src/store/store.js';
+import type { Finding } from '../../src/store/store.js';
 import { consolidationId, runId } from '../../src/types/ids.js';
+
+// The loop's two paid boundaries, mocked so the loop itself runs real:
+// the reviewer returns canned submissions, the judge is scriptable per call.
+const runClusteringMock = vi.hoisted(() => vi.fn());
+const runReviewMock = vi.hoisted(() => vi.fn());
+vi.mock('../../src/consolidate/consolidate.js', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('../../src/consolidate/consolidate.js')>();
+    return { ...original, runClustering: runClusteringMock };
+});
+vi.mock('../../src/review/review.js', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('../../src/review/review.js')>();
+    return { ...original, runReview: runReviewMock };
+});
 
 function round(n: number, overrides: Partial<RoundOutcome> = {}): RoundOutcome
 {
@@ -111,5 +129,46 @@ describe('campaignCost', () =>
 
         // Assert
         expect(cost).toEqual({ reviews: 2.5, verification: 0, total: 2.5 });
+    });
+});
+
+describe('runCampaign', () =>
+{
+    it('should survive a judge failure: the round keeps its run, the campaign keeps going', async () =>
+    {
+        // Arrange: three submitted reviews; the first judge call (round 2 —
+        // the first with two runs to union) aborts, later calls succeed.
+        const store = new ReviewStore(':memory:');
+        const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+        const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        runReviewMock.mockResolvedValue({
+            status: 'submitted',
+            review: { summary: 'reviewed', findings: [{ file: 'src/a.ts', severity: 'warning', title: 'T', detail: 'd' }] },
+            filesChanged: 2,
+            stats: { turns: 5, costUsd: 1, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        });
+        runClusteringMock
+            .mockRejectedValueOnce(new Error('Clustering judge failed: error_max_turns'))
+            .mockImplementation(async (findings: Finding[]) =>
+                [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+
+        // Act
+        const result = await runCampaign(
+            store, client,
+            { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' },
+            { maxRuns: 3, verify: false },
+        );
+        store.close();
+
+        // Assert: round 2's judge abort is recorded on the round, its run
+        // survives, and round 3's judge re-unions all three runs.
+        expect(result.rounds).toHaveLength(3);
+        expect(result.rounds[1]).toMatchObject({
+            consolidationFailed: expect.stringContaining('error_max_turns') as string,
+        });
+        expect(result.rounds[1]?.runId).toBeDefined();
+        expect(result.rounds[1]?.consolidationId).toBeUndefined();
+        expect(result.consolidationId).toBeDefined();
+        expect(result.runIds).toHaveLength(3);
     });
 });
