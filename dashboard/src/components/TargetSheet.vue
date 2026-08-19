@@ -73,6 +73,10 @@ function describe(e: unknown): string
 
 async function refresh(): Promise<void>
 {
+    // Deliberately the triple, not the quad: the sheet is keyed and routed by
+    // owner/repo/head, and a second base for the same head is rare enough
+    // that showing the union beats hiding a series the URL cannot reach.
+    // Revisit if the sheet is ever keyed by the full quad.
     const filter = { owner: props.owner, repo: props.repo, head: props.head };
     // The selected rev's detail re-fetches every cycle: a consolidation row is
     // immutable but its verification history is not — agent verdicts and human
@@ -173,6 +177,8 @@ const coverage = computed(() => detail.value?.coverage);
 // run id exactly like consolidation details do.
 const sampleFindings = ref<Finding[]>([]);
 const findingsCache = new Map<RunId, Finding[]>();
+// status === 'submitted' also keeps empty-diff runs out of the sample: an
+// 'empty' run in first position must not hide an older real run's findings.
 const sampleRunId = computed(() =>
     consolidations.value.length > 0 ? undefined : runs.value.find(r => r.status === 'submitted')?.id);
 watch(sampleRunId, async (id) =>
@@ -437,9 +443,10 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                             <span class="dbid">run {{ run.id }}</span>
                             <span class="m">{{ run.turns }} turns · {{ usd(run.costUsd) }}</span>
                             <!-- An empty compare is a review of nothing (merged or stale
-                                 head) — it must not read as a clean bill of health. -->
+                                 head) — its own status, so it can never read as a clean
+                                 bill of health. -->
                             <span class="f">{{ run.status === 'aborted' ? 'aborted'
-                                : run.filesChanged === 0 ? 'empty diff — reviewed nothing'
+                                : run.status === 'empty' ? 'empty diff — reviewed nothing'
                                     : `${run.findingsCount} findings` }}</span>
                         </div>
                         <div v-if="runs.length === 0" class="vnote">no runs recorded for this target yet</div>

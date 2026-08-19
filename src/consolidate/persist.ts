@@ -16,19 +16,18 @@ export interface ConsolidationTarget
 }
 
 // Every stored submitted run of this target, oldest first — the round order
-// a campaign would have produced. Reviewed-nothing runs (filesChanged === 0:
-// the empty-compare short-circuit, a merged or stale head) are excluded —
-// they are not samples, and letting them in would inflate the verifier's
-// "1 of N runs" denominator and churn the runIds set that verifyTarget's
-// reuse check compares, forcing paid re-consolidations of unchanged
-// findings. Rows from before the column existed carry no filesChanged and
-// stay in: absence of the tell is not the tell.
+// a campaign would have produced. 'empty' runs never qualify by the status
+// check alone: they are not samples, and letting them in would inflate the
+// verifier's "1 of N runs" denominator and churn the runIds set that
+// verifyTarget's reuse check compares, forcing paid re-consolidations of
+// unchanged findings. (The store migrates old submitted + filesChanged 0
+// rows to 'empty', so no second tell is needed here.)
 export function submittedRunsFor(store: ReviewStore, target: ConsolidationTarget): Run[]
 {
     const runs: Run[] = [];
     for (const summary of store.listRuns())
     {
-        if (summary.status !== 'submitted' || summary.filesChanged === 0)
+        if (summary.status !== 'submitted')
         {
             continue;
         }

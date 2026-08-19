@@ -474,21 +474,28 @@ REFUTED by the adversary, no action). What each fix became:
    fuse (zero turns, zero credit, canned "Empty diff" submitted review).
 7. Dead kick (#137): deleted; the release endpoint kicks the worker itself.
 
-**PR #5 campaign follow-ups** — a 3-run campaign over the slice-11 branch
-(consolidation #22: 10 distinct findings, all 7 singletons verified
-CONFIRMED, $12.27) found real defects in the follow-ups themselves. Fixed on
-the branch: empty-diff runs excluded from the union (`submittedRunsFor`),
-base plumbed over HTTP, a 10s fetch timeout so the poll guard cannot latch,
-the campaign CTA gated like the verify button (`ActionGate`), an SDK mock so
-the runReview test cannot bill on regression, a self-healing worker drain
-chain, ZERO_USAGE deduped. Still open (nits, deliberately deferred):
+**PR #5 campaign follow-ups** — two campaigns reviewed the branch itself.
+Campaign 1 (consolidation #22: 10 findings, 7/7 singletons CONFIRMED,
+$12.27) produced the first fix round: empty-diff runs filtered from the
+union, base plumbed over HTTP, a 10s fetch timeout so the poll guard cannot
+latch, the campaign CTA gated like the verify button (`ActionGate`), an SDK
+mock so the runReview test cannot bill on regression, a self-healing worker
+drain chain, ZERO_USAGE deduped. Campaign 2 crashed the judge
+(error_max_turns under maxTurns 1 — structured output is a tool call, so a
+retry needs turns; now 4, and a judge failure costs a round, never the
+campaign) and, rerun over 5 unioned runs (consolidation #26: 12 findings,
+6/6 singletons CONFIRMED, $13.76), converged on the short-circuit's
+fabricated `submitted` review. That became the second fix round: **runs now
+have a third status, `'empty'`** (its own `ReviewResult` member, store
+migration for the fabricated rows, every status reader — worker, campaign
+`stoppedBy: 'empty-diff'`, both CLIs, dashboard — discriminates on it), plus
+the base query-param edges (lone/empty base → 400), the timeout spread
+order, frozen ZERO_USAGE, a rejection handler in usePolling's guard, and a
+vacuous verify for all-empty targets. Still open (deliberately deferred):
 
 - A failed verify proposal survives only in the in-memory event ring — a
   durable note wants the same slice as "needs human eyes" / job-result
   fields.
-- A campaign against an empty diff burns its run cap storing identical
-  empty runs (free since the short-circuit, but noisy) — wants a 'dry'
-  stop condition in the campaign loop.
 - `act()` bypasses usePolling's in-flight guard — cosmetic last-writer-wins
   on jobs/watches/targets, self-corrects next tick.
 

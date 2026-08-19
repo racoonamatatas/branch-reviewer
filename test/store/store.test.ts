@@ -136,6 +136,60 @@ describe('ReviewStore', () =>
         expect(summaries[0]!.findingsCount).toBe(0);
     });
 
+    it('should round-trip an empty run: no review, no reason, its own status', () =>
+    {
+        // Arrange
+        const empty: NewRun = {
+            owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+            model: 'claude-opus-5',
+            status: 'empty',
+            turns: 0,
+            costUsd: 0,
+            usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            filesChanged: 0,
+        };
+        const id = store.saveRun(empty);
+
+        // Act
+        const stored = store.getRun(id);
+
+        // Assert
+        expect(stored).toEqual({ id, createdAt: expect.any(String) as unknown, ...empty });
+        expect(stored?.review).toBeUndefined();
+        expect(stored?.reason).toBeUndefined();
+    });
+
+    it('should migrate fabricated submitted empty-diff rows to the empty status on open', () =>
+    {
+        // Arrange: a row written while the short-circuit briefly returned a
+        // submitted review for an empty compare (slice-11 branch, pre-fix).
+        const dir = mkdtempSync(join(tmpdir(), 'store-empty-migration-'));
+        const path = join(dir, 'reviews.db');
+        try
+        {
+            const before = new ReviewStore(path);
+            const fabricated = before.saveRun({
+                ...submittedRun,
+                review: { summary: 'Empty diff: nothing was reviewed.', findings: [] },
+                filesChanged: 0,
+            });
+            const legacy = before.saveRun(submittedRun);  // no filesChanged: "unknown" must stay submitted
+            before.close();
+
+            // Act
+            const migrated = new ReviewStore(path);
+
+            // Assert
+            expect(migrated.getRun(fabricated)?.status).toBe('empty');
+            expect(migrated.getRun(legacy)?.status).toBe('submitted');
+            migrated.close();
+        }
+        finally
+        {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('should pin listRuns to a base when the filter carries one', () =>
     {
         // Arrange: one head reviewed against two bases — two review series.

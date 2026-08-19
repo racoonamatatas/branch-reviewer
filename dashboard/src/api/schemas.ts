@@ -110,12 +110,14 @@ export const targetSummarySchema = z.object({
 export const runSummarySchema = z.object({
     id: toTypedId(runId),
     createdAt: z.string(),
-    status: z.enum(['submitted', 'aborted']),
+    // 'empty': the compare listed no files, no model ran — its own status,
+    // never a submitted review with zero findings.
+    status: z.enum(['submitted', 'aborted', 'empty']),
     turns: z.number().int(),
     costUsd: z.number(),
     target: z.string(),
     findingsCount: z.number().int(),
-    // Absent on runs saved before the column existed; 0 is the empty-diff tell.
+    // Absent on runs saved before the column existed.
     filesChanged: z.number().int().optional(),
 }) satisfies z.ZodType<RunSummary>;
 

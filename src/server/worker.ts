@@ -137,7 +137,8 @@ export class Worker
             base: job.base,
             model,
             status: result.status,
-            ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
+            ...(result.status === 'aborted' ? { reason: result.reason } : {}),
+            ...(result.status === 'submitted' ? { review: result.review } : {}),
             turns: result.stats.turns,
             costUsd: result.stats.costUsd,
             usage: result.stats.usage,
@@ -148,6 +149,15 @@ export class Worker
         if (result.status === 'aborted')
         {
             this.jobs.abort(job.id, result.reason);
+            return;
+        }
+
+        // An empty compare is a completed job (nothing was owed a review),
+        // with no review to propose verification for.
+        if (result.status === 'empty')
+        {
+            this.onEvent?.(job.id, 'empty diff — the compare listed no files, nothing was reviewed (no credit spent)');
+            this.jobs.succeed(job.id);
             return;
         }
         this.jobs.succeed(job.id);
@@ -211,8 +221,9 @@ export class Worker
         );
 
         // Two consecutive unusable rounds is the campaign's own abort path —
-        // structural, mirroring a single review's cap — while running dry or
-        // out of runs are both successful completions of the sampling plan.
+        // structural, mirroring a single review's cap — while running dry,
+        // out of runs, or into an empty diff are all successful completions
+        // of the sampling plan.
         if (result.stoppedBy === 'no-usable-runs')
         {
             this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed');

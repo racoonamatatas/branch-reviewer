@@ -5,6 +5,8 @@ import type { NewRun } from '../../src/store/store.js';
 
 const TARGET = { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' };
 
+// No cast: NewRun is a plain shape, so defaults + Partial spread type-check
+// as-is, and a future shape change fails this file at compile time.
 function newRun(overrides: Partial<NewRun> = {}): NewRun
 {
     return {
@@ -17,7 +19,7 @@ function newRun(overrides: Partial<NewRun> = {}): NewRun
         usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
         filesChanged: 3,
         ...overrides,
-    } as NewRun;
+    };
 }
 
 describe('submittedRunsFor', () =>
@@ -34,25 +36,25 @@ describe('submittedRunsFor', () =>
         store.close();
     });
 
-    it('should exclude reviewed-nothing runs from the union', () =>
+    it('should exclude empty and aborted runs from the union', () =>
     {
         // Arrange: a real sample, an empty-diff short-circuit, and an abort.
         const sample = store.saveRun(newRun());
-        store.saveRun(newRun({ filesChanged: 0 }));
+        store.saveRun(newRun({ status: 'empty', review: undefined, filesChanged: 0 }));
         store.saveRun(newRun({ status: 'aborted', reason: 'error_max_turns', review: undefined }));
 
         // Act
         const runs = submittedRunsFor(store, TARGET);
 
-        // Assert: the empty-diff run reviewed nothing — it is not a sample,
-        // and must not inflate the verifier's 1-of-N denominator or churn
+        // Assert: an empty run reviewed nothing — it is not a sample, and
+        // must not inflate the verifier's 1-of-N denominator or churn
         // verifyTarget's reuse check.
         expect(runs.map(r => r.id)).toEqual([sample]);
     });
 
     it('should keep legacy rows that predate the filesChanged column', () =>
     {
-        // Arrange: no filesChanged at all — absence of the tell is not the tell.
+        // Arrange: no filesChanged at all — "unknown" stays submitted.
         const legacy = newRun();
         delete legacy.filesChanged;
         const id = store.saveRun(legacy);

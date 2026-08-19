@@ -171,4 +171,34 @@ describe('runCampaign', () =>
         expect(result.consolidationId).toBeDefined();
         expect(result.runIds).toHaveLength(3);
     });
+
+    it('should stop on the first empty-diff round instead of burning the run cap', async () =>
+    {
+        // Arrange: the compare lists no files — every later round would
+        // compare the same base/head.
+        const store = new ReviewStore(':memory:');
+        const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+        const usage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        runReviewMock.mockResolvedValue({
+            status: 'empty',
+            filesChanged: 0,
+            stats: { turns: 0, costUsd: 0, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        });
+
+        // Act
+        const result = await runCampaign(
+            store, client,
+            { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' },
+            { maxRuns: 3, verify: false },
+        );
+
+        // Assert: one round, its own stop reason — never 'dry' (an empty
+        // compare says nothing about saturation) and never three stored
+        // copies of the same nothing.
+        expect(result.rounds).toHaveLength(1);
+        expect(result.stoppedBy).toBe('empty-diff');
+        const runId = result.rounds[0]!.runId!;
+        expect(store.getRun(runId)?.status).toBe('empty');
+        store.close();
+    });
 });

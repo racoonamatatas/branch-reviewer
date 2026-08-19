@@ -286,6 +286,17 @@ export async function verifyTarget(
     const runs = submittedRunsFor(store, target);
     if (runs.length === 0)
     {
+        // A target whose stored runs all reviewed an empty diff has nothing
+        // to verify but is not a caller mistake — "nothing to verify" is a
+        // completed plan, same as the no-findings path below. Throwing here
+        // would fail the job with a message that contradicts the run list.
+        const onlyEmpty = store.listRuns({ owner: target.owner, repo: target.repo, head: target.head, base: target.base })
+            .some(r => r.status === 'empty');
+        if (onlyEmpty)
+        {
+            opts.onEvent?.('every stored run of this target reviewed an empty diff — nothing to verify');
+            return { reused: false, summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+        }
         throw new Error('No submitted runs for this target — nothing to verify.');
     }
 

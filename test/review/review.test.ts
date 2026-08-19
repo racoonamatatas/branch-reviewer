@@ -173,7 +173,7 @@ describe('throwIfErrorResult', () =>
 
 describe('runReview', () =>
 {
-    it('should answer an empty diff itself: zero turns, zero credit, and the empty-diff tell', async () =>
+    it('should answer an empty diff as its own status: zero turns, zero credit, no fabricated review', async () =>
     {
         // Arrange: a merged or stale head — the compare comes back empty.
         const client: RepoClient = {
@@ -184,14 +184,11 @@ describe('runReview', () =>
         // Act: never reaches the SDK — the pre-flight count short-circuits.
         const result = await runReview(client, { base: 'main', head: 'feature-x' });
 
-        // Assert
-        expect(result.status).toBe('submitted');
+        // Assert: 'empty', not a submitted review with zero findings — no
+        // model ran, so there is no review for the result to carry.
+        expect(result.status).toBe('empty');
         expect(result.filesChanged).toBe(0);
         expect(result.stats).toMatchObject({ turns: 0, costUsd: 0 });
-        if (result.status === 'submitted')
-        {
-            expect(result.review.findings).toEqual([]);
-            expect(result.review.summary).toContain('Empty diff');
-        }
+        expect(result).not.toHaveProperty('review');
     });
 });

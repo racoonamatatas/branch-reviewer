@@ -109,6 +109,7 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
         'dry': 'discovery dried up',
         'max-runs': `run cap reached (${args.maxRuns})`,
         'no-usable-runs': 'consecutive runs aborted',
+        'empty-diff': 'the compare listed no files — nothing to sample',
     }[campaign.stoppedBy];
 
     console.log(`\ncampaign complete: ${campaign.rounds.length} run(s) fired — ${reason}`);

@@ -24,7 +24,11 @@ export interface Run extends Identified<'Run'>, Created
     head: string;
     base: string;
     model: string;
-    status: 'submitted' | 'aborted';
+    // 'empty' mirrors ReviewResult's third member: the compare listed no
+    // files, no model ran, there is no review and no abort reason. Readers
+    // discriminate on the status — never on filesChanged === 0, which on
+    // legacy rows means "unknown", not "empty".
+    status: 'submitted' | 'aborted' | 'empty';
     reason?: string;
     review?: Review;
     turns: number;
@@ -284,6 +288,17 @@ export class ReviewStore
         this.migrateVerificationProvenance();
         this.db.exec(SCHEMA);
         this.migrateRunFilesChanged();
+        this.migrateEmptyRuns();
+    }
+
+    // Rows written while the empty-diff short-circuit fabricated a submitted
+    // review (briefly, on the slice-11 branch): the status now carries what
+    // those rows encoded as submitted + files_changed = 0. Idempotent, and a
+    // no-op on databases that never held such a row. Legacy NULLs stay
+    // submitted — "unknown", not "empty".
+    private migrateEmptyRuns(): void
+    {
+        this.db.exec("UPDATE runs SET status = 'empty' WHERE status = 'submitted' AND files_changed = 0");
     }
 
     // Databases from before the empty-diff tell existed lack the column; the

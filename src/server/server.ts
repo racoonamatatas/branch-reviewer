@@ -273,21 +273,23 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
 
 // The target filter is all-or-nothing (see TargetFilter): a partial triple
 // is a caller mistake, not a broader query. base rides optionally on top of
-// a complete triple — it pins the comparison, it never widens the query.
+// a complete triple — it pins the comparison, it never widens the query, so
+// a lone base is rejected like any partial filter, and an empty base is
+// rejected rather than pinning to a base that cannot exist.
 function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefined } | { ok: false }
 {
     const owner = url.searchParams.get('owner');
     const repo = url.searchParams.get('repo');
     const head = url.searchParams.get('head');
+    const base = url.searchParams.get('base');
     if (owner === null && repo === null && head === null)
     {
-        return { ok: true, filter: undefined };
+        return base === null ? { ok: true, filter: undefined } : { ok: false };
     }
-    if (owner === null || repo === null || head === null)
+    if (owner === null || repo === null || head === null || base === '')
     {
         return { ok: false };
     }
-    const base = url.searchParams.get('base');
     return { ok: true, filter: { owner, repo, head, ...(base !== null ? { base } : {}) } };
 }
 

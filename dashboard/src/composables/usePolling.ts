@@ -20,7 +20,9 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): vo
             return;
         }
         inFlight = true;
-        void refresh().finally(() =>
+        // The catch is defensive (today's callers catch internally): finally
+        // re-rejects, and void would leave that rejection unhandled.
+        void refresh().catch(() => undefined).finally(() =>
         {
             inFlight = false;
         });

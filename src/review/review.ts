@@ -63,12 +63,21 @@ export interface ReviewRunStats
     compactions: number;
 }
 
-// filesChanged rides on both outcomes: a 0-findings run against a 0-file
+// filesChanged rides on every outcome: a 0-findings run against a 0-file
 // diff is a review of nothing, and downstream displays must be able to say
 // so instead of presenting it as a clean bill of health.
+// 'empty' is its own member, not a submitted review with zero findings: no
+// model ran, so there is no review to carry, and readers must be able to
+// discriminate "the model found nothing" from "there was nothing to look
+// at" on the status instead of reconstructing it from filesChanged === 0.
+// It also carries no claim that the branch is empty — GitHub's compare
+// omits `files` for oversized comparisons, so an empty list is an
+// observation about the compare payload, not a verified fact about the
+// branch.
 export type ReviewResult =
     | { status: 'submitted'; review: Review; filesChanged: number; stats: ReviewRunStats }
-    | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats };
+    | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats }
+    | { status: 'empty'; filesChanged: 0; stats: ReviewRunStats };
 
 // Which credential wins when both an API key and a subscription login are
 // present is undocumented; refuse the ambiguous state so a run can never
@@ -120,12 +129,12 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
 
     // The empty-diff tell doubles as a cost fuse: with nothing to review, the
     // model would only be paid to confirm an empty file list, so the run is
-    // answered here instead — zero turns, zero credit.
+    // answered here instead — zero turns, zero credit, and no fabricated
+    // review (see the ReviewResult comment for why 'empty' is its own case).
     if (filesChanged === 0)
     {
         return {
-            status: 'submitted',
-            review: { summary: 'Empty diff: the branch has no changes against the base, so nothing was reviewed.', findings: [] },
+            status: 'empty',
             filesChanged: 0,
             stats: { turns: 0, costUsd: 0, usage: ZERO_USAGE, perModel: {}, streamed: ZERO_USAGE, turnUsage: [], compactions: 0 },
         };

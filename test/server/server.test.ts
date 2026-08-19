@@ -417,6 +417,21 @@ describe('GET /runs', () =>
         expect((await fetch(`${base}/runs?owner=acme`)).status).toBe(400);
     });
 
+    it('should 400 a lone base instead of silently widening the query', async () =>
+    {
+        // Arrange
+        seedRun('feature/x', []);
+
+        // Act + Assert: base rides on a complete triple, never alone.
+        expect((await fetch(`${base}/runs?base=develop`)).status).toBe(400);
+    });
+
+    it('should 400 an empty base instead of pinning to a base that cannot exist', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x&base=`)).status).toBe(400);
+    });
+
     it('should pin the base when the query carries one', async () =>
     {
         // Arrange: same triple, two bases — two review series.

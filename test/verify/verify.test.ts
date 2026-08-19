@@ -235,6 +235,28 @@ describe('verifyTarget', () =>
         expect(runClusteringMock).not.toHaveBeenCalled();
     });
 
+    it('should succeed vacuously when every stored run reviewed an empty diff', async () =>
+    {
+        // Arrange: only an 'empty' run — there are stored runs, so failing
+        // with "no submitted runs" would contradict the run list.
+        store.saveRun({
+            ...TARGET,
+            model: 'claude-opus-5',
+            status: 'empty',
+            turns: 0,
+            costUsd: 0,
+            usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            filesChanged: 0,
+        });
+
+        // Act
+        const result = await verifyTarget(store, client, TARGET);
+
+        // Assert
+        expect(result).toEqual({ reused: false, summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } });
+        expect(runClusteringMock).not.toHaveBeenCalled();
+    });
+
     it('should succeed vacuously when no submitted run has findings, writing nothing', async () =>
     {
         // Arrange

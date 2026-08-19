@@ -419,6 +419,26 @@ describe('verify jobs', () =>
         expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
     });
 
+    it('should succeed an empty-diff review with an empty run and no verify proposal', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(reviewJob());
+
+        // Act
+        await worker({
+            review: async () => ({ status: 'empty', filesChanged: 0, stats: stats() }),
+        }).notify();
+
+        // Assert: a completed job over a run that reviewed nothing — stored
+        // as 'empty', so nothing downstream can read it as a clean review.
+        const job = jobs.get(id);
+        expect(job?.state).toBe('succeeded');
+        const run = store.getRun(job!.runIds[0]!);
+        expect(run?.status).toBe('empty');
+        expect(run?.review).toBeUndefined();
+        expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
+    });
+
     it('should not stack a second verify job while one is already open', async () =>
     {
         // Arrange

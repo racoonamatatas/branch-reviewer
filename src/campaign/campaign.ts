@@ -61,7 +61,10 @@ export interface RoundOutcome
     novelClusters: number;  // clusters only this run reported — the round's marginal yield
 }
 
-export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs';
+// 'empty-diff' is a stop, not a failure: the compare listed no files, and
+// every later round would compare the same base/head — but it is also not
+// saturation, so it must never masquerade as 'dry'.
+export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff';
 
 export interface CampaignResult
 {
@@ -122,13 +125,27 @@ export async function runCampaign(
                 head: target.head,
                 base: target.base,
                 model: opts.model ?? 'default',
-                status: result.status === 'submitted' ? 'submitted' : 'aborted',
-                ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
+                status: result.status,
+                ...(result.status === 'aborted' ? { reason: result.reason } : {}),
+                ...(result.status === 'submitted' ? { review: result.review } : {}),
                 turns: result.stats.turns,
                 costUsd: result.stats.costUsd,
                 usage: result.stats.usage,
                 filesChanged: result.filesChanged,
             });
+
+            // An empty compare ends the campaign, not just the round: every
+            // later round would compare the same base/head, so looping to
+            // maxRuns would only store identical reviewed-nothing rows. It
+            // never reaches shouldContinue — a merged or stale head says
+            // nothing about saturation, and must not report as 'dry'.
+            if (result.status === 'empty')
+            {
+                rounds.push(outcome);
+                opts.onRun?.(outcome);
+                stoppedBy = 'empty-diff';
+                break;
+            }
 
             if (result.status === 'aborted')
             {

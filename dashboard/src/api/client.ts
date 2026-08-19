@@ -33,7 +33,8 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
     // finally(), so one fetch that never resolves (stalled connection,
     // server wedged mid-response) would latch the guard and kill the poll
     // loop for the life of the tab. 10s is more than three poll intervals.
-    const res = await fetch(path, { signal: AbortSignal.timeout(10_000), ...init });
+    // Signal last, so a future init cannot silently spread the timeout away.
+    const res = await fetch(path, { ...init, signal: init?.signal ?? AbortSignal.timeout(10_000) });
     const body: unknown = await res.json().catch(() =>
     {
         throw new ApiError(res.status, `${res.status} with a non-JSON body.`);
