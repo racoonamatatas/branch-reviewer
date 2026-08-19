@@ -273,9 +273,10 @@ export interface VerifyTargetResult
 // them with the adversary. Reuses the latest consolidation when it covers
 // exactly the submitted runs — verdicts inherit by member set, so a fresh
 // judge call over the same runs would buy nothing — and consolidates first
-// otherwise. Throwing on a target with no submitted runs is deliberate: a
+// otherwise. Throwing on a target with no submitted runs is deliberate — a
 // verify job for such a target is a caller mistake, and failing the job
-// names it.
+// names it — with one exception: a target whose stored runs all reviewed an
+// empty diff succeeds vacuously, because those runs are real and complete.
 export async function verifyTarget(
     store: ReviewStore,
     client: RepoClient,
@@ -286,13 +287,13 @@ export async function verifyTarget(
     const runs = submittedRunsFor(store, target);
     if (runs.length === 0)
     {
-        // A target whose stored runs all reviewed an empty diff has nothing
+        // A target whose stored runs ALL reviewed an empty diff has nothing
         // to verify but is not a caller mistake — "nothing to verify" is a
-        // completed plan, same as the no-findings path below. Throwing here
-        // would fail the job with a message that contradicts the run list.
-        const onlyEmpty = store.listRuns({ owner: target.owner, repo: target.repo, head: target.head, base: target.base })
-            .some(r => r.status === 'empty');
-        if (onlyEmpty)
+        // completed plan, same as the no-findings path below. Every, not
+        // some: one empty run must not mask a target whose real attempts all
+        // aborted — that target wants a retry, and the throw says so.
+        const stored = store.listRuns({ owner: target.owner, repo: target.repo, head: target.head, base: target.base });
+        if (stored.length > 0 && stored.every(r => r.status === 'empty'))
         {
             opts.onEvent?.('every stored run of this target reviewed an empty diff — nothing to verify');
             return { reused: false, summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } };

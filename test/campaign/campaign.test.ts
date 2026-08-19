@@ -172,6 +172,38 @@ describe('runCampaign', () =>
         expect(result.runIds).toHaveLength(3);
     });
 
+    it('should stop after two consecutive judge failures instead of burning the run cap', async () =>
+    {
+        // Arrange: reviews keep succeeding (and billing), but the judge is
+        // persistently broken — every consolidation attempt throws.
+        const store = new ReviewStore(':memory:');
+        const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+        const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        runReviewMock.mockResolvedValue({
+            status: 'submitted',
+            review: { summary: 'reviewed', findings: [{ file: 'src/a.ts', severity: 'warning', title: 'T', detail: 'd' }] },
+            filesChanged: 2,
+            stats: { turns: 5, costUsd: 1, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        });
+        runClusteringMock.mockRejectedValue(new Error('Clustering judge failed: schema rejection'));
+
+        // Act
+        const result = await runCampaign(
+            store, client,
+            { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' },
+            { maxRuns: 5, verify: false },
+        );
+        store.close();
+
+        // Assert: round 1 has no judge call (one run is below the union
+        // guard); rounds 2 and 3 fail it — two strikes, stop, three rounds
+        // billed instead of five.
+        expect(result.stoppedBy).toBe('no-consolidation');
+        expect(result.rounds).toHaveLength(3);
+        expect(result.rounds.filter(r => r.consolidationFailed !== undefined)).toHaveLength(2);
+        expect(result.consolidationId).toBeUndefined();
+    });
+
     it('should stop on the first empty-diff round instead of burning the run cap', async () =>
     {
         // Arrange: the compare lists no files — every later round would

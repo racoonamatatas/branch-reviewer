@@ -64,7 +64,10 @@ export interface RoundOutcome
 // 'empty-diff' is a stop, not a failure: the compare listed no files, and
 // every later round would compare the same base/head — but it is also not
 // saturation, so it must never masquerade as 'dry'.
-export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff';
+// 'no-consolidation' is the judge's counterpart to 'no-usable-runs': the
+// union is unusable without a judge, so a persistently failing one must not
+// keep billing review credit for rounds nothing can consolidate.
+export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff' | 'no-consolidation';
 
 export interface CampaignResult
 {
@@ -87,6 +90,7 @@ export async function runCampaign(
     const rounds: RoundOutcome[] = [];
     let reviewCostUsd = 0;
     let consecutiveAborts = 0;
+    let consecutiveJudgeFailures = 0;
     let stoppedBy: StoppedBy = 'max-runs';
 
     // Runs already stored for this target are part of the union, so the
@@ -181,10 +185,14 @@ export async function runCampaign(
         // judge re-unions every stored run, so a transient judge abort self-
         // heals a round later. It must never kill the campaign — one did, on
         // 2026-08-19, after two paid rounds. The round simply carries no
-        // consolidation, which also keeps it out of the patience count.
+        // consolidation, which also keeps it out of the patience count. But
+        // transient is a two-strike claim, same as ABORT_TOLERANCE: a judge
+        // failing every round would otherwise burn the whole run cap on
+        // reviews nothing can consolidate.
         try
         {
             const consolidation = await consolidateTarget(store, target, opts.model);
+            consecutiveJudgeFailures = 0;
             if (consolidation !== undefined)
             {
                 latest = consolidation;
@@ -196,10 +204,16 @@ export async function runCampaign(
         catch (error)
         {
             outcome.consolidationFailed = error instanceof Error ? error.message : String(error);
+            consecutiveJudgeFailures++;
         }
         rounds.push(outcome);
         opts.onRun?.(outcome);
 
+        if (consecutiveJudgeFailures >= ABORT_TOLERANCE)
+        {
+            stoppedBy = 'no-consolidation';
+            break;
+        }
         if (!shouldContinue(rounds.filter(r => r.consolidationId !== undefined), opts.patience))
         {
             stoppedBy = 'dry';

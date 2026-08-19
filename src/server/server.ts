@@ -214,7 +214,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         const query = parseTargetFilter(url);
         return query.ok
             ? json(res, 200, { runs: deps.store.listRuns(query.filter) })
-            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+            : json(res, 400, { error: FILTER_400 });
     }
 
     // A run's own findings, ids and provenance included — the dashboard's
@@ -235,7 +235,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         const query = parseTargetFilter(url);
         return query.ok
             ? json(res, 200, { consolidations: deps.store.listConsolidations(query.filter) })
-            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+            : json(res, 400, { error: FILTER_400 });
     }
 
     const detail = /^\/consolidations\/(\d+)$/.exec(path);
@@ -271,11 +271,15 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     json(res, 404, { error: 'No such route.' });
 }
 
+// One string, used by every filtered route: the 400 must describe every
+// rejection parseTargetFilter produces, base rules included.
+const FILTER_400 = 'Filtering needs owner, repo, and head together, all non-empty; base is optional but must be non-empty and ride on the full triple.';
+
 // The target filter is all-or-nothing (see TargetFilter): a partial triple
-// is a caller mistake, not a broader query. base rides optionally on top of
-// a complete triple — it pins the comparison, it never widens the query, so
-// a lone base is rejected like any partial filter, and an empty base is
-// rejected rather than pinning to a base that cannot exist.
+// is a caller mistake, not a broader query, and a present-but-empty value
+// is rejected the same way — an empty string pins to a target that cannot
+// exist. base rides optionally on top of a complete triple: it pins the
+// comparison, it never widens the query, so a lone base is rejected too.
 function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefined } | { ok: false }
 {
     const owner = url.searchParams.get('owner');
@@ -286,7 +290,7 @@ function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefin
     {
         return base === null ? { ok: true, filter: undefined } : { ok: false };
     }
-    if (owner === null || repo === null || head === null || base === '')
+    if (owner === null || owner === '' || repo === null || repo === '' || head === null || head === '' || base === '')
     {
         return { ok: false };
     }

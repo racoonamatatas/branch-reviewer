@@ -293,12 +293,16 @@ export class ReviewStore
 
     // Rows written while the empty-diff short-circuit fabricated a submitted
     // review (briefly, on the slice-11 branch): the status now carries what
-    // those rows encoded as submitted + files_changed = 0. Idempotent, and a
-    // no-op on databases that never held such a row. Legacy NULLs stay
-    // submitted — "unknown", not "empty".
+    // those rows encoded as submitted + files_changed = 0. The predicate is
+    // pinned to the short-circuit's full signature — zero turns, zero cost —
+    // because pre-branch code measured filesChanged and ran the model
+    // anyway, so a genuine (billed, turns ≥ 2) review of an empty compare
+    // can exist and must stay submitted: this UPDATE is irreversible and a
+    // relabeled run's findings would silently leave every future union.
+    // Idempotent; legacy NULLs stay submitted — "unknown", not "empty".
     private migrateEmptyRuns(): void
     {
-        this.db.exec("UPDATE runs SET status = 'empty' WHERE status = 'submitted' AND files_changed = 0");
+        this.db.exec("UPDATE runs SET status = 'empty' WHERE status = 'submitted' AND files_changed = 0 AND turns = 0 AND cost_usd = 0");
     }
 
     // Databases from before the empty-diff tell existed lack the column; the

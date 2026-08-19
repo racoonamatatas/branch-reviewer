@@ -70,10 +70,9 @@ export interface ReviewRunStats
 // model ran, so there is no review to carry, and readers must be able to
 // discriminate "the model found nothing" from "there was nothing to look
 // at" on the status instead of reconstructing it from filesChanged === 0.
-// It also carries no claim that the branch is empty — GitHub's compare
-// omits `files` for oversized comparisons, so an empty list is an
-// observation about the compare payload, not a verified fact about the
-// branch.
+// 'empty' means GitHub enumerated zero changed files: compare() throws when
+// the `files` key is omitted (oversized comparisons), so a truncated payload
+// fails the run instead of masquerading as an empty branch here.
 export type ReviewResult =
     | { status: 'submitted'; review: Review; filesChanged: number; stats: ReviewRunStats }
     | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats }

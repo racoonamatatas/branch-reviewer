@@ -172,8 +172,19 @@ describe('ReviewStore', () =>
                 ...submittedRun,
                 review: { summary: 'Empty diff: nothing was reviewed.', findings: [] },
                 filesChanged: 0,
+                turns: 0,
+                costUsd: 0,
             });
             const legacy = before.saveRun(submittedRun);  // no filesChanged: "unknown" must stay submitted
+            // Pre-branch code measured filesChanged and ran the model anyway:
+            // a billed (turns > 0) review of an empty compare is genuine and
+            // must survive — relabeling it would drop its review from every
+            // future union, irreversibly.
+            const genuine = before.saveRun({
+                ...submittedRun,
+                review: { summary: 'Nothing changed on this branch.', findings: [] },
+                filesChanged: 0,
+            });
             before.close();
 
             // Act
@@ -182,6 +193,7 @@ describe('ReviewStore', () =>
             // Assert
             expect(migrated.getRun(fabricated)?.status).toBe('empty');
             expect(migrated.getRun(legacy)?.status).toBe('submitted');
+            expect(migrated.getRun(genuine)?.status).toBe('submitted');
             migrated.close();
         }
         finally

@@ -491,7 +491,20 @@ migration for the fabricated rows, every status reader — worker, campaign
 `stoppedBy: 'empty-diff'`, both CLIs, dashboard — discriminates on it), plus
 the base query-param edges (lone/empty base → 400), the timeout spread
 order, frozen ZERO_USAGE, a rejection handler in usePolling's guard, and a
-vacuous verify for all-empty targets. Still open (deliberately deferred):
+vacuous verify for all-empty targets. Campaign 3 over the 'empty' slice
+(consolidation #27: 6 findings across 2 runs — one round lost to a 529,
+absorbed as designed; both singletons CONFIRMED; est. ~7 total, near
+saturation) hardened the new edges in a third round: the migration predicate
+pinned to the short-circuit's full signature (turns = 0 AND cost = 0, so a
+genuine billed review of an empty compare survives), verify's onlyEmpty is
+every-not-some (an empty run cannot mask all-aborted attempts), a judge-
+failure fuse mirrors ABORT_TOLERANCE (`stoppedBy: 'no-consolidation'`,
+worker aborts the job), and — the one deliberate divergence from the
+verbatim port — `compare()` throws when GitHub omits `files`, so a
+truncated compare fails retryably instead of reading as an empty branch
+that the trigger's any-state dedupe would never review. Plus symmetric
+400s for present-but-empty filter params and a 400 message that covers the
+base rules. Still open (deliberately deferred):
 
 - A failed verify proposal survives only in the in-memory event ring — a
   durable note wants the same slice as "needs human eyes" / job-result

@@ -110,6 +110,7 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
         'max-runs': `run cap reached (${args.maxRuns})`,
         'no-usable-runs': 'consecutive runs aborted',
         'empty-diff': 'the compare listed no files — nothing to sample',
+        'no-consolidation': 'consecutive judge calls failed — union unusable',
     }[campaign.stoppedBy];
 
     console.log(`\ncampaign complete: ${campaign.rounds.length} run(s) fired — ${reason}`);
@@ -193,7 +194,8 @@ async function main(): Promise<number>
             printConsolidation(store.getConsolidation(campaign.consolidationId)!);
         }
 
-        const aborted = campaign.rounds.some(r => r.aborted !== undefined || r.failed !== undefined);
+        const aborted = campaign.rounds.some(r =>
+            r.aborted !== undefined || r.failed !== undefined || r.consolidationFailed !== undefined);
         const incomplete = (campaign.verification?.failures ?? 0) > 0;
         return aborted || incomplete ? 2 : 0;
     }

@@ -257,6 +257,34 @@ describe('verifyTarget', () =>
         expect(runClusteringMock).not.toHaveBeenCalled();
     });
 
+    it('should still throw when an empty run sits beside aborted real attempts', async () =>
+    {
+        // Arrange: one empty run plus an aborted one — the target's real
+        // attempts all failed and it wants a retry; vacuous success would
+        // hide that behind "nothing to verify".
+        store.saveRun({
+            ...TARGET,
+            model: 'claude-opus-5',
+            status: 'empty',
+            turns: 0,
+            costUsd: 0,
+            usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            filesChanged: 0,
+        });
+        store.saveRun({
+            ...TARGET,
+            model: 'claude-opus-5',
+            status: 'aborted',
+            reason: 'error_max_turns',
+            turns: 10,
+            costUsd: 1,
+            usage: { inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        });
+
+        // Act + Assert
+        await expect(verifyTarget(store, client, TARGET)).rejects.toThrow('No submitted runs');
+    });
+
     it('should succeed vacuously when no submitted run has findings, writing nothing', async () =>
     {
         // Arrange

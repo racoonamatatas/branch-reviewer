@@ -432,6 +432,14 @@ describe('GET /runs', () =>
         expect((await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x&base=`)).status).toBe(400);
     });
 
+    it('should 400 present-but-empty triple values the same as an empty base', async () =>
+    {
+        // Act + Assert: '' pins to a target that cannot exist, exactly like
+        // an empty base — the rejection must be symmetric.
+        expect((await fetch(`${base}/runs?owner=&repo=&head=`)).status).toBe(400);
+        expect((await fetch(`${base}/runs?owner=acme&repo=widgets&head=`)).status).toBe(400);
+    });
+
     it('should pin the base when the query carries one', async () =>
     {
         // Arrange: same triple, two bases — two review series.

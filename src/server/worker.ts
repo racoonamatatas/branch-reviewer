@@ -229,6 +229,11 @@ export class Worker
             this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed');
             return;
         }
+        if (result.stoppedBy === 'no-consolidation')
+        {
+            this.jobs.abort(job.id, 'no-consolidation: two consecutive judge calls failed — the union is unusable without one');
+            return;
+        }
         this.jobs.succeed(job.id, {
             ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
         });

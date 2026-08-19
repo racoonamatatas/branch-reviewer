@@ -1,11 +1,14 @@
 // Repo access abstraction plus the real GitHub REST implementation.
 // The compare endpoint uses three-dot semantics (merge-base), so the diff
 // only contains what the branch itself changed.
-// RepoClient and its implementation are ported verbatim from
-// branch-reviewer-api — deliberately identical, so the two reviewers differ
-// only in harness. PullSource is this project's own addition (the trigger
-// slice needs to see PRs, the review path never does); it is a separate
-// interface so the review-tool contract stays the verbatim port.
+// RepoClient and its implementation are ported from branch-reviewer-api —
+// deliberately near-identical, so the two reviewers differ only in harness.
+// One deliberate divergence: compare() throws when GitHub omits the `files`
+// key instead of reading it as an empty diff (see below) — a wire-shape
+// correctness fix, not a behavior change for any compare GitHub can fully
+// enumerate. PullSource is this project's own addition (the trigger slice
+// needs to see PRs, the review path never does); it is a separate interface
+// so the review-tool contract stays the port.
 
 export interface ChangedFile
 {
@@ -84,7 +87,17 @@ export class GitHubClient implements RepoClient, PullSource
             const data = await this.request(
                 `/repos/${this.owner}/${this.repo}/compare/${base}...${head}?per_page=${PAGE_SIZE}&page=${page}`,
             ) as { files?: RawChangedFile[] };
-            const batch = data.files ?? [];
+            // GitHub omits `files` entirely when the comparison is too large
+            // to enumerate. Collapsing that into [] would read as an empty
+            // diff — which downstream is now a terminal success (status
+            // 'empty', job succeeded, head SHA never re-enqueued), so an
+            // unreviewed branch would vanish without a failure signal.
+            // Throwing fails the run/job loudly and leaves it retryable.
+            if (data.files === undefined)
+            {
+                throw new Error(`GitHub omitted the files list for ${base}...${head} (comparison too large to enumerate?) — cannot distinguish this from an empty diff, refusing to report one.`);
+            }
+            const batch = data.files;
             for (const f of batch)
             {
                 files.push({
