@@ -5,10 +5,11 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { Coverage } from '../coverage/coverage.js';
 import type { NewFinding, Review, Severity } from '../schema/schema.js';
 import type { Created, Identified, New } from '../types/common.js';
-import { clusterId, consolidationId, findingId, runId, verificationId } from '../types/ids.js';
-import type { ClusterId, ConsolidationId, FindingId, RunId, VerificationId } from '../types/ids.js';
+import { campaignId, clusterId, consolidationId, findingId, runId, verificationId } from '../types/ids.js';
+import type { CampaignId, ClusterId, ConsolidationId, FindingId, RunId, VerificationId } from '../types/ids.js';
 import type { TokenUsage } from '../usage/usage.js';
 
 export const DEFAULT_DB_PATH = 'data/reviews.db';
@@ -134,6 +135,89 @@ export type Verification = AgentVerification | HumanVerification;
 
 export type NewVerification = New<AgentVerification> | New<HumanVerification>;
 
+// Why a campaign stops. 'empty-diff' is a stop, not a failure: the compare
+// listed no files, and every later round would compare the same base/head —
+// but it is also not saturation, so it must never masquerade as 'dry'.
+// 'no-consolidation' is the judge's counterpart to 'no-usable-runs': the
+// union is unusable without a judge, so a persistently failing one must not
+// keep billing review credit for rounds nothing can consolidate. Defined
+// here rather than in the campaign module because it is persisted vocabulary
+// (like JobState) and the campaign already imports the store.
+export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff' | 'no-consolidation';
+
+// One campaign round as the loop saw it when it happened. Deliberately a
+// snapshot, not a derivation: a later judge call can merge away a round's
+// novel cluster and a later refutation changes the coverage input, so
+// re-deriving from the consolidation would answer a different question than
+// "what did the campaign see when it decided to stop". The coverage numbers
+// are stored whole (including the derivable tail) for the same reason — a
+// future estimator tweak must not rewrite history.
+export interface CampaignRound
+{
+    round: number;
+    runId?: RunId;      // absent when the review threw before anything could be stored
+    findings: number;
+    turns: number;
+    costUsd: number;
+    aborted?: string;   // the SDK ended the run early (max turns)
+    failed?: string;    // the round threw — network, API, or a save that did not land
+    consolidationFailed?: string;   // the run saved but the judge call threw — no consolidation this round
+    consolidationId?: ConsolidationId;
+    coverage?: Coverage;    // present exactly when consolidationId is — enforced by CHECK
+    novelClusters: number;  // clusters only this run reported — the round's marginal yield
+}
+
+// Status is a discriminated union, not optional fields: a finished campaign
+// always knows why it stopped, a failed one always carries its error, and a
+// running one may claim neither. The CHECKs restate the same rule in SQL.
+interface CampaignBase extends Identified<'Campaign'>, Created
+{
+    owner: string;
+    repo: string;
+    head: string;
+    base: string;
+    // The consolidation of runs already stored before round 1 — the yardstick
+    // this campaign's own contribution is measured against. Absent when the
+    // target had fewer than two prior runs.
+    baselineConsolidationId?: ConsolidationId;
+    rounds: CampaignRound[];
+}
+
+export interface RunningCampaign extends CampaignBase
+{
+    status: 'running';
+}
+
+export interface FinishedCampaign extends CampaignBase
+{
+    status: 'finished';
+    stoppedBy: StoppedBy;
+    finishedAt: string;
+}
+
+export interface FailedCampaign extends CampaignBase
+{
+    status: 'failed';
+    error: string;
+    finishedAt: string;
+}
+
+export type Campaign = RunningCampaign | FinishedCampaign | FailedCampaign;
+
+// Everything beyond New<T>'s subtraction is lifecycle, assigned as the
+// campaign progresses; a create call supplies only the target.
+type CampaignLifecycle = 'status' | 'baselineConsolidationId' | 'rounds';
+export type NewCampaign = Omit<New<RunningCampaign>, CampaignLifecycle>;
+
+export interface CampaignSummary extends Pick<CampaignBase, 'id' | 'createdAt' | 'owner' | 'repo' | 'head' | 'base'>
+{
+    target: string;  // "owner/repo head → base"
+    status: Campaign['status'];
+    stoppedBy?: StoppedBy;
+    roundCount: number;
+    reviewCostUsd: number;  // sum of round costs; verification bills to the consolidation's clusters, not here
+}
+
 // A defect's stable identity across consolidations. Cluster rows are one
 // judge call's opinion and get new ids every time the same runs are
 // re-clustered; the set of findings they group does not. Sorted so two
@@ -224,6 +308,45 @@ CREATE TABLE IF NOT EXISTS verifications (
     cost_usd REAL,
     CHECK ((source = 'agent') = (confidence IS NOT NULL AND cost_usd IS NOT NULL))
 );
+CREATE TABLE IF NOT EXISTS campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    head TEXT NOT NULL,
+    base TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'finished', 'failed')),
+    stopped_by TEXT,
+    error TEXT,
+    finished_at TEXT,
+    baseline_consolidation_id INTEGER REFERENCES consolidations(id),
+    CHECK ((status = 'finished') = (stopped_by IS NOT NULL)),
+    CHECK ((status = 'failed') = (error IS NOT NULL)),
+    CHECK ((status = 'running') = (finished_at IS NULL))
+);
+CREATE TABLE IF NOT EXISTS campaign_rounds (
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id),
+    round INTEGER NOT NULL,
+    run_id INTEGER REFERENCES runs(id),
+    findings INTEGER NOT NULL,
+    turns INTEGER NOT NULL,
+    cost_usd REAL NOT NULL,
+    aborted TEXT,
+    failed TEXT,
+    consolidation_failed TEXT,
+    consolidation_id INTEGER REFERENCES consolidations(id),
+    novel_clusters INTEGER NOT NULL,
+    observed INTEGER,
+    f1 INTEGER,
+    f2 INTEGER,
+    undiscovered INTEGER,
+    estimated_total INTEGER,
+    PRIMARY KEY (campaign_id, round),
+    CHECK ((consolidation_id IS NULL) = (observed IS NULL)),
+    CHECK ((observed IS NULL) = (f1 IS NULL) AND (f1 IS NULL) = (f2 IS NULL)
+       AND (f2 IS NULL) = (undiscovered IS NULL) AND (undiscovered IS NULL) = (estimated_total IS NULL)),
+    CHECK (consolidation_id IS NULL OR consolidation_failed IS NULL)
+);
 `;
 
 interface RunRow
@@ -267,6 +390,40 @@ interface VerificationRow
     rationale: string;
     confidence: string | null;
     cost_usd: number | null;
+}
+
+interface CampaignRow
+{
+    id: number;
+    created_at: string;
+    owner: string;
+    repo: string;
+    head: string;
+    base: string;
+    status: string;
+    stopped_by: string | null;
+    error: string | null;
+    finished_at: string | null;
+    baseline_consolidation_id: number | null;
+}
+
+interface CampaignRoundRow
+{
+    round: number;
+    run_id: number | null;
+    findings: number;
+    turns: number;
+    cost_usd: number;
+    aborted: string | null;
+    failed: string | null;
+    consolidation_failed: string | null;
+    consolidation_id: number | null;
+    novel_clusters: number;
+    observed: number | null;
+    f1: number | null;
+    f2: number | null;
+    undiscovered: number | null;
+    estimated_total: number | null;
 }
 
 export class ReviewStore
@@ -723,10 +880,176 @@ export class ReviewStore
         });
     }
 
+    // A campaign row exists before its first round: the loop is visible as a
+    // campaign from the moment it starts, not once it has something to show —
+    // CLI campaigns rendered as "no campaign yet" mid-loop until this landed.
+    createCampaign(campaign: NewCampaign): CampaignId
+    {
+        const result = this.db.prepare(
+            'INSERT INTO campaigns (created_at, owner, repo, head, base) VALUES (?, ?, ?, ?, ?)',
+        ).run(new Date().toISOString(), campaign.owner, campaign.repo, campaign.head, campaign.base);
+        return campaignId(Number(result.lastInsertRowid));
+    }
+
+    recordCampaignBaseline(id: CampaignId, consolidation: ConsolidationId): void
+    {
+        this.requireRunningCampaign(id, 'record a baseline on');
+        this.db.prepare(
+            "UPDATE campaigns SET baseline_consolidation_id = ? WHERE id = ? AND status = 'running'",
+        ).run(consolidation, id);
+    }
+
+    // Rounds append as they happen, so an interrupted campaign keeps every
+    // round it paid for. The composite primary key rejects a duplicate round
+    // number — the loop is the only writer, so a collision is a bug, not a race.
+    appendCampaignRound(id: CampaignId, round: CampaignRound): void
+    {
+        this.requireRunningCampaign(id, 'append a round to');
+        this.db.prepare(
+            `INSERT INTO campaign_rounds (campaign_id, round, run_id, findings, turns, cost_usd,
+                                          aborted, failed, consolidation_failed, consolidation_id, novel_clusters,
+                                          observed, f1, f2, undiscovered, estimated_total)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+            id, round.round, round.runId ?? null, round.findings, round.turns, round.costUsd,
+            round.aborted ?? null, round.failed ?? null, round.consolidationFailed ?? null,
+            round.consolidationId ?? null, round.novelClusters,
+            round.coverage?.observed ?? null, round.coverage?.f1 ?? null, round.coverage?.f2 ?? null,
+            round.coverage?.undiscovered ?? null, round.coverage?.estimatedTotal ?? null,
+        );
+    }
+
+    finishCampaign(id: CampaignId, stoppedBy: StoppedBy): void
+    {
+        this.requireRunningCampaign(id, 'finish');
+        this.db.prepare(
+            "UPDATE campaigns SET status = 'finished', stopped_by = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+        ).run(stoppedBy, new Date().toISOString(), id);
+    }
+
+    failCampaign(id: CampaignId, error: string): void
+    {
+        this.requireRunningCampaign(id, 'fail');
+        this.db.prepare(
+            "UPDATE campaigns SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+        ).run(error, new Date().toISOString(), id);
+    }
+
+    getCampaign(id: CampaignId): Campaign | undefined
+    {
+        const row = this.db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id) as unknown as CampaignRow | undefined;
+        if (row === undefined)
+        {
+            return undefined;
+        }
+        const rounds = (this.db.prepare(
+            'SELECT * FROM campaign_rounds WHERE campaign_id = ? ORDER BY round',
+        ).all(id) as unknown as CampaignRoundRow[]).map(toCampaignRound);
+        return toCampaign(row, rounds);
+    }
+
+    listCampaigns(filter?: TargetFilter): CampaignSummary[]
+    {
+        const [where, params] = filterClause(filter, 'c');
+        const rows = this.db.prepare(
+            `SELECT c.id, c.created_at, c.owner, c.repo, c.head, c.base, c.status, c.stopped_by,
+                    COUNT(r.round) AS round_count, COALESCE(SUM(r.cost_usd), 0) AS review_cost_usd
+             FROM campaigns c LEFT JOIN campaign_rounds r ON r.campaign_id = c.id
+             ${where}
+             GROUP BY c.id
+             ORDER BY c.id DESC`,
+        ).all(...params) as unknown as Array<CampaignRow & { round_count: number; review_cost_usd: number }>;
+
+        return rows.map(row => ({
+            id: campaignId(row.id),
+            createdAt: row.created_at,
+            owner: row.owner,
+            repo: row.repo,
+            head: row.head,
+            base: row.base,
+            target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
+            status: row.status as Campaign['status'],
+            ...(row.stopped_by !== null ? { stoppedBy: row.stopped_by as StoppedBy } : {}),
+            roundCount: row.round_count,
+            reviewCostUsd: row.review_cost_usd,
+        }));
+    }
+
+    private requireRunningCampaign(id: CampaignId, action: string): void
+    {
+        const row = this.db.prepare('SELECT status FROM campaigns WHERE id = ?').get(id) as unknown as { status: string } | undefined;
+        if (row === undefined)
+        {
+            throw new Error(`No campaign #${id}.`);
+        }
+        if (row.status !== 'running')
+        {
+            throw new Error(`Cannot ${action} campaign #${id}: it is ${row.status}, not running.`);
+        }
+    }
+
     close(): void
     {
         this.db.close();
     }
+}
+
+// The CHECK constraints guarantee each status's fields are present; the casts
+// restate what the row's status already proved.
+function toCampaign(row: CampaignRow, rounds: CampaignRound[]): Campaign
+{
+    const common = {
+        id: campaignId(row.id),
+        createdAt: row.created_at,
+        owner: row.owner,
+        repo: row.repo,
+        head: row.head,
+        base: row.base,
+        ...(row.baseline_consolidation_id !== null
+            ? { baselineConsolidationId: consolidationId(row.baseline_consolidation_id) }
+            : {}),
+        rounds,
+    };
+    switch (row.status)
+    {
+        case 'running':
+            return { ...common, status: 'running' };
+        case 'finished':
+            return { ...common, status: 'finished', stoppedBy: row.stopped_by as StoppedBy, finishedAt: row.finished_at as string };
+        case 'failed':
+            return { ...common, status: 'failed', error: row.error as string, finishedAt: row.finished_at as string };
+        default:
+            throw new Error(`Campaign #${row.id} has unknown status '${row.status}'.`);
+    }
+}
+
+function toCampaignRound(row: CampaignRoundRow): CampaignRound
+{
+    return {
+        round: row.round,
+        ...(row.run_id !== null ? { runId: runId(row.run_id) } : {}),
+        findings: row.findings,
+        turns: row.turns,
+        costUsd: row.cost_usd,
+        ...(row.aborted !== null ? { aborted: row.aborted } : {}),
+        ...(row.failed !== null ? { failed: row.failed } : {}),
+        ...(row.consolidation_failed !== null ? { consolidationFailed: row.consolidation_failed } : {}),
+        // The all-or-nothing CHECK ties the coverage columns to
+        // consolidation_id, so one null test speaks for all six.
+        ...(row.consolidation_id !== null
+            ? {
+                consolidationId: consolidationId(row.consolidation_id),
+                coverage: {
+                    observed: row.observed as number,
+                    f1: row.f1 as number,
+                    f2: row.f2 as number,
+                    undiscovered: row.undiscovered as number,
+                    estimatedTotal: row.estimated_total as number,
+                },
+            }
+            : {}),
+        novelClusters: row.novel_clusters,
+    };
 }
 
 // The list methods' shared WHERE builder: the triple always binds together,

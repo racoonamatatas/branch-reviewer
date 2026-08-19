@@ -14,7 +14,7 @@ import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
 import { ReviewStore } from '../store/store.js';
-import type { Consolidation } from '../store/store.js';
+import type { Consolidation, StoppedBy } from '../store/store.js';
 import type { ConsolidationId, RunId } from '../types/ids.js';
 import { verifyPending } from '../verify/verify.js';
 import type { VerifyPendingOptions, VerifyPendingSummary } from '../verify/verify.js';
@@ -61,13 +61,10 @@ export interface RoundOutcome
     novelClusters: number;  // clusters only this run reported — the round's marginal yield
 }
 
-// 'empty-diff' is a stop, not a failure: the compare listed no files, and
-// every later round would compare the same base/head — but it is also not
-// saturation, so it must never masquerade as 'dry'.
-// 'no-consolidation' is the judge's counterpart to 'no-usable-runs': the
-// union is unusable without a judge, so a persistently failing one must not
-// keep billing review credit for rounds nothing can consolidate.
-export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff' | 'no-consolidation';
+// StoppedBy moved to the store when campaigns became persisted (it is stored
+// vocabulary now, like JobState); re-exported so campaign consumers keep one
+// import for the loop's whole result surface.
+export type { StoppedBy } from '../store/store.js';
 
 export interface CampaignResult
 {
