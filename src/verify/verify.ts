@@ -289,8 +289,10 @@ export async function verifyTarget(
         throw new Error('No submitted runs for this target — nothing to verify.');
     }
 
+    // base is pinned in the lookup: the runs above are quad-filtered, so a
+    // rev of the same head against a different base must not shadow them.
     const wanted = new Set(runs.map(r => r.id));
-    const latest = store.listConsolidations({ owner: target.owner, repo: target.repo, head: target.head })[0];
+    const latest = store.listConsolidations({ owner: target.owner, repo: target.repo, head: target.head, base: target.base })[0];
     const covered = latest !== undefined
         && latest.runIds.length === wanted.size
         && latest.runIds.every(id => wanted.has(id));

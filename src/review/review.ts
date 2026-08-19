@@ -111,13 +111,26 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
 {
     assertSubscriptionCredit();
 
-    // The diff's size is measured before any credit moves: one extra GitHub
-    // request (the tools memoize their own comparison lazily), bought so the
-    // stored run can distinguish "found nothing" from "had nothing to look
-    // at" — a merged or stale head produces an empty compare.
-    const filesChanged = (await client.compare(target.base, target.head)).length;
-
+    // The diff's size is measured before any credit moves, so the stored run
+    // can distinguish "found nothing" from "had nothing to look at" — a
+    // merged or stale head produces an empty compare. The count reads the
+    // same memoized comparison the tools serve, so it costs no extra request.
     const tools = createReviewTools(client, target);
+    const filesChanged = (await tools.changedFiles()).length;
+
+    // The empty-diff tell doubles as a cost fuse: with nothing to review, the
+    // model would only be paid to confirm an empty file list, so the run is
+    // answered here instead — zero turns, zero credit.
+    if (filesChanged === 0)
+    {
+        const zero: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        return {
+            status: 'submitted',
+            review: { summary: 'Empty diff: the branch has no changes against the base, so nothing was reviewed.', findings: [] },
+            filesChanged: 0,
+            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, streamed: zero, turnUsage: [], compactions: 0 },
+        };
+    }
 
     const stream = query({
         prompt: `Review branch "${target.head}" against "${target.base}".`,

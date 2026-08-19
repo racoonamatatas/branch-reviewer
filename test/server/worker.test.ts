@@ -357,6 +357,29 @@ describe('verify jobs', () =>
         expect(verify).toMatchObject({ state: 'held', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main' });
     });
 
+    it('should keep the review succeeded when proposing the verify job fails', async () =>
+    {
+        // Arrange: the review's own writes work; the follow-up proposal hits
+        // a broken store. Persistence never changes an outcome — a run that
+        // ran, billed, and saved must stay succeeded.
+        const id = jobs.enqueue(reviewJob());
+        const events: string[] = [];
+        jobs.enqueue = () =>
+        {
+            throw new Error('disk full');
+        };
+
+        // Act
+        await worker({
+            review: async () => submittedWithFindings(),
+            onEvent: (jobId, event) => events.push(`#${jobId}: ${event}`),
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)?.state).toBe('succeeded');
+        expect(events).toContain(`#${id}: could not propose a verify job: disk full`);
+    });
+
     it('should not propose verification when the review found nothing', async () =>
     {
         // Arrange: the default submitted() carries zero findings.

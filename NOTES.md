@@ -448,44 +448,31 @@ here.
 
 ## Open items
 
-**Slice-11 follow-ups** — from the self-review of chunks 2–4 (run 22 → rev
-15, verified 8/8 for $4.98: 7 confirmed, 1 refuted). The loop ran with no
-CLI: review job → auto-proposed held verify job → release → verdicts. In
-priority order:
+**Slice-11 follow-ups: all seven landed** (from the self-review of chunks
+2–4, run 22 → rev 15, verified 8/8 for $4.98: 7 confirmed, 1 refuted; #138 —
+refuted clusters counting as novel in the campaign stop rule — was itself
+REFUTED by the adversary, no action). What each fix became:
 
-1. **Worker ordering bug (warning, #135):** the held verify job is enqueued
-   *before* `jobs.succeed()`, so a write failure there marks a review that
-   ran, billed, and saved as failed — breaching "persistence never changes
-   an outcome". Succeed first; propose the verify job in its own try/catch
-   that only reports via onEvent.
-2. **Concurrent refresh duplicates feed events (warning, #133):** nothing
-   serialises `refresh()` (3s poll + visibilitychange + every `act()`), and
-   the tail is appended blind from a cursor both racers read. Filter on
-   append (`e.seq > cursor.value`) and/or add an in-flight guard to
-   `usePolling` (also stops duplicate queue requests).
-3. **`verifyTarget` is untested (warning, #134):** the only gate deciding
-   whether a judge call gets paid for has no test. Cover: zero submitted
-   runs throws; no findings → vacuous success, nothing written; exact-set
-   reuse → `runClustering` never called; newer run → re-consolidates.
-4. **"verify now" ignores held verify jobs (nit, #139):** `hasActiveJob`
-   only counts queued/running, so the auto-proposed held job leaves the
-   button live and a click stacks a second job. Count held for `canVerify`
-   (and point the user at the held job's ▶) or release the held one.
-5. **Reuse lookup filters triple, runs filter quad (nit, #140):**
-   `listConsolidations` has no base filter, so `covered` could match a
-   different-base rev of the same head; the runIds equality saves it today.
-   Pin with a base check.
-6. **Compare fetched twice per review (nit, #136):** the pre-flight count
-   duplicates the tools' memoized compare (full patch bodies, paginated).
-   Expose the memoized accessor from `createReviewTools`; consider
-   short-circuiting a review when `filesChanged === 0` — turn the empty-diff
-   tell into a cost fuse instead of a label.
-7. **Dead kick in serve's poll (nit, #137):** trigger enqueues are all held
-   now, so `if (report.enqueued.length > 0) kick()` never finds work.
-   Delete it with a comment.
-
-(#138 — refuted clusters still counting as novel in the campaign stop rule —
-was itself REFUTED by the adversary; no action.)
+1. Worker ordering (#135): `jobs.succeed()` now runs before the held verify
+   proposal, and the proposal has its own catch that only reports via
+   onEvent — a failed follow-up write can no longer fail a review that ran,
+   billed, and saved.
+2. Feed duplicates (#133): the tail is filtered against the cursor at append
+   time (`e.seq > cursor.value`), and `usePolling` gained an in-flight guard
+   (skip, not queue).
+3. `verifyTarget` tests (#134): five scenarios in `test/verify`, judge
+   mocked at `runClustering`, clusters arranged occurrence ≥ 2 so no test
+   can reach a paid verifyCluster call.
+4. "verify now" vs held jobs (#139): `canVerify` became a discriminated
+   `VerifyGate`; a held verify job blocks the button and the tooltip points
+   at its ▶ in the intake stage.
+5. Base pin (#140): `TargetFilter` gained optional `base`, honored by
+   `listRuns`/`listConsolidations`; verifyTarget's reuse lookup pins it.
+6. Double compare (#136): `createReviewTools` exposes the memoized
+   `changedFiles`; the pre-flight count rides it, and `filesChanged === 0`
+   now short-circuits the review entirely — the empty-diff tell is a cost
+   fuse (zero turns, zero credit, canned "Empty diff" submitted review).
+7. Dead kick (#137): deleted; the release endpoint kicks the worker itself.
 
 - "Needs human eyes" has no answer path — a human-verdict row on top of agent
   verdicts (append-only makes overrule natural).

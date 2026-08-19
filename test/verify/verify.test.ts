@@ -1,7 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RepoClient } from '../../src/github/github.js';
+import { ReviewStore } from '../../src/store/store.js';
 import type { Cluster, Finding, VerificationStatus } from '../../src/store/store.js';
 import { clusterId, findingId, runId } from '../../src/types/ids.js';
-import { buildVerificationPrompt, verificationQueue, verificationResponseSchema } from '../../src/verify/verify.js';
+import { buildVerificationPrompt, verificationQueue, verificationResponseSchema, verifyTarget } from '../../src/verify/verify.js';
+
+// verifyTarget's consolidation path ends in a judge call; the mock is the
+// paid boundary, everything else (store, selection, reuse) runs real. The
+// pure exports (distinctRuns, maxSeverity) stay original — persist.ts needs
+// them to turn the mocked proposals into rows.
+const runClusteringMock = vi.hoisted(() => vi.fn());
+vi.mock('../../src/consolidate/consolidate.js', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('../../src/consolidate/consolidate.js')>();
+    return { ...original, runClustering: runClusteringMock };
+});
 
 function finding(id: number, run: number, overrides: Partial<Finding> = {}): Finding
 {
@@ -157,5 +170,158 @@ describe('verificationResponseSchema', () =>
 
         // Assert
         expect(parsed.success).toBe(false);
+    });
+});
+
+// The gate that decides whether a judge call gets paid for. Every scenario
+// here must finish without touching verifyCluster: clusters are arranged to
+// be corroborated (occurrence ≥ 2), so the adversarial queue stays empty and
+// no test can reach a real query().
+describe('verifyTarget', () =>
+{
+    const TARGET = { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' };
+
+    // Never called in these tests; present because the signature demands one.
+    const client: RepoClient = {
+        compare: async () => [],
+        readFile: async () => '',
+    };
+
+    let store: ReviewStore;
+
+    beforeEach(() =>
+    {
+        store = new ReviewStore(':memory:');
+        runClusteringMock.mockReset();
+    });
+
+    afterEach(() =>
+    {
+        store.close();
+    });
+
+    function savedRun(titles: string[], target = TARGET)
+    {
+        return store.saveRun({
+            ...target,
+            model: 'claude-opus-5',
+            status: 'submitted',
+            review: {
+                summary: 'reviewed',
+                findings: titles.map(title => ({ file: 'src/a.ts', line: 3, severity: 'warning', title, detail: `detail of ${title}` })),
+            },
+            turns: 10,
+            costUsd: 1,
+            usage: { inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            filesChanged: 2,
+        });
+    }
+
+    it('should throw on a target with no submitted runs', async () =>
+    {
+        // Arrange: an aborted run is not a submitted one.
+        store.saveRun({
+            ...TARGET,
+            model: 'claude-opus-5',
+            status: 'aborted',
+            reason: 'error_max_turns',
+            turns: 10,
+            costUsd: 1,
+            usage: { inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        });
+
+        // Act + Assert
+        await expect(verifyTarget(store, client, TARGET)).rejects.toThrow('No submitted runs');
+        expect(runClusteringMock).not.toHaveBeenCalled();
+    });
+
+    it('should succeed vacuously when no submitted run has findings, writing nothing', async () =>
+    {
+        // Arrange
+        savedRun([]);
+
+        // Act
+        const result = await verifyTarget(store, client, TARGET);
+
+        // Assert: no judge call, no consolidation row, an empty summary.
+        expect(result).toEqual({ reused: false, summary: { attempted: 0, verified: 0, failures: 0, costUsd: 0 } });
+        expect(store.listConsolidations()).toEqual([]);
+        expect(runClusteringMock).not.toHaveBeenCalled();
+    });
+
+    it('should reuse the latest consolidation when it covers exactly the submitted runs', async () =>
+    {
+        // Arrange: two runs, one existing rev over both of them.
+        const runA = savedRun(['Unbounded query']);
+        const runB = savedRun(['Unbounded query']);
+        const a = store.getFindings(runA)[0]!;
+        const b = store.getFindings(runB)[0]!;
+        const existing = store.saveConsolidation({
+            ...TARGET,
+            runIds: [runA, runB],
+            clusters: [{ memberIds: [a.id, b.id], representativeId: a.id, severity: 'warning', occurrence: 2 }],
+        });
+
+        // Act
+        const result = await verifyTarget(store, client, TARGET);
+
+        // Assert: the rev is reused — a fresh judge call over the same runs
+        // would buy nothing.
+        expect(result.reused).toBe(true);
+        expect(result.consolidationId).toBe(existing);
+        expect(runClusteringMock).not.toHaveBeenCalled();
+        expect(store.listConsolidations()).toHaveLength(1);
+    });
+
+    it('should re-consolidate when a newer submitted run is outside the latest rev', async () =>
+    {
+        // Arrange: an existing rev over two runs, then a third run lands.
+        const runA = savedRun(['Unbounded query']);
+        const runB = savedRun(['Unbounded query']);
+        const a = store.getFindings(runA)[0]!;
+        const b = store.getFindings(runB)[0]!;
+        const stale = store.saveConsolidation({
+            ...TARGET,
+            runIds: [runA, runB],
+            clusters: [{ memberIds: [a.id, b.id], representativeId: a.id, severity: 'warning', occurrence: 2 }],
+        });
+        const runC = savedRun(['Unbounded query']);
+        const c = store.getFindings(runC)[0]!;
+        runClusteringMock.mockResolvedValue([{ memberIds: [a.id, b.id, c.id], representativeId: a.id }]);
+
+        // Act
+        const result = await verifyTarget(store, client, TARGET);
+
+        // Assert: one judge call, and a new rev covering all three runs.
+        expect(runClusteringMock).toHaveBeenCalledTimes(1);
+        expect(result.reused).toBe(false);
+        expect(result.consolidationId).not.toBe(stale);
+        const latest = store.listConsolidations({ ...TARGET })[0];
+        expect(latest?.id).toBe(result.consolidationId);
+        expect(latest?.runIds).toEqual([runA, runB, runC]);
+    });
+
+    it('should not reuse a rev of the same head against a different base', async () =>
+    {
+        // Arrange: the same runIds under another base — without the base pin
+        // this rev would satisfy the covered check by member equality alone.
+        const runA = savedRun(['Unbounded query']);
+        const runB = savedRun(['Unbounded query']);
+        const a = store.getFindings(runA)[0]!;
+        const b = store.getFindings(runB)[0]!;
+        store.saveConsolidation({
+            ...TARGET,
+            base: 'develop',
+            runIds: [runA, runB],
+            clusters: [{ memberIds: [a.id, b.id], representativeId: a.id, severity: 'warning', occurrence: 2 }],
+        });
+        runClusteringMock.mockResolvedValue([{ memberIds: [a.id, b.id], representativeId: a.id }]);
+
+        // Act
+        const result = await verifyTarget(store, client, TARGET);
+
+        // Assert: a fresh consolidation against the right base.
+        expect(result.reused).toBe(false);
+        expect(runClusteringMock).toHaveBeenCalledTimes(1);
     });
 });

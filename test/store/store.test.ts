@@ -136,6 +136,21 @@ describe('ReviewStore', () =>
         expect(summaries[0]!.findingsCount).toBe(0);
     });
 
+    it('should pin listRuns to a base when the filter carries one', () =>
+    {
+        // Arrange: one head reviewed against two bases — two review series.
+        const onMain = store.saveRun(submittedRun);
+        const onDevelop = store.saveRun({ ...submittedRun, base: 'develop' });
+
+        // Act
+        const triple = store.listRuns({ owner: 'acme', repo: 'widgets', head: 'feature-x' });
+        const pinned = store.listRuns({ owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'develop' });
+
+        // Assert
+        expect(triple.map(r => r.id)).toEqual([onDevelop, onMain]);
+        expect(pinned.map(r => r.id)).toEqual([onDevelop]);
+    });
+
     it('should return undefined for an unknown run id', () =>
     {
         // Act
@@ -221,6 +236,29 @@ describe('ReviewStore', () =>
             // Assert
             expect(summaries).toHaveLength(1);
             expect(summaries[0]).toMatchObject({ id: consolidationId, runIds: [runA, runB], clusterCount: 2 });
+        });
+
+        it('should pin listConsolidations to a base when the filter carries one', () =>
+        {
+            // Arrange: a second rev of the same head against another base.
+            const { consolidationId: onMain, runA, a1 } = savedConsolidation();
+            const onDevelop = store.saveConsolidation({
+                owner: 'acme',
+                repo: 'widgets',
+                head: 'feature-x',
+                base: 'develop',
+                runIds: [runA],
+                clusters: [{ memberIds: [a1.id], representativeId: a1.id, severity: 'warning', occurrence: 1 }],
+            });
+
+            // Act
+            const filter = { owner: 'acme', repo: 'widgets', head: 'feature-x' };
+            const triple = store.listConsolidations(filter);
+            const pinned = store.listConsolidations({ ...filter, base: 'main' });
+
+            // Assert
+            expect(triple.map(c => c.id)).toEqual([onDevelop, onMain]);
+            expect(pinned.map(c => c.id)).toEqual([onMain]);
         });
 
         it('should return undefined for an unknown consolidation id', () =>

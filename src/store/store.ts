@@ -45,12 +45,15 @@ export interface RunSummary extends Pick<Run, 'id' | 'createdAt' | 'status' | 't
 
 // The dashboard's coordinates for "this branch" — the same triple the trigger
 // dedupes jobs on. All-or-nothing at the HTTP edge: filtering by owner alone
-// would silently mix branches.
+// would silently mix branches. base is the exception: callers navigate by
+// the triple, but one head reviewed against two bases is two review series,
+// so a caller that knows its base can pin the comparison too.
 export interface TargetFilter
 {
     owner: string;
     repo: string;
     head: string;
+    base?: string;
 }
 
 // One reviewed branch aggregated across its runs. A view, not an entity:
@@ -391,8 +394,7 @@ export class ReviewStore
 
     listRuns(filter?: TargetFilter): RunSummary[]
     {
-        const where = filter === undefined ? '' : 'WHERE r.owner = ? AND r.repo = ? AND r.head = ?';
-        const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
+        const [where, params] = filterClause(filter, 'r');
         const rows = this.db.prepare(
             `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.turns, r.cost_usd, r.files_changed,
                     COUNT(f.id) AS findings_count
@@ -546,8 +548,7 @@ export class ReviewStore
 
     listConsolidations(filter?: TargetFilter): ConsolidationSummary[]
     {
-        const where = filter === undefined ? '' : 'WHERE m.owner = ? AND m.repo = ? AND m.head = ?';
-        const params = filter === undefined ? [] : [filter.owner, filter.repo, filter.head];
+        const [where, params] = filterClause(filter, 'm');
         const rows = this.db.prepare(
             `SELECT m.id, m.created_at, m.owner, m.repo, m.head, m.base, m.run_ids,
                     COUNT(c.id) AS cluster_count
@@ -707,6 +708,21 @@ export class ReviewStore
     {
         this.db.close();
     }
+}
+
+// The list methods' shared WHERE builder: the triple always binds together,
+// base joins only when the caller pinned it.
+function filterClause(filter: TargetFilter | undefined, alias: string): [string, string[]]
+{
+    if (filter === undefined)
+    {
+        return ['', []];
+    }
+    const base = filter.base !== undefined ? [filter.base] : [];
+    return [
+        `WHERE ${alias}.owner = ? AND ${alias}.repo = ? AND ${alias}.head = ?${base.length > 0 ? ` AND ${alias}.base = ?` : ''}`,
+        [filter.owner, filter.repo, filter.head, ...base],
+    ];
 }
 
 function toFinding(row: FindingRow): NewFinding

@@ -25,7 +25,7 @@ import { api, ApiError } from '../api/client';
 import type { NewJobRequest } from '../api/client';
 import { usd } from '../format';
 import BlueprintCallout from './blueprint/BlueprintCallout.vue';
-import type { CalloutSubject } from './blueprint/BlueprintCallout.vue';
+import type { CalloutSubject, VerifyGate } from './blueprint/BlueprintCallout.vue';
 import BlueprintIntake from './blueprint/BlueprintIntake.vue';
 import LoopBand from './blueprint/LoopBand.vue';
 
@@ -297,6 +297,27 @@ const reviewing = computed(() => runningKind.value === 'review' || runningKind.v
 const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify');
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 
+// "verify now" also yields to a held verify job: the worker auto-proposes
+// one after a review with findings, and a click that ignored it would stack
+// a second job for the same work — the held job's ▶ is the click that bills.
+const heldVerifyJob = computed(() => targetJobs.value.find(j => j.kind === 'verify' && j.state === 'held'));
+const verifyGate = computed<VerifyGate>(() =>
+{
+    if (hasActiveJob.value)
+    {
+        return { allowed: false, reason: 'A job for this target is already queued or running.' };
+    }
+    if (heldVerifyJob.value !== undefined)
+    {
+        return { allowed: false, reason: `Verify job #${heldVerifyJob.value.id} is already proposed — release it (▶) in the intake stage instead.` };
+    }
+    if (base.value === undefined)
+    {
+        return { allowed: false, reason: 'No base known for this target yet.' };
+    }
+    return { allowed: true };
+});
+
 const rounds = computed(() =>
     (consolidation.value?.runIds ?? []).map(id => ({
         runId: id,
@@ -555,7 +576,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
             :subject="calloutSubject"
             :run-count="runCount"
             :rev-run-ids="consolidation?.runIds"
-            :can-verify="!hasActiveJob && base !== undefined"
+            :verify-gate="verifyGate"
             @stamp="stamp"
             @verify="verifyNow"
         />

@@ -10,6 +10,13 @@ import type { Finding } from '@server/store/store';
 export type CalloutSubject =
     | { kind: 'cluster'; cluster: ClusterDetail }
     | { kind: 'finding'; finding: Finding };
+
+// Whether "verify now" may enqueue, and — when it may not — the reason the
+// tooltip shows. A union rather than a bare boolean so a blocked button can
+// name its blocker (a held verify job wants ▶, not a second job).
+export type VerifyGate =
+    | { allowed: true }
+    | { allowed: false; reason: string };
 </script>
 
 <script setup lang="ts">
@@ -23,8 +30,9 @@ import { usd } from '../../format';
 
 // revRunIds is the displayed rev's runs in round order — it turns raw run
 // ids into R-numbers so the callout speaks the same language as the sheet.
-// canVerify is the parent's call (no base yet, or a job already active).
-const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[]; canVerify: boolean }>();
+// verifyGate is the parent's call (no base yet, a job already active, or a
+// held verify job awaiting its release).
+const props = defineProps<{ subject: CalloutSubject; runCount: number; revRunIds?: RunId[]; verifyGate: VerifyGate }>();
 
 const emit = defineEmits<{
     stamp: [verdict: 'confirmed' | 'refuted', rationale: string];
@@ -118,9 +126,9 @@ function runLabel(id: RunId): string
                     <div class="vactions">
                         <button
                             class="bp-btn chalk"
-                            :disabled="!canVerify"
-                            :title="canVerify ? 'Consolidates this target\'s runs, then runs the adversarial pass — bills subscription credit.'
-                                : 'Waiting on this target — a job is already active or no base is known.'"
+                            :disabled="!verifyGate.allowed"
+                            :title="verifyGate.allowed ? 'Consolidates this target\'s runs, then runs the adversarial pass — bills subscription credit.'
+                                : verifyGate.reason"
                             @click="emit('verify')"
                         >verify now</button>
                         <span class="note">consolidates first, then one adversarial agent per pending cluster</span>
@@ -132,9 +140,9 @@ function runLabel(id: RunId): string
                     <div class="vactions">
                         <button
                             class="bp-btn chalk"
-                            :disabled="!canVerify"
-                            :title="canVerify ? 'Runs the adversarial pass over every pending cluster of this target — bills subscription credit.'
-                                : 'Waiting on this target — a job is already active or no base is known.'"
+                            :disabled="!verifyGate.allowed"
+                            :title="verifyGate.allowed ? 'Runs the adversarial pass over every pending cluster of this target — bills subscription credit.'
+                                : verifyGate.reason"
                             @click="emit('verify')"
                         >verify now</button>
                         <span class="note">one adversarial agent per pending cluster · whole target</span>

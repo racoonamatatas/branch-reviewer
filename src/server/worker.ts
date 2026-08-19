@@ -145,25 +145,37 @@ export class Worker
             this.jobs.abort(job.id, result.reason);
             return;
         }
+        this.jobs.succeed(job.id);
 
         // Findings are claims until verified, and this run may be the only
         // one this target ever gets — propose the adversarial pass as a held
         // job (a human release bills it). Skipped when one is already open,
-        // and when there is nothing to verify.
-        if (result.review.findings.length > 0
-            && !this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+        // and when there is nothing to verify. The review is succeeded first
+        // and the proposal has its own catch: a write failure here must not
+        // fail a review that ran, billed, and saved — persistence never
+        // changes an outcome, and the proposal is a bonus, not the job.
+        if (result.review.findings.length > 0)
         {
-            const verifyId = this.jobs.enqueue({
-                kind: 'verify',
-                owner: job.owner,
-                repo: job.repo,
-                head: job.head,
-                base: job.base,
-                params: {},
-            }, { held: true });
-            this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
+            try
+            {
+                if (!this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+                {
+                    const verifyId = this.jobs.enqueue({
+                        kind: 'verify',
+                        owner: job.owner,
+                        repo: job.repo,
+                        head: job.head,
+                        base: job.base,
+                        params: {},
+                    }, { held: true });
+                    this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
+                }
+            }
+            catch (error)
+            {
+                this.onEvent?.(job.id, `could not propose a verify job: ${error instanceof Error ? error.message : String(error)}`);
+            }
         }
-        this.jobs.succeed(job.id);
     }
 
     private async executeCampaign(job: CampaignJob): Promise<void>

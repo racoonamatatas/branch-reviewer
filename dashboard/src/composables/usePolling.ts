@@ -7,9 +7,23 @@ export function usePolling(refresh: () => Promise<void>, intervalMs: number): vo
 {
     let timer: number | undefined;
 
+    // One refresh at a time: a tick landing while the last one is still in
+    // flight (slow server, tab woken mid-cycle) would double every request
+    // and race the caller's own state. Skipped, not queued — the next
+    // interval tick refreshes soon enough.
+    let inFlight = false;
+
     function tick(): void
     {
-        void refresh();
+        if (inFlight)
+        {
+            return;
+        }
+        inFlight = true;
+        void refresh().finally(() =>
+        {
+            inFlight = false;
+        });
     }
 
     function start(): void

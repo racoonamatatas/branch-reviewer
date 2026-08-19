@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { assertSubscriptionCredit, throwIfErrorResult } from '../../src/review/review.js';
+import type { RepoClient } from '../../src/github/github.js';
+import { assertSubscriptionCredit, runReview, throwIfErrorResult } from '../../src/review/review.js';
 
 // Every credential variable the assertions read; saved and restored around
 // each test so the suite never depends on (or leaks into) the real shell env.
@@ -150,5 +151,30 @@ describe('throwIfErrorResult', () =>
         // Act + Assert
         expect(() => throwIfErrorResult(other)).toThrow('Some other terminal failure');
         expect(() => throwIfErrorResult(other)).not.toThrow('claude setup-token');
+    });
+});
+
+describe('runReview', () =>
+{
+    it('should answer an empty diff itself: zero turns, zero credit, and the empty-diff tell', async () =>
+    {
+        // Arrange: a merged or stale head — the compare comes back empty.
+        const client: RepoClient = {
+            compare: async () => [],
+            readFile: async () => '',
+        };
+
+        // Act: never reaches the SDK — the pre-flight count short-circuits.
+        const result = await runReview(client, { base: 'main', head: 'feature-x' });
+
+        // Assert
+        expect(result.status).toBe('submitted');
+        expect(result.filesChanged).toBe(0);
+        expect(result.stats).toMatchObject({ turns: 0, costUsd: 0 });
+        if (result.status === 'submitted')
+        {
+            expect(result.review.findings).toEqual([]);
+            expect(result.review.summary).toContain('Empty diff');
+        }
     });
 });

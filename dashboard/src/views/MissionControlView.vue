@@ -114,8 +114,11 @@ async function refresh(): Promise<void>
     }
     if (feed !== undefined)
     {
+        // Re-filter against the cursor at append time, not fetch time: act()
+        // refreshes run concurrently with the poller's, and two racers that
+        // read the same cursor would otherwise both append the same tail.
         events.value = feed.boot === feedBoot.value
-            ? [...events.value, ...feed.events].slice(-200)
+            ? [...events.value, ...feed.events.filter(e => e.seq > cursor.value)].slice(-200)
             : feed.events;
         feedBoot.value = feed.boot;
         pollStatus.value = feed.poll;
