@@ -48,6 +48,23 @@ function targetRoute(target: TargetSummary): string
 </template>
 
 <style scoped>
+/* When the parent gives this panel a bounded height (mission control pins
+   the side column to the queue column's height), the list scrolls inside
+   it instead of growing the page — the header stays put. Unconstrained
+   parents are unaffected: the body just takes its natural height. */
+.stage
+{
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.stage .stage-body
+{
+    overflow-y: auto;
+    min-height: 0;
+}
+
 .target
 {
     padding: 0.35rem 0 0.35rem 0.4rem;

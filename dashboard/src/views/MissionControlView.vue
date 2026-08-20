@@ -222,6 +222,14 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
             </div>
         </main>
 
+        <!-- Directly under both columns: the feed is the "is something
+             happening" glance, and it must not hide below an open sheet.
+             Its log scrolls inside a fixed cap, so lines arriving don't
+             shift the sheet under the reader. -->
+        <div class="activitywrap">
+            <ActivityPanel :events="events" />
+        </div>
+
         <!-- Keyed by target: switching targets remounts the sheet, so caches
              and selections from the old target can't leak into the new one.
              The key must cover all of owner/repo/head — the sheet does not
@@ -241,12 +249,6 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
                 @release="release"
                 @enqueue="enqueue"
             />
-        </div>
-
-        <!-- Below the sheet on purpose: the feed's height breathes as lines
-             arrive, and nothing being read should shift under the reader. -->
-        <div class="activitywrap">
-            <ActivityPanel :events="events" />
         </div>
 
         <div class="titleblockwrap">
@@ -278,21 +280,42 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
 main
 {
     flex: 1;
-    display: flex;
-    align-items: flex-start;
-    gap: 1.2rem;
+    position: relative;
 }
 
 .col
 {
-    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 1.2rem;
+    /* Leave the side column's lane free — it sits out of flow. */
+    margin-right: calc(360px + 1.2rem);
 }
 
-.col.side { flex: none; width: 360px; }
+/* Pinned to the queue column's height: absolute top-to-bottom means the
+   bottom of Targets aligns with the job view by geometry, not by a magic
+   max-height — the targets list scrolls inside whatever room is left. */
+.col.side
+{
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 360px;
+    margin-right: 0;
+    min-height: 0;
+}
+
+/* The side column's last panel (Targets) absorbs the leftover height and
+   scrolls internally; Watches above it keeps its natural size. The child
+   component's root <section> carries this component's scope id, so the
+   selector reaches it. */
+.col.side > *:last-child
+{
+    flex: 1;
+    min-height: 0;
+}
 
 .sheetwrap { scroll-margin-top: 1rem; }
 
@@ -300,7 +323,12 @@ main
 
 @media (max-width: 900px)
 {
-    main { flex-direction: column; align-items: stretch; }
-    .col.side { width: auto; }
+    .col { margin-right: 0; }
+    .col.side
+    {
+        position: static;
+        width: auto;
+        margin-top: 1.2rem;
+    }
 }
 </style>

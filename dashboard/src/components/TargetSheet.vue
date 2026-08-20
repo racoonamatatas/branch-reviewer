@@ -305,9 +305,13 @@ const campaignJob = computed(() =>
 // it does not touch. A review touches stage 01; a campaign loops through
 // review, consolidate, and verify, so all three pulse. Stamps stay PENDING
 // while the dot blinks: "in motion" and "no verdict yet" are both true.
+// A running campaign *record* counts as campaign liveness too: CLI
+// campaigns have no job, and a sheet that reads idle while one bills
+// rounds is the exact invisibility slice 12 existed to fix.
 const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
-const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign');
-const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify');
+const campaignRunning = computed(() => campaign.value?.status === 'running');
+const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign' || campaignRunning.value);
+const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify' || campaignRunning.value);
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 
 // "verify now" also yields to a held verify job: the worker auto-proposes
@@ -324,6 +328,12 @@ const campaignGate = computed<ActionGate>(() => gateFor(heldCampaignJob.value, '
 
 function gateFor(held: JobSummary | undefined, kind: string): ActionGate
 {
+    // A CLI campaign holds no job, but its running record gates the same
+    // way: these buttons bill, and a duplicate loop is the expensive kind.
+    if (campaignRunning.value)
+    {
+        return { allowed: false, reason: 'A campaign for this target is running right now (see the loop band).' };
+    }
     if (hasActiveJob.value)
     {
         return { allowed: false, reason: 'A job for this target is already queued or running.' };
@@ -435,7 +445,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">01</span><span class="name">Review</span>
-                        <span v-if="reviewing" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="reviewing" class="pulse" title="a job or campaign for this target is running">●</span>
                         <span class="desc caps">{{ consolidation ? `${runCount} runs` : `${runs.length} runs` }}</span>
                     </div>
                     <div class="stage-body">
@@ -469,7 +479,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">02</span><span class="name">Consolidate</span>
-                        <span v-if="verifying" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="verifying" class="pulse" title="a job or campaign for this target is running">●</span>
                         <!-- The desc names what the body shows: clusters when a rev
                              exists, raw unclustered findings in the fallback. -->
                         <span class="desc caps">{{ consolidation ? `${orderedClusters.length} clusters · click for detail` : `${sampleFindings.length} findings · unclustered` }}</span>
@@ -522,7 +532,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">03</span><span class="name">Verify</span>
-                        <span v-if="verifying" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="verifying" class="pulse" title="a job or campaign for this target is running">●</span>
                         <span class="desc caps">adversarial</span>
                     </div>
                     <div class="stage-body">

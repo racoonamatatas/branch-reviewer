@@ -123,7 +123,7 @@ const reviewsCost = computed(() =>
                 >
                     <span class="r">r{{ round.round }}</span><span class="v">{{ roundValue(round) }}</span>
                 </div>
-                <div v-if="campaign.rounds.length === 0" class="m caps">no rounds yet</div>
+                <div v-if="campaign.rounds.length === 0" class="none caps">no rounds yet — round 1 in flight</div>
             </template>
             <template v-else>
                 <div v-for="(round, i) in derivedRounds" :key="round.runId" class="round" :class="{ barren: round.novel === 0 }" :title="`run ${round.runId}`">
@@ -183,6 +183,13 @@ const reviewsCost = computed(() =>
     gap: 0.4rem;
     align-items: center;
     flex-wrap: wrap;
+}
+
+.none
+{
+    color: var(--faint);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
 }
 
 .round
