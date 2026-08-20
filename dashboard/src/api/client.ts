@@ -5,10 +5,11 @@
 import { z } from 'zod';
 import type { humanVerdictRequestSchema, newJobRequestSchema, newWatchRequestSchema } from '@server/server/server';
 import type { TargetFilter } from '@server/store/store';
-import type { ClusterId, ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
+import type { CampaignId, ClusterId, ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
 import {
-    activityEventSchema, consolidationDetailSchema, consolidationSummarySchema, coverageSchema, findingSchema,
-    jobSchema, jobSummarySchema, pollStatusSchema, runSummarySchema, targetSummarySchema, verificationSchema, watchSchema,
+    activityEventSchema, campaignSchema, campaignSummarySchema, consolidationDetailSchema, consolidationSummarySchema,
+    coverageSchema, findingSchema, jobSchema, jobSummarySchema, pollStatusSchema, runSummarySchema, targetSummarySchema,
+    verificationSchema, watchSchema,
 } from './schemas';
 
 // The request types are the server's own schemas, imported as types: what the
@@ -109,6 +110,19 @@ export const api = {
 
     listConsolidations: async (filter?: TargetFilter) =>
         (await request(`/consolidations${targetQuery(filter)}`, z.object({ consolidations: z.array(consolidationSummarySchema) }))).consolidations,
+
+    // liveOnly bounds the server's aggregate to running/verifying rows —
+    // the right shape for a poll that only wants "what is billing now".
+    listCampaigns: async (filter?: TargetFilter, opts: { liveOnly?: boolean } = {}) =>
+    {
+        const query = targetQuery(filter);
+        const live = opts.liveOnly === true ? `${query === '' ? '?' : '&'}live=1` : '';
+        return (await request(`/campaigns${query}${live}`, z.object({ campaigns: z.array(campaignSummarySchema) }))).campaigns;
+    },
+
+    // The whole record, as-it-happened rounds included.
+    getCampaign: async (id: CampaignId) =>
+        (await request(`/campaigns/${id}`, z.object({ campaign: campaignSchema }))).campaign,
 
     stampVerdict: async (id: ClusterId, verdict: HumanVerdictRequest) =>
         (await request(`/clusters/${id}/verdict`, z.object({ verifications: z.array(verificationSchema) }), post(verdict))).verifications,

@@ -8,7 +8,7 @@ import { useRouter } from 'vue-router';
 import type { ActivityEvent, PollStatus } from '@server/server/events';
 import type { JobSummary } from '@server/server/jobs';
 import type { Watch } from '@server/server/trigger';
-import type { TargetSummary } from '@server/store/store';
+import type { CampaignSummary, TargetSummary } from '@server/store/store';
 import type { JobId, WatchId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest, NewWatchRequest } from '../api/client';
@@ -54,6 +54,7 @@ watch(selectedTarget, async (target, previous) =>
 const jobs = ref<JobSummary[]>([]);
 const watches = ref<Watch[]>([]);
 const targets = ref<TargetSummary[]>([]);
+const campaigns = ref<CampaignSummary[]>([]);
 const connectionError = ref<string>();
 const actionError = ref<string>();
 
@@ -92,11 +93,24 @@ async function refresh(): Promise<void>
     const feedPromise = api.listEvents(cursor.value).catch(() => undefined);
     try
     {
-        [jobs.value, watches.value, targets.value] = await Promise.all([
+        // The campaign read rides with its own catch, like the sheet's: it
+        // is secondary, and one bad campaign row 500-ing /campaigns must not
+        // blank the queue, watches, and targets it shares a Promise.all
+        // with. Live rows only: this poll asks "what is billing now" every
+        // 3s, and must not make the server aggregate all campaign history.
+        const [jobList, watchList, targetList, campaignList] = await Promise.all([
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
+            api.listCampaigns(undefined, { liveOnly: true }).catch(() => undefined),
         ]);
+        jobs.value = jobList;
+        watches.value = watchList;
+        targets.value = targetList;
+        if (campaignList !== undefined)
+        {
+            campaigns.value = campaignList;
+        }
         refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
     }
@@ -186,6 +200,12 @@ const promote = (job: JobSummary): Promise<void> => act(async () =>
 const running = computed(() => jobs.value.find(j => j.state === 'running'));
 const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').length);
 const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').length);
+
+// Campaign records are process-independent liveness: a CLI campaign holds
+// no job, so the worker can read idle while credit burns — this count and
+// the target-row markers are how mission control tells the truth about it.
+// 'verifying' counts: the loop is over but the adversarial passes still bill.
+const liveCampaigns = computed(() => campaigns.value.filter(c => c.status === 'running' || c.status === 'verifying'));
 </script>
 
 <template>
@@ -202,6 +222,10 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
                     <span class="kv caps">queued <b class="mono">{{ queuedCount }}</b></span>
                     <!-- Held is the count that wants a human — it earns the chalk. -->
                     <span v-if="heldCount > 0" class="kv caps">held <b class="mono busy">{{ heldCount }}</b></span>
+                    <!-- Live campaign records (running or verifying), jobs or
+                         not — a CLI loop billing shows here even while the
+                         worker idles. -->
+                    <span v-if="liveCampaigns.length > 0" class="kv caps">campaigns <b class="mono busy">{{ liveCampaigns.length }} in flight</b></span>
                     <span class="kv caps">poll <b class="mono">{{ pollLabel }}</b></span>
                     <span class="kv caps">updated <b class="mono">{{ updatedLabel }}</b></span>
                 </template>
@@ -213,14 +237,22 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
 
         <main>
             <div class="col">
-                <QueuePanel :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
+                <QueuePanel :jobs="jobs" :live-campaigns="liveCampaigns" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
                 <NewJobForm @enqueue="enqueue" />
             </div>
             <div class="col side">
                 <WatchesPanel :watches="watches" @add="addWatch" @remove="removeWatch" />
-                <TargetsPanel :targets="targets" :selected="selectedTarget" />
+                <TargetsPanel :targets="targets" :live-campaigns="liveCampaigns" :selected="selectedTarget" />
             </div>
         </main>
+
+        <!-- Directly under both columns: the feed is the "is something
+             happening" glance, and it must not hide below an open sheet.
+             Its log scrolls inside a fixed cap, so lines arriving don't
+             shift the sheet under the reader. -->
+        <div class="activitywrap">
+            <ActivityPanel :events="events" />
+        </div>
 
         <!-- Keyed by target: switching targets remounts the sheet, so caches
              and selections from the old target can't leak into the new one.
@@ -241,12 +273,6 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
                 @release="release"
                 @enqueue="enqueue"
             />
-        </div>
-
-        <!-- Below the sheet on purpose: the feed's height breathes as lines
-             arrive, and nothing being read should shift under the reader. -->
-        <div class="activitywrap">
-            <ActivityPanel :events="events" />
         </div>
 
         <div class="titleblockwrap">
@@ -278,21 +304,51 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
 main
 {
     flex: 1;
-    display: flex;
-    align-items: flex-start;
-    gap: 1.2rem;
+    position: relative;
 }
 
 .col
 {
-    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 1.2rem;
+    /* Leave the side column's lane free — it sits out of flow. */
+    margin-right: calc(360px + 1.2rem);
 }
 
-.col.side { flex: none; width: 360px; }
+/* Pinned to the queue column's height: absolute top-to-bottom means the
+   bottom of Targets aligns with the job view by geometry, not by a magic
+   max-height — the targets list scrolls inside whatever room is left. */
+.col.side
+{
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 360px;
+    margin-right: 0;
+    min-height: 0;
+}
+
+/* The side column's last panel (Targets) absorbs the leftover height and
+   scrolls internally; Watches above it keeps its natural size up to a cap,
+   past which it scrolls too — otherwise a long watch list pushes content
+   past the pinned bottom and over the activity feed. The child components'
+   root <section>s carry this component's scope id, so the selectors reach
+   them. */
+.col.side > *:first-child
+{
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 55%;
+}
+
+.col.side > *:last-child
+{
+    flex: 1;
+    min-height: 0;
+}
 
 .sheetwrap { scroll-margin-top: 1rem; }
 
@@ -300,7 +356,12 @@ main
 
 @media (max-width: 900px)
 {
-    main { flex-direction: column; align-items: stretch; }
-    .col.side { width: auto; }
+    .col { margin-right: 0; }
+    .col.side
+    {
+        position: static;
+        width: auto;
+        margin-top: 1.2rem;
+    }
 }
 </style>

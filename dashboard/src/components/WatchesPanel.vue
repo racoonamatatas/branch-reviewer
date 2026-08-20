@@ -59,6 +59,23 @@ function submit(): void
 </template>
 
 <style scoped>
+/* Same bounded-height treatment as TargetsPanel: inside mission control's
+   pinned side column this panel must scroll internally past its cap rather
+   than push the column's content out of its lane and over the activity
+   feed below. Unconstrained parents are unaffected. */
+.stage
+{
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.stage .stage-body
+{
+    overflow-y: auto;
+    min-height: 0;
+}
+
 .watch
 {
     padding: 0.35rem 0;

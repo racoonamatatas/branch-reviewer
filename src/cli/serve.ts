@@ -13,6 +13,7 @@ import { JobStore } from '../server/jobs.js';
 import { createServer } from '../server/server.js';
 import { pollOnce, WatchStore } from '../server/trigger.js';
 import { Worker } from '../server/worker.js';
+import { sweepInterruptedCampaigns } from '../store/lease.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 
 const USAGE = 'Usage: npm run serve [-- --port N] [--poll-interval seconds]';
@@ -85,6 +86,42 @@ function main(): void
         console.error(`job #${id} was running when the server last stopped; marked failed — re-enqueue to re-run (bills credit)`);
         activityLog.push('server', `job #${id} was running at the last shutdown — marked failed`);
     }
+
+    // Campaign recovery goes through liveness leases, not job linkage: a
+    // running row whose lease is acquirable provably lost its owner (the
+    // kernel released the fcntl lock on death — SIGKILL included), whatever
+    // process owned it. A live CLI campaign's lease probes as held, so
+    // sweeping here — and again every poll interval, which bounds how long
+    // a Ctrl-C'd CLI campaign can read as running while this server stays
+    // up — can never fail someone else's live loop.
+    // Guarded whole: this runs unattended in setInterval, and a maintenance
+    // task that throws (a hand-edited row failing the status validator, a
+    // sick filesystem) must cost one pass, never the serve process.
+    const sweepCampaigns = (): void =>
+    {
+        try
+        {
+            const swept = sweepInterruptedCampaigns(store, {
+                onWarning: (message) =>
+                {
+                    console.error(`  sweep: ${message}`);
+                    activityLog.push('server', `sweep: ${message}`);
+                },
+            });
+            for (const id of swept)
+            {
+                console.error(`campaign #${id} was left running by a dead process; marked failed — its rounds survive`);
+                activityLog.push('server', `campaign #${id} lost its owning process — marked failed`);
+            }
+        }
+        catch (error)
+        {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`campaign sweep failed: ${message}`);
+            activityLog.push('server', `campaign sweep failed: ${message}`);
+        }
+    };
+    sweepCampaigns();
 
     const worker = new Worker({
         jobs,
@@ -188,6 +225,7 @@ function main(): void
     setInterval(() =>
     {
         void poll();
+        sweepCampaigns();
     }, args.pollIntervalMs);
 
     // Jobs queued before a restart are still owed a run, and watches are

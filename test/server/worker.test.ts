@@ -7,7 +7,7 @@ import { JobStore } from '../../src/server/jobs.js';
 import type { NewJob } from '../../src/server/jobs.js';
 import { Worker } from '../../src/server/worker.js';
 import type { WorkerDeps } from '../../src/server/worker.js';
-import { consolidationId, runId } from '../../src/types/ids.js';
+import { campaignId, consolidationId, runId } from '../../src/types/ids.js';
 
 class FakeRepoClient implements RepoClient
 {
@@ -247,6 +247,24 @@ describe('campaign jobs', () =>
 
         // Assert
         expect(received).toMatchObject({ maxRuns: 5, patience: 2, verify: false, maxTurns: 24, model: 'claude-opus-5' });
+    });
+
+    it('should link the campaign record the loop opens, as provenance on the job', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(campaignJob());
+
+        // Act
+        await worker({
+            campaign: async (_store, _client, _target, opts) =>
+            {
+                opts.onCampaign?.(campaignId(7));
+                return { rounds: [], runIds: [], reviewCostUsd: 0, stoppedBy: 'max-runs' };
+            },
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)?.campaignId).toBe(7);
     });
 
     it('should abort when the campaign stops with no usable runs', async () =>

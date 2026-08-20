@@ -48,7 +48,10 @@ const rows = computed(() =>
 <style scoped>
 .log
 {
-    max-height: 15rem;
+    /* Fixed, not max: the panel sits above the target sheet, and "arriving
+       lines never shift the reader" must hold from the first line, not only
+       once the feed has filled a cap. */
+    height: 15rem;
     overflow-y: auto;
     font-size: 0.75rem;
 }

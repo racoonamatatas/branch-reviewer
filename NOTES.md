@@ -7,14 +7,14 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
-## Status (2026-08-11)
+## Status (2026-08-20)
 
-Slices 1–10 shipped. **Slice 10 (Vue TS dashboard) complete** — read API,
-Vue scaffold, mission control view + fixture server, blueprint view, static
-serving from the job server; chunk 9 merged the two views into one
-blueprint-styled page (target sheet expands in place, route still carries
-the selection). **Slice 11 (mission-control operations) in progress** —
-see below. After that, per the roadmap: deploy.
+Slices 1–13 shipped. **Slice 12 (persist campaigns)** — campaigns are
+first-class stored entities written by both the CLI and the worker, served
+over HTTP, and the dashboard loop band keys on them. **Slice 13 (campaign
+liveness leases)** — abandoned running rows are proven dead by a kernel-
+released SQLite lock and swept, closing slice 12's SIGKILL hole (see
+below). Next, per the roadmap: deploy.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -211,10 +211,168 @@ target-switch watcher fills it). Stage titles are fixed station names on
 purpose — the desc/body carry the data state. UI still can't consolidate
 or verify; that's the job-kinds open item, now user-felt.
 
-Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
-standing decision) → deploy (webhooks may replace polling then; needs server
-auth first). Eventually: read→write promotion (posting findings to PRs)
-— a deliberate, separately-decided step with its own risk profile, not a drift.
+**Slice 12 (persist campaigns).** The fix for "CLI campaigns are invisible
+as campaigns", and the decision the loop-band open item was waiting on:
+`RoundOutcome` is persisted. Chunk 1: a campaigns table in ReviewStore
+(rounds FK runs and consolidations) — Campaign is a running/finished/failed
+status union (stoppedBy only on finished, error only on failed, CHECKs
+restate it in SQL), rounds store RoundOutcome as-it-happened with the whole
+coverage snapshot (a later refutation or estimator tweak must not rewrite
+what the loop saw when it decided to stop), and expectTypeOf pins
+RoundOutcome === CampaignRound. Chunk 2: `runCampaign` writes its own
+record — opened before the baseline judge call (visible from the first
+tick), rounds appended as they land, finished with the stop reason *before*
+verification (which bills to clusters and must not un-finish the loop);
+every record write is observational (`onWarning`, never a dead paid loop),
+while a structural throw fails the record and still propagates. Ownership
+decides recovery: campaign jobs learn their campaign id
+(`jobs.recordCampaign`, nullable-column migration) so serve startup fails
+the campaign an interrupted worker job left mid-loop; the CLI covers its
+own exits (throw → catch, Ctrl-C → SIGINT handler). Chunk 3: GET /campaigns
+(target filter) + GET /campaigns/:id. Chunk 4: the loop band keys on the
+stored record — rounds as the loop saw them, unusable rounds render × (not
+a measured-looking 0), the stamp is campaign status/stoppedBy (dry,
+max-runs, empty-diff read as completions; the two-strike stops as
+failures) — with rev-derived novelty kept as the explicit fallback for
+pre-persistence targets, now a value import of `novelClusters` from the
+pure coverage module. Headless verification note: plain `firefox
+--headless --screenshot` returns on the load event, before the first poll
+tick paints — use geckodriver (npx works) + WebDriver, and `--no-remote`
+is what unblocks a second Firefox instance beside a running desktop one.
+
+**Slice 13 (campaign liveness leases — SQLite as the flock).** Closes slice
+12's deliberate hole: a campaign killed without a signal (SIGKILL, power
+loss) left its row `running` forever, and no other process could safely
+fail it. The mechanism (`src/store/lease.ts`): the campaign loop holds
+`BEGIN EXCLUSIVE` on a throwaway lock database
+(`data/leases/campaign-<id>.lock`) for its whole life — SQLite implements
+that with POSIX fcntl locks, which the kernel releases on ANY process
+death, so "row running + lease acquirable" is *proof* of abandonment, not
+a heuristic (no PID probing, no heartbeat timeouts). Key facts: SQLite
+tracks locks per inode within a process (fcntl locks are per-process, the
+classic footgun), so the serve process can sweep while its own worker holds
+a campaign — asserted by a same-process test, and the SIGKILL guarantee by
+a child-process test (kill -9, then reclaim). The lease is a hint, never
+the authority: every sweep lands in `failCampaign`, whose running-state
+guard settles all races (unlink-on-release included). Lifecycle lives in
+the recorder — acquired with the record, released by finish/fail, and by
+design a limbo row whose closing write failed becomes sweepable. Sweeps run
+at writer startups (serve, CLI campaign) and on serve's poll interval —
+never from read paths; reads don't write, even repairs. This *replaced*
+slice 12's CLI SIGINT handler and job-linkage recovery (the linkage column
+stays as provenance). One mechanism, all death modes. A campaign that
+cannot acquire its lease still runs and bills (observational, warned) and
+is sweepable-on-sight — degraded liveness is the stated cost. Leases live
+beside the DB so an age-moved copy arrives with no live leases, which is
+the truth. Test gotcha: vitest's NODE_OPTIONS loaders break a bare
+`node -e` child — strip the env var when spawning. The parked road-not-
+taken (an N-API flock addon) lives outside this repo, deliberately.
+
+**Campaign #1 on the slice-12/13 branch itself** (2026-08-20, first
+campaign to run under its own persistence: 6 runs, $19.38, stopped at
+max-runs, 16 distinct findings, 7/7 once-seen CONFIRMED, textbook
+saturation curve — est. ~4 of ~20 unseen). Its fix round: **campaigns
+gained a `verifying` status** (running → verifying → finished; stoppedBy
+becomes durable at the verifying transition, so a verify crash fails the
+record without losing why the loop stopped — FailedCampaign carries an
+optional stoppedBy for exactly that case; table-rebuild migration since
+CHECKs live in the DDL). The lease is held through verification and the
+sweep covers both live phases — the record had read 'finished' while the
+CLI process billed five more dollars of adversarial passes, with every
+billing gate reopened (user-felt live, then reported by the campaign in
+4/6 runs). The create→lease race (6/6 runs) closed with a 10s grace window
+in the sweep; the recorder now latches when the row leaves its hands (one
+actionable warning, not one per round). Migration gotchas worth keeping:
+**node:sqlite enables foreign-key enforcement by default** (unlike raw
+SQLite), so dropping a referenced parent needs `PRAGMA foreign_keys=OFF`
+bracketing the rebuild transaction (the pragma is a no-op inside one), and
+`ALTER TABLE ... RENAME` rewrites dependents' REFERENCES since SQLite 3.25
+— rebuild new-table-first, never rename-aside, when children point at the
+table. Dashboard: 'verifying' counts as in-flight everywhere (header,
+markers, lane, pulses, VERIFYING band stamp), the campaign fetch is
+isolated/token-guarded/cached-when-terminal, unusable rounds render
+dotted-× (distinct from barren — the patience rule's distinction, drawn),
+the band is labeled "latest campaign" with per-scope cost labels, and the
+watches panel got the bounded-scroll treatment inside the pinned column.
+
+**Campaigns #2–3 (the PR-head target) and their fix round.** The user
+promoted the trigger's held review to a campaign and later resumed it: 6
+runs total ($14.73 reviews), 20 distinct findings, 10/11 once-seen
+CONFIRMED, 1 refuted — and the estimate *rose* (27 → 32, ~12 unseen),
+because the fix-round code was its own under-sampled population. Notable:
+the 'verifying' phase was watched working live within an hour of shipping,
+and the stale-tab OFFLINE note above was born when the browser's old
+bundle rightly refused the new status value. The second fix round, from
+its findings: the campaigns rebuild migration rolls back on failure and
+copies by named columns (never positional `SELECT *` — TEXT-into-TEXT
+shuffles are silent); the recorder's latch asks the store for the row's
+state instead of parsing error wording (covers row-deleted, survives
+rewording) and the warning channel is throw-proof; degraded-liveness rows
+are recorded as such (`leased` column, defaulted ADD COLUMN) and the sweep
+refuses to judge them — a false "owner gone" on a billing loop also
+reopened the duplicate-campaign gates; sweep probes distinguish
+SQLITE_BUSY (proof of life) from a broken lock file (reported with the
+path to remove, never read as "alive", which wedged the target's gates);
+sweeps are guarded at both call sites (a validator throw in setInterval
+could kill serve); campaign transitions throw on zero-change races
+instead of no-opping; the sheet gates on ANY live campaign in the filtered
+list (newest-first order made the newest the wrong one to ask) and its
+campaign reads are isolated with a three-strike "campaign data stale"
+band marker; a held campaign job no longer hides a live CLI record from
+the in-flight lane (only a running job owns a loop) and a live job now
+outranks a terminal record in the band stamp; `/campaigns?live=1` bounds
+the dashboard's 3s poll; the activity log height is fixed, not capped,
+so the no-shift claim holds from line one; and the vacuous mid-loop lease
+test now disables the grace window so it tests the lease.
+
+**Campaigns #4–5 (fix-round-two head) and the third fix round.** 6 runs
+($15.84), 15 findings, 8/8 once-seen CONFIRMED; the estimate stayed high
+(~16 of ~31) because each fix round is its own fresh population — the
+churn signal, not a bottomless branch. The round: **the duplicate-campaign
+gate moved to the spending door** — runCampaign itself refuses when a live
+record exists for the target (CLI exits 1, worker fails the job; the UI
+gate is now advisory), closing the two-terminals double-bill. **Liveness
+provability inverted to fail-safe**: rows are born `leased = 0` and marked
+only after acquisition succeeds, so a crash in the create→acquire gap is
+unsweepable instead of sweepable-while-alive; `leased` is surfaced on the
+entity/summary so the UI can say "reads running but liveness is
+unprovable". **The operator escape hatch exists**: `npm run campaign --
+--force-fail <id>` retires a wedged live row (the store guard still
+refuses terminal rows) — without it, an unprovable row wedged every
+billing gate on its target forever, and now also the door gate. Probe
+errors classify by SQLite errcode (5/6 = busy = alive; verified
+empirically that node:sqlite sets errcode), never by message shape — a
+regex miss would have advised deleting a LIVE campaign's lock file. The
+sweep's cause names its own uncertainty ("owner died, or finished without
+closing its record"), reports failCampaign refusals, and tidies orphaned
+lock files of terminal rows. Mission control's campaign read got the same
+isolation the sheet's had (one bad row 500-ing /campaigns blanked the
+whole poll); baseline/round writes joined the changes-guard discipline
+(the round INSERT carries its own EXISTS-status guard); onCampaign moved
+inside the try that guarantees fail-and-release. Accepted with rationale
+rather than changed: the sheet's target-scoped campaign list (bounded by
+one target's history) and campaign_rounds keeping its original DDL (never
+changed since birth; its own migration when it does).
+
+**Run 60 (single-review tripwire) and the merge stopping rule.** After
+three fix rounds the meta-loop needed a terminator: a single released
+review ($3.16) with the decision pre-made — nit-only → merge; warning+ →
+one targeted fix, then merge with the rest as follow-ups. It found 2
+warnings + 3 nits. Fixed: `classifyProbeError` masks EXTENDED result
+codes to the primary byte (node:sqlite reports sqlite3_extended_errcode —
+SQLITE_BUSY_SNAPSHOT is 517, and unmasked it took the "broken" path and
+its delete-a-live-lock advice); and the duplicate gate became atomic by
+moving INTO `createCampaign` under BEGIN IMMEDIATE with a typed
+`DuplicateCampaignError` that escapes the recorder's observational guard
+— policy throws, persistence warns — closing the check-then-act window
+the pre-check version had (and enforcing one live campaign per target at
+the store level, which the tests now respect). Remaining nits logged
+above.
+
+Remaining roadmap (sequencing user-confirmed): deploy (webhooks may replace
+polling then; needs server auth first). Eventually: read→write promotion
+(posting findings to PRs) — a deliberate, separately-decided step with its
+own risk profile, not a drift.
 
 Shipped so far:
 
@@ -523,26 +681,49 @@ base rules. Still open (deliberately deferred):
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
-- **Decide: loop-band novelty stays derived, or `RoundOutcome` gets
-  persisted.** Chunk 4 derives per-run novelty in the browser from the
-  displayed partition (and shows the campaign job's state because `stoppedBy`
-  is not stored either). Derivation is always consistent with the rev on
-  screen but anachronistic — a newer judge call can merge away a round's
-  novel cluster, so the sheet can't answer "what did the campaign see when
-  it decided to stop". Storing rounds buys that history at the cost of a
-  migration, a write path, API surface, and a second copy of truth. Current
-  lean: keep deriving until a real consumer of as-it-happened rounds shows
-  up; either way, the dashboard's re-implementation of `novelClusters`
-  should become a value import from the pure coverage module.
-- **CLI campaigns are invisible as campaigns.** The loop band's campaign
-  identity is a campaign *job*, so `npm run campaign` targets render as
-  "Ad-hoc runs — no campaign yet" even mid-loop (seen live 2026-08-19: a
-  3-round CLI campaign showed only its runs/consolidations). A real
-  consumer for the bullet above, and the same fix: a `campaigns` table
-  written by both the CLI and the worker — which is also where per-round
-  novelty and `stoppedBy` would naturally persist.
+- **Run-60 follow-ups (nit-grade, logged per the merge stopping rule):**
+  a campaign finishing between `openCampaigns()` and the sweep's probe
+  produces an alarming "could not be marked failed" warning for a healthy
+  outcome — detect the guard-refusal case and stay quiet or say "finished
+  normally mid-sweep"; and `leaseDir` derives from the database's
+  *directory*, so two ReviewStore databases in one directory would share a
+  lock namespace and `cleanOrphanedLocks` could delete a neighbour's live
+  lock — derive it from the filename (e.g. `reviews.db.leases/`) if a
+  second store ever shares a directory. Fixed from the same review, beyond
+  the two warnings: `--force-fail` honored only as the leading argument (a
+  destructive flag must be the whole command, not a stray rider).
+- **Stale-tab OFFLINE costume (user-felt, unscheduled).** A long-lived
+  dashboard tab keeps polling with its old bundle; when the server starts
+  sending a value the old wire schema doesn't know (seen live 2026-08-20:
+  campaign status 'verifying' minutes after it shipped), the Zod guard
+  rightly refuses — but the failure renders as OFFLINE, which reads as
+  "server gone", not "your tab is stale". Fix shape: the client
+  distinguishes parse failure (response arrived, schema refused) from
+  fetch failure, and says "reload — the dashboard was updated". The guard
+  itself is working as designed and stays.
+- **Campaign abort button (user-requested, unscheduled).** A soft abort at
+  round boundaries: the dashboard writes an `abort_requested` flag on the
+  campaign row, both loops (CLI and worker share the store) check it at the
+  top of each round, and stop with a new StoppedBy (`'human-abort'`). The
+  flag-through-the-shared-file is the only way a dashboard click can stop a
+  CLI loop, and the round boundary is where stopping is clean (run saved,
+  nothing half-written). Would be the second deliberate human-write
+  endpoint after verdicts — revoking spend is the inverse of ▶ release.
+  To settle when built: skip verification on abort (default yes — the
+  click said "stop spending"; verify stays one click away); hard kills
+  stay the lease sweep's job, not this flag's. The CLI half-sibling
+  already exists: `--force-fail <id>` retires a wedged record (but does
+  not stop a live loop — that is exactly what the flag adds).
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
+- **Areas to explore (finding presentation, unscheduled):**
+  - Simplified Technical English (STE) — could the reviewer's prose
+    (finding detail/rationale text) be constrained to it, or checked
+    against it?
+  - Render code distinctly from prose in finding text (Stack
+    Exchange-style code formatting) instead of one undifferentiated blob.
+  - Numbered points each on their own line, indented, rather than run
+    together in a paragraph.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
