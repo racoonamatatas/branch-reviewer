@@ -580,6 +580,17 @@ base rules. Still open (deliberately deferred):
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
+- **Campaign abort button (user-requested, unscheduled).** A soft abort at
+  round boundaries: the dashboard writes an `abort_requested` flag on the
+  campaign row, both loops (CLI and worker share the store) check it at the
+  top of each round, and stop with a new StoppedBy (`'human-abort'`). The
+  flag-through-the-shared-file is the only way a dashboard click can stop a
+  CLI loop, and the round boundary is where stopping is clean (run saved,
+  nothing half-written). Would be the second deliberate human-write
+  endpoint after verdicts — revoking spend is the inverse of ▶ release.
+  To settle when built: skip verification on abort (default yes — the
+  click said "stop spending"; verify stays one click away); hard kills
+  stay the lease sweep's job, not this flag's.
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - **Areas to explore (finding presentation, unscheduled):**
