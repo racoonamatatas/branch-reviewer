@@ -7,14 +7,12 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
-## Status (2026-08-11)
+## Status (2026-08-20)
 
-Slices 1–10 shipped. **Slice 10 (Vue TS dashboard) complete** — read API,
-Vue scaffold, mission control view + fixture server, blueprint view, static
-serving from the job server; chunk 9 merged the two views into one
-blueprint-styled page (target sheet expands in place, route still carries
-the selection). **Slice 11 (mission-control operations) in progress** —
-see below. After that, per the roadmap: deploy.
+Slices 1–12 shipped. **Slice 12 (persist campaigns) complete** — campaigns
+are first-class stored entities written by both the CLI and the worker,
+served over HTTP, and the dashboard loop band keys on them (see below).
+Next, per the roadmap: deploy.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -210,6 +208,35 @@ sheet no longer self-fetches on mount (parent's first tick or the
 target-switch watcher fills it). Stage titles are fixed station names on
 purpose — the desc/body carry the data state. UI still can't consolidate
 or verify; that's the job-kinds open item, now user-felt.
+
+**Slice 12 (persist campaigns).** The fix for "CLI campaigns are invisible
+as campaigns", and the decision the loop-band open item was waiting on:
+`RoundOutcome` is persisted. Chunk 1: a campaigns table in ReviewStore
+(rounds FK runs and consolidations) — Campaign is a running/finished/failed
+status union (stoppedBy only on finished, error only on failed, CHECKs
+restate it in SQL), rounds store RoundOutcome as-it-happened with the whole
+coverage snapshot (a later refutation or estimator tweak must not rewrite
+what the loop saw when it decided to stop), and expectTypeOf pins
+RoundOutcome === CampaignRound. Chunk 2: `runCampaign` writes its own
+record — opened before the baseline judge call (visible from the first
+tick), rounds appended as they land, finished with the stop reason *before*
+verification (which bills to clusters and must not un-finish the loop);
+every record write is observational (`onWarning`, never a dead paid loop),
+while a structural throw fails the record and still propagates. Ownership
+decides recovery: campaign jobs learn their campaign id
+(`jobs.recordCampaign`, nullable-column migration) so serve startup fails
+the campaign an interrupted worker job left mid-loop; the CLI covers its
+own exits (throw → catch, Ctrl-C → SIGINT handler). Chunk 3: GET /campaigns
+(target filter) + GET /campaigns/:id. Chunk 4: the loop band keys on the
+stored record — rounds as the loop saw them, unusable rounds render × (not
+a measured-looking 0), the stamp is campaign status/stoppedBy (dry,
+max-runs, empty-diff read as completions; the two-strike stops as
+failures) — with rev-derived novelty kept as the explicit fallback for
+pre-persistence targets, now a value import of `novelClusters` from the
+pure coverage module. Headless verification note: plain `firefox
+--headless --screenshot` returns on the load event, before the first poll
+tick paints — use geckodriver (npx works) + WebDriver, and `--no-remote`
+is what unblocks a second Firefox instance beside a running desktop one.
 
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
@@ -523,24 +550,13 @@ base rules. Still open (deliberately deferred):
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
-- **Decide: loop-band novelty stays derived, or `RoundOutcome` gets
-  persisted.** Chunk 4 derives per-run novelty in the browser from the
-  displayed partition (and shows the campaign job's state because `stoppedBy`
-  is not stored either). Derivation is always consistent with the rev on
-  screen but anachronistic — a newer judge call can merge away a round's
-  novel cluster, so the sheet can't answer "what did the campaign see when
-  it decided to stop". Storing rounds buys that history at the cost of a
-  migration, a write path, API surface, and a second copy of truth. Current
-  lean: keep deriving until a real consumer of as-it-happened rounds shows
-  up; either way, the dashboard's re-implementation of `novelClusters`
-  should become a value import from the pure coverage module.
-- **CLI campaigns are invisible as campaigns.** The loop band's campaign
-  identity is a campaign *job*, so `npm run campaign` targets render as
-  "Ad-hoc runs — no campaign yet" even mid-loop (seen live 2026-08-19: a
-  3-round CLI campaign showed only its runs/consolidations). A real
-  consumer for the bullet above, and the same fix: a `campaigns` table
-  written by both the CLI and the worker — which is also where per-round
-  novelty and `stoppedBy` would naturally persist.
+- A CLI campaign killed without a signal (SIGKILL, power loss) leaves its
+  record `running` forever — the covered exits are throws (runCampaign's
+  catch), Ctrl-C (the CLI's SIGINT handler), and worker deaths (startup
+  recovery via the job linkage). Deliberately unswept: a running campaign
+  with no interrupted job may belong to a live CLI process on the same
+  file, and only its owner may fail it. Revisit if stale rows actually
+  accumulate (a `failCampaign`-by-id sweep is one CLI flag away).
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - **Areas to explore (finding presentation, unscheduled):**
