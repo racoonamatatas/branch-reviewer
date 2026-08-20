@@ -20,6 +20,9 @@ import { usd } from '../../format';
 const props = defineProps<{
     campaign?: Campaign;
     job?: JobSummary;
+    // The campaign data could not be refreshed for several cycles — the
+    // record shown may be behind the store.
+    stale?: boolean;
     // The displayed rev's inputs for the derived fallback.
     revRunIds: RunId[];
     revClusters: Array<{ members: Array<{ runId: RunId }> }>;
@@ -48,10 +51,18 @@ const STOP_CLASS: Record<StoppedBy, string> = {
     'no-consolidation': 'no',
 };
 
+const JOB_LIVE = new Set<JobSummary['state']>(['held', 'queued', 'running']);
+
 const stamp = computed(() =>
 {
     const campaign = props.campaign;
-    if (campaign !== undefined)
+    const job = props.job;
+    // A live job outranks a terminal record: a held/queued campaign job on
+    // a target whose previous campaign finished is the NEXT loop's state,
+    // and stamping last time's DRY over it would hide the pending decision.
+    const jobLive = job !== undefined && JOB_LIVE.has(job.state);
+    const campaignLive = campaign !== undefined && (campaign.status === 'running' || campaign.status === 'verifying');
+    if (campaign !== undefined && (campaignLive || !jobLive))
     {
         switch (campaign.status)
         {
@@ -65,7 +76,6 @@ const stamp = computed(() =>
                 return { text: campaign.stoppedBy.toUpperCase(), cls: STOP_CLASS[campaign.stoppedBy], title: `finished ${campaign.finishedAt}` };
         }
     }
-    const job = props.job;
     return job === undefined
         ? undefined
         : { text: job.state.toUpperCase(), cls: STAMP_CLASS[job.state], title: `campaign job #${job.id}` };
@@ -158,6 +168,10 @@ const reviewsCost = computed(() =>
             </template>
         </div>
         <span v-if="stamp" class="statestamp" :class="stamp.cls" :title="stamp.title">{{ stamp.text }}</span>
+        <!-- Persistent campaign-read failures must not freeze this band
+             silently — it is the panel whose job is making live spend
+             visible. Quiet on purpose: the sheet stays usable. -->
+        <span v-if="stale" class="stale caps" title="the campaign record could not be refreshed for several poll cycles — what is shown may be behind the store">campaign data stale</span>
         <!-- The two figures have different scopes when a campaign shows:
              reviews are the campaign's own rounds, verification bills to the
              displayed rev's clusters — the labels say so instead of letting
@@ -284,6 +298,14 @@ const reviewsCost = computed(() =>
 .statestamp.no   { color: var(--stamp-no); }
 .statestamp.und  { color: var(--stamp-und); border-style: dashed; }
 .statestamp.pend { color: var(--faint); border: 1px dashed var(--faint); transform: none; }
+
+.stale
+{
+    color: var(--stamp-und);
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    border-bottom: 1px dashed var(--stamp-und);
+}
 
 .cost
 {

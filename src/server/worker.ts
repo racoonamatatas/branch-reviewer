@@ -209,11 +209,21 @@ export class Worker
                 // Rounds land on the job as they finish — a campaign's
                 // progress is visible mid-flight, which is the point of a
                 // job model. A failed round has no run to record.
+                // Guarded like onCampaign below: a failed bookkeeping write
+                // must not throw into the loop and fail a campaign that is
+                // running, billing, and saving its own evidence.
                 onRun: (outcome) =>
                 {
                     if (outcome.runId !== undefined)
                     {
-                        this.jobs.recordRun(job.id, outcome.runId);
+                        try
+                        {
+                            this.jobs.recordRun(job.id, outcome.runId);
+                        }
+                        catch (error)
+                        {
+                            this.onEvent?.(job.id, `could not record run #${outcome.runId}: ${error instanceof Error ? error.message : String(error)}`);
+                        }
                     }
                 },
                 // Provenance: the job names the campaign its loop opened.

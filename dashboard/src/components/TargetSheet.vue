@@ -53,6 +53,10 @@ interface Detail
 
 const runs = ref<RunSummary[]>([]);
 const consolidations = ref<ConsolidationSummary[]>([]);
+// The whole filtered list drives the gates (any live record must hold them
+// shut — an older campaign can still be billing after a newer one finished);
+// the newest record alone is only the loop band's display subject.
+const campaignSummaries = ref<CampaignSummary[]>([]);
 const campaign = ref<Campaign>();
 const detail = ref<Detail>();
 const connectionError = ref<string>();
@@ -86,10 +90,15 @@ async function refresh(): Promise<void>
     const revId = selectedRevId.value;
     try
     {
+        // The campaign list rides with its own catch: campaign reads are
+        // secondary, and NEITHER the list nor the detail may flip the sheet
+        // OFFLINE or discard the rev data fetched alongside (campaign #2
+        // finding: the earlier comment claimed this while only the detail
+        // was actually isolated).
         const [runList, revList, campaignList, revDetail] = await Promise.all([
             api.listRuns(filter),
             api.listConsolidations(filter),
-            api.listCampaigns(filter),
+            api.listCampaigns(filter).catch(() => undefined),
             revId !== undefined ? api.getConsolidation(revId) : undefined,
         ]);
         runs.value = runList;
@@ -103,10 +112,15 @@ async function refresh(): Promise<void>
             }
         }
         connectionError.value = undefined;
-        // Last, and self-guarded: a campaign read failing must not discard
-        // the rev detail fetched above or flip the sheet OFFLINE over a
-        // secondary read (campaign #1 finding, confirmed).
-        await refreshCampaign(campaignList[0]);
+        if (campaignList !== undefined)
+        {
+            campaignSummaries.value = campaignList;
+            await refreshCampaign(campaignList[0]);
+        }
+        else
+        {
+            campaignFetchFailures.value++;
+        }
     }
     catch (e)
     {
@@ -118,8 +132,14 @@ async function refresh(): Promise<void>
 // failed) are immutable and cache forever; live ones refetch every cycle —
 // rounds append while they run, and a status change is exactly the news.
 // The token drops a stale response when act()'s refresh overlaps the
-// poller's; its own catch keeps the previous value on a failed read.
+// poller's. A failed read keeps the previous value, but counts: a blip
+// self-heals next cycle, while a persistent failure (version-skew schema
+// mismatch, say) must not leave the band silently frozen on the one panel
+// whose job is making live spend visible — after a few strikes it wears a
+// quiet stale marker instead.
 const campaignCache = new Map<CampaignId, Campaign>();
+const campaignFetchFailures = ref(0);
+const campaignStale = computed(() => campaignFetchFailures.value >= 3);
 let campaignFetchToken = 0;
 async function refreshCampaign(newest: CampaignSummary | undefined): Promise<void>
 {
@@ -127,12 +147,14 @@ async function refreshCampaign(newest: CampaignSummary | undefined): Promise<voi
     if (newest === undefined)
     {
         campaign.value = undefined;
+        campaignFetchFailures.value = 0;
         return;
     }
     const cached = campaignCache.get(newest.id);
     if (cached !== undefined && (cached.status === 'finished' || cached.status === 'failed'))
     {
         campaign.value = cached;
+        campaignFetchFailures.value = 0;
         return;
     }
     try
@@ -142,11 +164,12 @@ async function refreshCampaign(newest: CampaignSummary | undefined): Promise<voi
         {
             campaignCache.set(newest.id, fetched);
             campaign.value = fetched;
+            campaignFetchFailures.value = 0;
         }
     }
     catch
     {
-        // Keep the previous value; the next poll cycle retries.
+        campaignFetchFailures.value++;
     }
 }
 
@@ -344,7 +367,11 @@ const campaignJob = computed(() =>
 // have no job, and a sheet that reads idle while one bills — looping OR
 // verifying — is the exact invisibility slice 12 existed to fix.
 const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
-const campaignLive = computed(() => campaign.value?.status === 'running' || campaign.value?.status === 'verifying');
+// From the whole list, not the newest record: an older campaign still
+// billing after a newer one finished must keep the gates shut (campaign #2
+// finding — listCampaigns orders newest-first, so the newest can be the
+// wrong one to ask).
+const campaignLive = computed(() => campaignSummaries.value.some(c => c.status === 'running' || c.status === 'verifying'));
 const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign' || campaignLive.value);
 const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify' || campaignLive.value);
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
@@ -456,6 +483,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
             v-if="campaign || consolidation"
             :campaign="campaign"
             :job="campaignJob"
+            :stale="campaignStale"
             :rev-run-ids="consolidation?.runIds ?? []"
             :rev-clusters="consolidation?.clusters ?? []"
             :review-cost-usd="reviewCostUsd"

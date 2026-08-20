@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS ${name} (
     error TEXT,
     finished_at TEXT,
     baseline_consolidation_id INTEGER REFERENCES consolidations(id),
+    leased INTEGER NOT NULL DEFAULT 1,
     CHECK ((status IN ('verifying', 'finished')) = (stopped_by IS NOT NULL) OR (status = 'failed')),
     CHECK ((status = 'failed') = (error IS NOT NULL)),
     CHECK ((status IN ('running', 'verifying')) = (finished_at IS NULL))
@@ -479,6 +480,20 @@ export class ReviewStore
         this.migrateRunFilesChanged();
         this.migrateEmptyRuns();
         this.migrateCampaignVerifying();
+        this.migrateCampaignLeased();
+    }
+
+    // Databases rebuilt for 'verifying' before the leased column existed
+    // lack it; the defaulted ADD COLUMN is the whole migration, and old
+    // rows honestly read leased — their loops predate the degraded mode
+    // being recorded at all.
+    private migrateCampaignLeased(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('campaigns') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'leased'))
+        {
+            this.db.exec('ALTER TABLE campaigns ADD COLUMN leased INTEGER NOT NULL DEFAULT 1');
+        }
     }
 
     // Databases from before the 'verifying' phase carry CHECKs that reject
@@ -505,18 +520,35 @@ export class ReviewStore
         // still reference it would otherwise refuse — the rows all point at
         // the same ids the re-created table holds again two statements
         // later. The pragma is a no-op inside a transaction, so it brackets
-        // one rather than joining it.
+        // one rather than joining it. Columns are named on both sides of
+        // the copy: a legacy shape that no longer matches must fail loudly,
+        // never shuffle TEXT values into the wrong TEXT columns. A mid-dance
+        // failure rolls back, so it cannot leave an open transaction behind
+        // the restored pragma.
+        const columns = 'id, created_at, owner, repo, head, base, status, stopped_by, error, finished_at, baseline_consolidation_id';
         this.db.exec('PRAGMA foreign_keys = OFF');
         try
         {
             this.db.exec(`
                 BEGIN;
                 ${campaignsTable('campaigns_new')}
-                INSERT INTO campaigns_new SELECT * FROM campaigns;
+                INSERT INTO campaigns_new (${columns}) SELECT ${columns} FROM campaigns;
                 DROP TABLE campaigns;
                 ALTER TABLE campaigns_new RENAME TO campaigns;
                 COMMIT;
             `);
+        }
+        catch (error)
+        {
+            try
+            {
+                this.db.exec('ROLLBACK');
+            }
+            catch
+            {
+                // No transaction to roll back — the BEGIN itself failed.
+            }
+            throw error;
         }
         finally
         {
@@ -997,50 +1029,69 @@ export class ReviewStore
 
     finishCampaign(id: CampaignId, stoppedBy: StoppedBy): void
     {
-        this.requireCampaignState(id, ['running'], 'finish');
-        this.db.prepare(
+        this.transition(id, ['running'], 'finish',
             "UPDATE campaigns SET status = 'finished', stopped_by = ?, finished_at = ? WHERE id = ? AND status = 'running'",
-        ).run(stoppedBy, new Date().toISOString(), id);
+            stoppedBy, new Date().toISOString(), id);
     }
 
     // The loop is over and knows why — stoppedBy becomes durable HERE, before
     // any verification credit is spent, so a verify crash can never lose it.
     beginCampaignVerification(id: CampaignId, stoppedBy: StoppedBy): void
     {
-        this.requireCampaignState(id, ['running'], 'begin verification on');
-        this.db.prepare(
+        this.transition(id, ['running'], 'begin verification on',
             "UPDATE campaigns SET status = 'verifying', stopped_by = ? WHERE id = ? AND status = 'running'",
-        ).run(stoppedBy, id);
+            stoppedBy, id);
     }
 
     finishVerifiedCampaign(id: CampaignId): void
     {
-        this.requireCampaignState(id, ['verifying'], 'finish verification on');
-        this.db.prepare(
+        this.transition(id, ['verifying'], 'finish verification on',
             "UPDATE campaigns SET status = 'finished', finished_at = ? WHERE id = ? AND status = 'verifying'",
-        ).run(new Date().toISOString(), id);
+            new Date().toISOString(), id);
     }
 
     // Fails from either live phase; a stopped_by already recorded (the loop
     // completed, verification died) survives the transition.
     failCampaign(id: CampaignId, error: string): void
     {
-        this.requireCampaignState(id, ['running', 'verifying'], 'fail');
-        this.db.prepare(
+        this.transition(id, ['running', 'verifying'], 'fail',
             "UPDATE campaigns SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status IN ('running', 'verifying')",
-        ).run(error, new Date().toISOString(), id);
+            error, new Date().toISOString(), id);
+    }
+
+    // The record's admission that its loop runs unprotected: lease
+    // acquisition failed, so "lease acquirable" proves nothing about this
+    // row and the sweep must not read it as a death certificate.
+    markCampaignUnleased(id: CampaignId): void
+    {
+        this.transition(id, ['running'], 'mark unleased',
+            "UPDATE campaigns SET leased = 0 WHERE id = ? AND status = 'running'", id);
     }
 
     // The sweep's question and nothing more: which campaigns claim to be
-    // alive, and since when. listCampaigns aggregates rounds and costs over
-    // the whole table — history-sized work a per-poll maintenance task must
-    // not do.
-    openCampaigns(): Array<{ id: CampaignId; createdAt: string }>
+    // alive, since when, and whether their lease can testify. listCampaigns
+    // aggregates rounds and costs over the whole table — history-sized work
+    // a per-poll maintenance task must not do.
+    openCampaigns(): Array<{ id: CampaignId; createdAt: string; leased: boolean }>
     {
         const rows = this.db.prepare(
-            "SELECT id, created_at FROM campaigns WHERE status IN ('running', 'verifying') ORDER BY id",
-        ).all() as unknown as Array<{ id: number; created_at: string }>;
-        return rows.map(row => ({ id: campaignId(row.id), createdAt: row.created_at }));
+            "SELECT id, created_at, leased FROM campaigns WHERE status IN ('running', 'verifying') ORDER BY id",
+        ).all() as unknown as Array<{ id: number; created_at: string; leased: number }>;
+        return rows.map(row => ({ id: campaignId(row.id), createdAt: row.created_at, leased: row.leased === 1 }));
+    }
+
+    // Check-then-act made honest: the UPDATE's own status guard is the act,
+    // and zero changed rows means another process transitioned the row in
+    // the race window — reported as the same named error the check throws,
+    // never a silent no-op the caller reads as success.
+    private transition(id: CampaignId, expected: Array<Campaign['status']>, action: string, sql: string, ...params: Array<string | number>): void
+    {
+        this.requireCampaignState(id, expected, action);
+        const result = this.db.prepare(sql).run(...params);
+        if (result.changes === 0)
+        {
+            throw new Error(`Cannot ${action} campaign #${id}: it changed state concurrently.`);
+        }
     }
 
     getCampaign(id: CampaignId): Campaign | undefined
@@ -1056,17 +1107,38 @@ export class ReviewStore
         return toCampaign(row, rounds);
     }
 
-    listCampaigns(filter?: TargetFilter): CampaignSummary[]
+    // liveOnly bounds the aggregate to running/verifying rows — the
+    // dashboard's per-poll question — instead of joining every campaign
+    // ever stored to answer it.
+    listCampaigns(filter?: TargetFilter, opts: { liveOnly?: boolean } = {}): CampaignSummary[]
     {
         const [where, params] = filterClause(filter, 'c');
+        const live = "c.status IN ('running', 'verifying')";
+        const clause = opts.liveOnly !== true ? where
+            : where === '' ? `WHERE ${live}` : `${where} AND ${live}`;
+        // The row type names exactly what the SELECT fetches — a CampaignRow
+        // cast would claim columns this query never reads.
+        interface SummaryRow
+        {
+            id: number;
+            created_at: string;
+            owner: string;
+            repo: string;
+            head: string;
+            base: string;
+            status: string;
+            stopped_by: string | null;
+            round_count: number;
+            review_cost_usd: number;
+        }
         const rows = this.db.prepare(
             `SELECT c.id, c.created_at, c.owner, c.repo, c.head, c.base, c.status, c.stopped_by,
                     COUNT(r.round) AS round_count, COALESCE(SUM(r.cost_usd), 0) AS review_cost_usd
              FROM campaigns c LEFT JOIN campaign_rounds r ON r.campaign_id = c.id
-             ${where}
+             ${clause}
              GROUP BY c.id
              ORDER BY c.id DESC`,
-        ).all(...params) as unknown as Array<CampaignRow & { round_count: number; review_cost_usd: number }>;
+        ).all(...params) as unknown as SummaryRow[];
 
         return rows.map(row => ({
             id: campaignId(row.id),

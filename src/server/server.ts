@@ -230,11 +230,15 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
             : json(res, 200, { findings: deps.store.getFindings(id) });
     }
 
+    // ?live=1 bounds the aggregate to running/verifying rows — the
+    // dashboard's per-poll question, asked every 3 seconds, must not join
+    // every campaign ever stored to be answered.
     if (path === '/campaigns' && req.method === 'GET')
     {
         const query = parseTargetFilter(url);
+        const live = url.searchParams.get('live') === '1';
         return query.ok
-            ? json(res, 200, { campaigns: deps.store.listCampaigns(query.filter) })
+            ? json(res, 200, { campaigns: deps.store.listCampaigns(query.filter, { liveOnly: live }) })
             : json(res, 400, { error: FILTER_400 });
     }
 

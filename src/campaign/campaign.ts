@@ -335,9 +335,20 @@ class CampaignRecorder
         const id = this.id;
         if (id !== undefined)
         {
-            // A loop that cannot be leased still runs and bills — it just
-            // degrades to sweepable-on-sight, and the warning says so.
-            this.lease = this.guarded(`acquire the liveness lease for campaign #${id}`, () => acquireCampaignLease(this.store.leaseDir, id));
+            try
+            {
+                this.lease = acquireCampaignLease(this.store.leaseDir, id);
+            }
+            catch (error)
+            {
+                // A loop that cannot be leased still runs and bills — and
+                // the row records the degraded mode, because for THIS row an
+                // acquirable lease proves nothing and the sweep must not
+                // read one as a death certificate (a false fail would also
+                // reopen the duplicate-campaign billing gates mid-spend).
+                this.emitWarning(`could not acquire the liveness lease for campaign #${id}: ${error instanceof Error ? error.message : String(error)} — liveness is unprovable for this record`);
+                this.guarded(`mark campaign #${id} unleased`, () => this.store.markCampaignUnleased(id));
+            }
         }
         return this.id;
     }
@@ -422,20 +433,52 @@ class CampaignRecorder
         catch (error)
         {
             const message = error instanceof Error ? error.message : String(error);
-            // A state-guard refusal means the row left our hands — an
-            // external sweep marked it failed. Latch rather than repeat:
-            // every later write would fail identically, so say the
-            // actionable thing once and go quiet, instead of one vague
-            // warning per round for the rest of a long, paid campaign.
-            if (this.id !== undefined && /: it is \w+, not /.test(message))
+            // Latch when the row has left our hands — deleted, or
+            // transitioned by an external sweep. Decided by asking the store
+            // for the row's state, never by parsing the error's wording (a
+            // reworded message must not silently disable the latch, and a
+            // deleted row latches the same as a failed one). Every later
+            // write would fail identically, so say the actionable thing once
+            // and go quiet, instead of one vague warning per paid round.
+            const id = this.id;
+            if (id !== undefined && !this.recordLive(id))
             {
-                this.warn?.(`campaign #${this.id}'s record is no longer writable (${message}) — its remaining history will not be persisted`);
+                this.emitWarning(`campaign #${id}'s record is no longer writable (${message}) — its remaining history will not be persisted`);
                 this.id = undefined;
                 this.releaseLease();
                 return undefined;
             }
-            this.warn?.(`could not ${action}: ${message}`);
+            this.emitWarning(`could not ${action}: ${message}`);
             return undefined;
+        }
+    }
+
+    private recordLive(id: CampaignId): boolean
+    {
+        try
+        {
+            const status = this.store.getCampaign(id)?.status;
+            return status === 'running' || status === 'verifying';
+        }
+        catch
+        {
+            // Unknown is not proof — a read failure must not latch away the
+            // rest of a campaign's history.
+            return true;
+        }
+    }
+
+    // The warning channel is observational squared: a listener that throws
+    // must not become the thing that kills a billing loop.
+    private emitWarning(message: string): void
+    {
+        try
+        {
+            this.warn?.(message);
+        }
+        catch
+        {
+            // Nowhere left to report to.
         }
     }
 }

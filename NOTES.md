@@ -293,10 +293,42 @@ markers, lane, pulses, VERIFYING band stamp), the campaign fetch is
 isolated/token-guarded/cached-when-terminal, unusable rounds render
 dotted-× (distinct from barren — the patience rule's distinction, drawn),
 the band is labeled "latest campaign" with per-scope cost labels, and the
-watches panel got the bounded-scroll treatment inside the pinned column. Vue TS dashboard (last,
-standing decision) → deploy (webhooks may replace polling then; needs server
-auth first). Eventually: read→write promotion (posting findings to PRs)
-— a deliberate, separately-decided step with its own risk profile, not a drift.
+watches panel got the bounded-scroll treatment inside the pinned column.
+
+**Campaigns #2–3 (the PR-head target) and their fix round.** The user
+promoted the trigger's held review to a campaign and later resumed it: 6
+runs total ($14.73 reviews), 20 distinct findings, 10/11 once-seen
+CONFIRMED, 1 refuted — and the estimate *rose* (27 → 32, ~12 unseen),
+because the fix-round code was its own under-sampled population. Notable:
+the 'verifying' phase was watched working live within an hour of shipping,
+and the stale-tab OFFLINE note above was born when the browser's old
+bundle rightly refused the new status value. The second fix round, from
+its findings: the campaigns rebuild migration rolls back on failure and
+copies by named columns (never positional `SELECT *` — TEXT-into-TEXT
+shuffles are silent); the recorder's latch asks the store for the row's
+state instead of parsing error wording (covers row-deleted, survives
+rewording) and the warning channel is throw-proof; degraded-liveness rows
+are recorded as such (`leased` column, defaulted ADD COLUMN) and the sweep
+refuses to judge them — a false "owner gone" on a billing loop also
+reopened the duplicate-campaign gates; sweep probes distinguish
+SQLITE_BUSY (proof of life) from a broken lock file (reported with the
+path to remove, never read as "alive", which wedged the target's gates);
+sweeps are guarded at both call sites (a validator throw in setInterval
+could kill serve); campaign transitions throw on zero-change races
+instead of no-opping; the sheet gates on ANY live campaign in the filtered
+list (newest-first order made the newest the wrong one to ask) and its
+campaign reads are isolated with a three-strike "campaign data stale"
+band marker; a held campaign job no longer hides a live CLI record from
+the in-flight lane (only a running job owns a loop) and a live job now
+outranks a terminal record in the band stamp; `/campaigns?live=1` bounds
+the dashboard's 3s poll; the activity log height is fixed, not capped,
+so the no-shift claim holds from line one; and the vacuous mid-loop lease
+test now disables the grace window so it tests the lease.
+
+Remaining roadmap (sequencing user-confirmed): deploy (webhooks may replace
+polling then; needs server auth first). Eventually: read→write promotion
+(posting findings to PRs) — a deliberate, separately-decided step with its
+own risk profile, not a drift.
 
 Shipped so far:
 

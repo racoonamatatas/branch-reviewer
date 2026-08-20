@@ -360,6 +360,22 @@ describe('ReviewStore campaigns', () =>
         rmSync(dir, { recursive: true, force: true });
     });
 
+    it('should list only live campaigns when asked: the poll must not aggregate history', () =>
+    {
+        // Arrange
+        const done = store.createCampaign(target);
+        store.finishCampaign(done, 'dry');
+        const running = store.createCampaign(target);
+        const verifying = store.createCampaign(target);
+        store.beginCampaignVerification(verifying, 'max-runs');
+
+        // Act
+        const live = store.listCampaigns(undefined, { liveOnly: true });
+
+        // Assert: both live phases, newest first, the finished row absent.
+        expect(live.map(c => c.id)).toEqual([verifying, running]);
+    });
+
     it('should brand campaign ids at the type level', () =>
     {
         // Assert

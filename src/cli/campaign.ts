@@ -136,12 +136,20 @@ async function main(): Promise<number>
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);
 
-    // Writer-startup sweep: any running campaign whose liveness lease is
+    // Writer-startup sweep: any live campaign whose liveness lease is
     // acquirable lost its owner (the kernel released it on death) and gets
     // its terminal state now, before this campaign adds a new running row.
-    for (const swept of sweepInterruptedCampaigns(store))
+    // Guarded: maintenance must never block the campaign the user asked for.
+    try
     {
-        console.error(`campaign #${swept} was left running by a dead process; marked failed — its rounds survive`);
+        for (const swept of sweepInterruptedCampaigns(store, { onWarning: message => console.error(`  sweep: ${message}`) }))
+        {
+            console.error(`campaign #${swept} was left running by a dead process; marked failed — its rounds survive`);
+        }
+    }
+    catch (error)
+    {
+        console.error(`campaign sweep failed (continuing): ${error instanceof Error ? error.message : String(error)}`);
     }
 
     console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}" with ${model}`);

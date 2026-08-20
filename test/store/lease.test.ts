@@ -132,6 +132,19 @@ describe('sweepInterruptedCampaigns', () =>
         expect(store.getCampaign(id)).toMatchObject({ status: 'failed', stoppedBy: 'dry' });
     });
 
+    it('should refuse to sweep an unleased campaign: an acquirable lease proves nothing there', () =>
+    {
+        // Arrange: the loop admitted its lease acquisition failed. Sweeping
+        // it would fail a possibly-live, billing loop AND reopen the
+        // duplicate-campaign gates — worse than the stuck-row residual.
+        const id = store.createCampaign(target);
+        store.markCampaignUnleased(id);
+
+        // Act + Assert
+        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([]);
+        expect(store.getCampaign(id)?.status).toBe('running');
+    });
+
     it('should never probe finished or failed campaigns', () =>
     {
         // Arrange: neither row is live, neither holds a lease.

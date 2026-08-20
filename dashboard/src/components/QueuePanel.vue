@@ -30,13 +30,17 @@ const active = computed(() =>
     props.jobs.filter(j => ACTIVE.has(j.state)).sort((a, b) => a.id - b.id));
 
 // A worker campaign is in flight as both a job and a record — the job row
-// (which carries the controls) speaks for it; only records with no active
-// campaign job left to represent them get their own row: the CLI loops.
+// (which carries the controls) speaks for it; only records with no such
+// job left to represent them get their own row: the CLI loops. Only a
+// RUNNING job owns a loop: a held or queued campaign job is a proposal,
+// and letting it hide a live record would show ◌ HELD for a target whose
+// CLI campaign is billing right now — the exact invisibility this lane
+// exists to remove.
 const cliCampaigns = computed(() =>
 {
     const represented = new Set(
         props.jobs
-            .filter(j => j.kind === 'campaign' && ACTIVE.has(j.state))
+            .filter(j => j.kind === 'campaign' && j.state === 'running')
             .map(j => `${j.owner}/${j.repo}/${j.head}`));
     return props.liveCampaigns.filter(c => !represented.has(`${c.owner}/${c.repo}/${c.head}`));
 });

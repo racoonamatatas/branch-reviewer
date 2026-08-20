@@ -86,12 +86,24 @@ const CREATE_GRACE_MS = 10_000;
 
 // Every open campaign (running or verifying — both phases bill) whose lease
 // is acquirable lost its owner — mark it failed and report it. Per-campaign
-// failures (unreadable lock file, a finish racing the probe) skip that
-// campaign rather than aborting the sweep: this is maintenance, and the
-// next sweep gets another chance. A campaign that ran without its lease
-// (acquisition failed and warned) is deliberately sweepable — degraded
-// liveness was the stated cost.
-export function sweepInterruptedCampaigns(store: ReviewStore, opts: { graceMs?: number } = {}): CampaignId[]
+// failures (a finish racing the probe) skip that campaign rather than
+// aborting the sweep: this is maintenance, and the next sweep gets another
+// chance. Three deliberate refusals to sweep:
+//   - rows inside the grace window (see above);
+//   - unleased rows — the loop admitted its lease acquisition failed, so an
+//     acquirable lease proves nothing there, and failing a possibly-live,
+//     billing loop would also reopen the duplicate-campaign gates; the row
+//     closes when its loop does, or stays running as the honest residual of
+//     degraded mode;
+//   - probes that fail for any reason other than SQLITE_BUSY (truncated
+//     lock file, permissions): busy is the only outcome that proves life,
+//     and everything else is reported through onWarning with the path to
+//     remove — never silently read as "alive", which would wedge the row
+//     and its target's billing gates forever.
+export function sweepInterruptedCampaigns(
+    store: ReviewStore,
+    opts: { graceMs?: number; onWarning?: (message: string) => void } = {},
+): CampaignId[]
 {
     const dir = store.leaseDir;
     if (dir === undefined)
@@ -102,14 +114,27 @@ export function sweepInterruptedCampaigns(store: ReviewStore, opts: { graceMs?: 
     const swept: CampaignId[] = [];
     for (const campaign of store.openCampaigns())
     {
-        if (Date.now() - Date.parse(campaign.createdAt) < graceMs)
+        if (!campaign.leased || Date.now() - Date.parse(campaign.createdAt) < graceMs)
         {
             continue;
         }
-        const probe = attempt(() => acquireCampaignLease(dir, campaign.id));
+        let probe: Lease | undefined;
+        try
+        {
+            probe = acquireCampaignLease(dir, campaign.id);
+        }
+        catch (error)
+        {
+            const message = error instanceof Error ? error.message : String(error);
+            if (!/SQLITE_BUSY|database is locked/i.test(message))
+            {
+                opts.onWarning?.(`campaign #${campaign.id}'s lock file is unusable (${message}) — remove ${leasePath(dir, campaign.id)} to let the sweep decide`);
+            }
+            continue;   // busy proves life; anything else was reported, not judged
+        }
         if (probe === undefined)
         {
-            continue;   // held — the owner is alive (or the probe itself failed; either way, not ours to fail)
+            continue;
         }
         const failed = attempt(() =>
         {

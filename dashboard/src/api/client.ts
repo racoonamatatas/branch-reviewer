@@ -111,8 +111,14 @@ export const api = {
     listConsolidations: async (filter?: TargetFilter) =>
         (await request(`/consolidations${targetQuery(filter)}`, z.object({ consolidations: z.array(consolidationSummarySchema) }))).consolidations,
 
-    listCampaigns: async (filter?: TargetFilter) =>
-        (await request(`/campaigns${targetQuery(filter)}`, z.object({ campaigns: z.array(campaignSummarySchema) }))).campaigns,
+    // liveOnly bounds the server's aggregate to running/verifying rows —
+    // the right shape for a poll that only wants "what is billing now".
+    listCampaigns: async (filter?: TargetFilter, opts: { liveOnly?: boolean } = {}) =>
+    {
+        const query = targetQuery(filter);
+        const live = opts.liveOnly === true ? `${query === '' ? '?' : '&'}live=1` : '';
+        return (await request(`/campaigns${query}${live}`, z.object({ campaigns: z.array(campaignSummarySchema) }))).campaigns;
+    },
 
     // The whole record, as-it-happened rounds included.
     getCampaign: async (id: CampaignId) =>

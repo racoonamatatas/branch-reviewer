@@ -464,11 +464,12 @@ describe('runCampaign persistence', () =>
         runReviewMock.mockResolvedValue(emptyReview());
         const sweptMidLoop: unknown[] = [];
 
-        // Act: probe from inside the loop — a sweep racing a live campaign
-        // must come back empty.
+        // Act: probe from inside the loop with the grace window disabled —
+        // otherwise the row's youth, not the lease, is what protects it and
+        // the test proves nothing about leasing (campaign #3 finding).
         const result = await runCampaign(store, client, target, {
             maxRuns: 2, verify: false,
-            onRun: () => sweptMidLoop.push(...sweepInterruptedCampaigns(store)),
+            onRun: () => sweptMidLoop.push(...sweepInterruptedCampaigns(store, { graceMs: 0 })),
         });
 
         // Assert: alive while looping, closed and lease-free after.

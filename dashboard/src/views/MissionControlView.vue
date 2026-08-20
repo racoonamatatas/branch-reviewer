@@ -97,7 +97,9 @@ async function refresh(): Promise<void>
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
-            api.listCampaigns(),
+            // Live rows only: this poll asks "what is billing now" every 3s,
+            // and must not make the server aggregate all campaign history.
+            api.listCampaigns(undefined, { liveOnly: true }),
         ]);
         refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
