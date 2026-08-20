@@ -605,6 +605,15 @@ base rules. Still open (deliberately deferred):
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
+- **Stale-tab OFFLINE costume (user-felt, unscheduled).** A long-lived
+  dashboard tab keeps polling with its old bundle; when the server starts
+  sending a value the old wire schema doesn't know (seen live 2026-08-20:
+  campaign status 'verifying' minutes after it shipped), the Zod guard
+  rightly refuses — but the failure renders as OFFLINE, which reads as
+  "server gone", not "your tab is stale". Fix shape: the client
+  distinguishes parse failure (response arrived, schema refused) from
+  fetch failure, and says "reload — the dashboard was updated". The guard
+  itself is working as designed and stays.
 - **Campaign abort button (user-requested, unscheduled).** A soft abort at
   round boundaries: the dashboard writes an `abort_requested` flag on the
   campaign row, both loops (CLI and worker share the store) check it at the
