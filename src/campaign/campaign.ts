@@ -9,6 +9,8 @@
 // when to stop.
 
 import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
+import { acquireCampaignLease } from '../store/lease.js';
+import type { Lease } from '../store/lease.js';
 import { coverageOf, novelClusters, shouldContinue } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
@@ -285,13 +287,18 @@ export async function runCampaign(
     return campaign;
 }
 
-// The campaign record's pen, holding both the id and the observational-write
-// rule in one place: every store call is wrapped, a failure warns through the
-// campaign's own channel, and after a failed create the rest quietly no-op —
-// there is no row to write to, and the loop was told once.
+// The campaign record's pen, holding the id, the liveness lease, and the
+// observational-write rule in one place: every store call is wrapped, a
+// failure warns through the campaign's own channel, and after a failed
+// create the rest quietly no-op — there is no row to write to, and the loop
+// was told once. The lease pairs with the record: held exactly while the
+// row says running, released when finish/fail closes it — and released by
+// the kernel on any death, SIGKILL included, which is what lets a sweeper
+// prove an abandoned row instead of guessing.
 class CampaignRecorder
 {
     private id: CampaignId | undefined;
+    private lease: Lease | undefined;
 
     constructor(
         private readonly store: ReviewStore,
@@ -303,6 +310,13 @@ class CampaignRecorder
     create(target: CampaignTarget): CampaignId | undefined
     {
         this.id = this.guarded('create the campaign record', () => this.store.createCampaign(target));
+        const id = this.id;
+        if (id !== undefined)
+        {
+            // A loop that cannot be leased still runs and bills — it just
+            // degrades to sweepable-on-sight, and the warning says so.
+            this.lease = this.guarded(`acquire the liveness lease for campaign #${id}`, () => acquireCampaignLease(this.store.leaseDir, id));
+        }
         return this.id;
     }
 
@@ -324,6 +338,9 @@ class CampaignRecorder
         }
     }
 
+    // finish/fail release the lease even when the closing write itself
+    // failed (warned, row stuck on running): a limbo row with no holder is
+    // exactly what the sweep exists to give a terminal state.
     finish(stoppedBy: StoppedBy): void
     {
         const id = this.id;
@@ -331,6 +348,7 @@ class CampaignRecorder
         {
             this.guarded(`finish campaign #${id}`, () => this.store.finishCampaign(id, stoppedBy));
         }
+        this.releaseLease();
     }
 
     fail(error: string): void
@@ -340,6 +358,13 @@ class CampaignRecorder
         {
             this.guarded(`fail campaign #${id}`, () => this.store.failCampaign(id, error));
         }
+        this.releaseLease();
+    }
+
+    private releaseLease(): void
+    {
+        this.lease?.release();
+        this.lease = undefined;
     }
 
     private guarded<T>(action: string, write: () => T): T | undefined

@@ -67,8 +67,9 @@ interface JobCommon extends Identified<'Job'>, Created
     // campaign — visible mid-flight, which is the point of a job model.
     runIds: RunId[];
     consolidationId?: ConsolidationId;
-    // The campaign record a campaign job's loop opened — the linkage startup
-    // recovery needs to fail the campaign a dead process left running.
+    // The campaign record a campaign job's loop opened — provenance linking
+    // the job to its campaign. (Recovery no longer needs it: abandoned
+    // campaigns are proven by their liveness lease, whoever owned them.)
     campaignId?: CampaignId;
 }
 
@@ -275,9 +276,8 @@ export class JobStore
         this.db.prepare('UPDATE jobs SET run_ids = ? WHERE id = ?').run(JSON.stringify(runIds), id);
     }
 
-    // A campaign job learns which campaign record its loop opened, as soon as
-    // it opens — so an interrupted job can name the campaign that recovery
-    // must fail alongside it.
+    // A campaign job learns which campaign record its loop opened, as soon
+    // as it opens — provenance visible mid-flight, like recordRun.
     recordCampaign(id: JobId, campaign: CampaignId): void
     {
         this.requireState(id, ['running'], 'record a campaign on');

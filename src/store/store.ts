@@ -3,7 +3,7 @@
 // cross-run comparison needs to query them; a JSON blob would wall that off.
 
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Coverage } from '../coverage/coverage.js';
 import type { NewFinding, Review, Severity } from '../schema/schema.js';
@@ -430,8 +430,16 @@ export class ReviewStore
 {
     private readonly db: DatabaseSync;
 
+    // Where campaign liveness leases live — beside the database file,
+    // because they make claims about rows in it and must travel with it
+    // (an age-moved copy arrives with no live leases, which is the truth).
+    // undefined for :memory:: a store that dies with the process has no
+    // cross-process liveness to prove.
+    readonly leaseDir: string | undefined;
+
     constructor(path: string)
     {
+        this.leaseDir = path === ':memory:' ? undefined : join(dirname(path), 'leases');
         if (path !== ':memory:')
         {
             mkdirSync(dirname(path), { recursive: true });

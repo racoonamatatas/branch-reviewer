@@ -6,6 +6,7 @@ import { runCampaign } from '../campaign/campaign.js';
 import type { CampaignResult, CampaignTarget } from '../campaign/campaign.js';
 import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
+import { sweepInterruptedCampaigns } from '../store/lease.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
@@ -135,6 +136,14 @@ async function main(): Promise<number>
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);
 
+    // Writer-startup sweep: any running campaign whose liveness lease is
+    // acquirable lost its owner (the kernel released it on death) and gets
+    // its terminal state now, before this campaign adds a new running row.
+    for (const swept of sweepInterruptedCampaigns(store))
+    {
+        console.error(`campaign #${swept} was left running by a dead process; marked failed — its rounds survive`);
+    }
+
     console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}" with ${model}`);
     console.log(`up to ${args.maxRuns} run(s), stopping early after ${args.patience ?? 2} round(s) without a new finding`
         + `${args.verify ? '; occurrence-1 findings verified at the end' : '; verification skipped'}\n`);
@@ -148,28 +157,14 @@ async function main(): Promise<number>
             reverify: args.reverify,
             ...(args.patience !== undefined ? { patience: args.patience } : {}),
             ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
+            // No exit handlers: the record's liveness lease is released by
+            // the kernel on any death — Ctrl-C, SIGKILL, power loss alike —
+            // and the next writer startup (or the server's poll-interval
+            // sweep) marks the abandoned row failed. One mechanism, no
+            // signal-handler special cases.
             onCampaign: (id) =>
             {
                 console.log(`recorded as campaign #${id}\n`);
-                // Ctrl-C kills the in-flight query(); the rounds already
-                // appended survive, but the record must not claim to be
-                // running forever. Registered here rather than up front
-                // because the handler is useless without an id to fail.
-                process.once('SIGINT', () =>
-                {
-                    try
-                    {
-                        store.failCampaign(id, 'Interrupted: Ctrl-C during the campaign.');
-                        console.error(`\ncampaign #${id} marked failed (interrupted) — its rounds survive`);
-                    }
-                    catch (error)
-                    {
-                        // Already finished or failed — nothing left to mark.
-                        console.error(`\n${error instanceof Error ? error.message : String(error)}`);
-                    }
-                    store.close();
-                    process.exit(130);
-                });
             },
             onWarning: (message) =>
             {

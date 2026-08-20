@@ -216,8 +216,7 @@ export class Worker
                         this.jobs.recordRun(job.id, outcome.runId);
                     }
                 },
-                // The linkage startup recovery relies on: an interrupted
-                // campaign job names the campaign record to fail with it.
+                // Provenance: the job names the campaign its loop opened.
                 // Guarded like the verify proposal — a failed bookkeeping
                 // write must not kill a loop that is billing credit.
                 onCampaign: (campaign) =>

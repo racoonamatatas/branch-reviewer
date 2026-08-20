@@ -13,6 +13,7 @@ import { JobStore } from '../server/jobs.js';
 import { createServer } from '../server/server.js';
 import { pollOnce, WatchStore } from '../server/trigger.js';
 import { Worker } from '../server/worker.js';
+import { sweepInterruptedCampaigns } from '../store/lease.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 
 const USAGE = 'Usage: npm run serve [-- --port N] [--poll-interval seconds]';
@@ -84,21 +85,24 @@ function main(): void
     {
         console.error(`job #${id} was running when the server last stopped; marked failed — re-enqueue to re-run (bills credit)`);
         activityLog.push('server', `job #${id} was running at the last shutdown — marked failed`);
-
-        // A campaign job that died mid-loop leaves its campaign record
-        // claiming to run forever; it fails with the job. Scoped to the job's
-        // own linkage on purpose — a running campaign with no interrupted job
-        // here belongs to a CLI process that may be alive right now, and only
-        // its owner may fail it. The status check covers the loop finishing
-        // before the interrupt hit (e.g. mid-verification).
-        const campaignId = jobs.get(id)?.campaignId;
-        if (campaignId !== undefined && store.getCampaign(campaignId)?.status === 'running')
-        {
-            store.failCampaign(campaignId, 'Interrupted: the server stopped while this campaign was running.');
-            console.error(`  campaign #${campaignId} was mid-loop under job #${id}; marked failed — its rounds survive`);
-            activityLog.push('server', `campaign #${campaignId} was mid-loop at the last shutdown — marked failed`);
-        }
     }
+
+    // Campaign recovery goes through liveness leases, not job linkage: a
+    // running row whose lease is acquirable provably lost its owner (the
+    // kernel released the fcntl lock on death — SIGKILL included), whatever
+    // process owned it. A live CLI campaign's lease probes as held, so
+    // sweeping here — and again every poll interval, which bounds how long
+    // a Ctrl-C'd CLI campaign can read as running while this server stays
+    // up — can never fail someone else's live loop.
+    const sweepCampaigns = (): void =>
+    {
+        for (const id of sweepInterruptedCampaigns(store))
+        {
+            console.error(`campaign #${id} was left running by a dead process; marked failed — its rounds survive`);
+            activityLog.push('server', `campaign #${id} lost its owning process — marked failed`);
+        }
+    };
+    sweepCampaigns();
 
     const worker = new Worker({
         jobs,
@@ -202,6 +206,7 @@ function main(): void
     setInterval(() =>
     {
         void poll();
+        sweepCampaigns();
     }, args.pollIntervalMs);
 
     // Jobs queued before a restart are still owed a run, and watches are

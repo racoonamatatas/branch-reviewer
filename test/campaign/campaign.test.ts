@@ -1,7 +1,11 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { campaignCost, clusterGrowth, runCampaign } from '../../src/campaign/campaign.js';
 import type { CampaignResult, RoundOutcome } from '../../src/campaign/campaign.js';
 import type { RepoClient } from '../../src/github/github.js';
+import { sweepInterruptedCampaigns } from '../../src/store/lease.js';
 import { ReviewStore } from '../../src/store/store.js';
 import type { Finding } from '../../src/store/store.js';
 import type { CampaignId } from '../../src/types/ids.js';
@@ -349,6 +353,33 @@ describe('runCampaign persistence', () =>
         const campaign = store.getCampaign(summaries[0]!.id);
         expect(campaign).toMatchObject({ status: 'failed', error: expect.stringContaining('judge burned down') as string });
         store.close();
+    });
+
+    it('should hold the liveness lease while looping and leave nothing sweepable after', async () =>
+    {
+        // Arrange: leases need a real file — the mechanism is the kernel's
+        // lock on the lock database, which :memory: stores opt out of.
+        const dir = mkdtempSync(join(tmpdir(), 'campaign-lease-'));
+        const store = new ReviewStore(join(dir, 'reviews.db'));
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        runReviewMock.mockResolvedValue(emptyReview());
+        const sweptMidLoop: unknown[] = [];
+
+        // Act: probe from inside the loop — a sweep racing a live campaign
+        // must come back empty.
+        const result = await runCampaign(store, client, target, {
+            maxRuns: 2, verify: false,
+            onRun: () => sweptMidLoop.push(...sweepInterruptedCampaigns(store)),
+        });
+
+        // Assert: alive while looping, closed and lease-free after.
+        expect(sweptMidLoop).toEqual([]);
+        expect(store.getCampaign(result.campaignId!)?.status).toBe('finished');
+        expect(sweepInterruptedCampaigns(store)).toEqual([]);
+        expect(existsSync(join(store.leaseDir!, `campaign-${result.campaignId}.lock`))).toBe(false);
+        store.close();
+        rmSync(dir, { recursive: true, force: true });
     });
 
     it('should warn and keep looping when a campaign-record write fails', async () =>

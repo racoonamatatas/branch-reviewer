@@ -9,10 +9,12 @@ finding *labels* used below are fine.
 
 ## Status (2026-08-20)
 
-Slices 1–12 shipped. **Slice 12 (persist campaigns) complete** — campaigns
-are first-class stored entities written by both the CLI and the worker,
-served over HTTP, and the dashboard loop band keys on them (see below).
-Next, per the roadmap: deploy.
+Slices 1–13 shipped. **Slice 12 (persist campaigns)** — campaigns are
+first-class stored entities written by both the CLI and the worker, served
+over HTTP, and the dashboard loop band keys on them. **Slice 13 (campaign
+liveness leases)** — abandoned running rows are proven dead by a kernel-
+released SQLite lock and swept, closing slice 12's SIGKILL hole (see
+below). Next, per the roadmap: deploy.
 
 Slice-10 decisions (user-picked from four design prototypes): two views —
 mission control as home (dark ops screen: queue, watches, targets, actions),
@@ -237,6 +239,34 @@ pure coverage module. Headless verification note: plain `firefox
 --headless --screenshot` returns on the load event, before the first poll
 tick paints — use geckodriver (npx works) + WebDriver, and `--no-remote`
 is what unblocks a second Firefox instance beside a running desktop one.
+
+**Slice 13 (campaign liveness leases — SQLite as the flock).** Closes slice
+12's deliberate hole: a campaign killed without a signal (SIGKILL, power
+loss) left its row `running` forever, and no other process could safely
+fail it. The mechanism (`src/store/lease.ts`): the campaign loop holds
+`BEGIN EXCLUSIVE` on a throwaway lock database
+(`data/leases/campaign-<id>.lock`) for its whole life — SQLite implements
+that with POSIX fcntl locks, which the kernel releases on ANY process
+death, so "row running + lease acquirable" is *proof* of abandonment, not
+a heuristic (no PID probing, no heartbeat timeouts). Key facts: SQLite
+tracks locks per inode within a process (fcntl locks are per-process, the
+classic footgun), so the serve process can sweep while its own worker holds
+a campaign — asserted by a same-process test, and the SIGKILL guarantee by
+a child-process test (kill -9, then reclaim). The lease is a hint, never
+the authority: every sweep lands in `failCampaign`, whose running-state
+guard settles all races (unlink-on-release included). Lifecycle lives in
+the recorder — acquired with the record, released by finish/fail, and by
+design a limbo row whose closing write failed becomes sweepable. Sweeps run
+at writer startups (serve, CLI campaign) and on serve's poll interval —
+never from read paths; reads don't write, even repairs. This *replaced*
+slice 12's CLI SIGINT handler and job-linkage recovery (the linkage column
+stays as provenance). One mechanism, all death modes. A campaign that
+cannot acquire its lease still runs and bills (observational, warned) and
+is sweepable-on-sight — degraded liveness is the stated cost. Leases live
+beside the DB so an age-moved copy arrives with no live leases, which is
+the truth. Test gotcha: vitest's NODE_OPTIONS loaders break a bare
+`node -e` child — strip the env var when spawning. The parked road-not-
+taken (an N-API flock addon) lives outside this repo, deliberately.
 
 Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
@@ -550,13 +580,6 @@ base rules. Still open (deliberately deferred):
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
-- A CLI campaign killed without a signal (SIGKILL, power loss) leaves its
-  record `running` forever — the covered exits are throws (runCampaign's
-  catch), Ctrl-C (the CLI's SIGINT handler), and worker deaths (startup
-  recovery via the job linkage). Deliberately unswept: a running campaign
-  with no interrupted job may belong to a live CLI process on the same
-  file, and only its owner may fail it. Revisit if stale rows actually
-  accumulate (a `failCampaign`-by-id sweep is one CLI flag away).
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - **Areas to explore (finding presentation, unscheduled):**
