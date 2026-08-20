@@ -1,21 +1,51 @@
 <script setup lang="ts">
-import type { TargetSummary } from '@server/store/store';
+import { computed } from 'vue';
+import type { CampaignSummary, TargetSummary } from '@server/store/store';
 import { age, usd } from '../format';
 
 const props = defineProps<{
     targets: TargetSummary[];
+    // Running campaign records for the whole store — the rows here are
+    // runs-derived, and a CLI campaign's first round takes minutes, so a
+    // campaign is the earlier (sometimes the only) sign of life.
+    runningCampaigns: CampaignSummary[];
     selected?: { owner: string; repo: string; head: string };
 }>();
 
-function isSelected(target: TargetSummary): boolean
+interface Triple
 {
-    return props.selected !== undefined
-        && target.owner === props.selected.owner
-        && target.repo === props.selected.repo
-        && target.head === props.selected.head;
+    owner: string;
+    repo: string;
+    head: string;
 }
 
-function targetRoute(target: TargetSummary): string
+function tripleKey(target: Triple): string
+{
+    return `${target.owner}/${target.repo}/${target.head}`;
+}
+
+const campaignTriples = computed(() => new Set(props.runningCampaigns.map(tripleKey)));
+
+function hasRunningCampaign(target: Triple): boolean
+{
+    return campaignTriples.value.has(tripleKey(target));
+}
+
+// A running campaign on a target with no stored runs yet (round 1 still in
+// flight) has no runs-derived row to mark — it gets a synthetic one: the
+// moment something starts billing is the moment it must be findable here.
+const campaignOnlyTargets = computed(() =>
+{
+    const known = new Set(props.targets.map(tripleKey));
+    return props.runningCampaigns.filter(campaign => !known.has(tripleKey(campaign)));
+});
+
+function isSelected(target: Triple): boolean
+{
+    return props.selected !== undefined && tripleKey(target) === tripleKey(props.selected);
+}
+
+function targetRoute(target: Triple): string
 {
     return `/target/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/${target.head}`;
 }
@@ -38,11 +68,26 @@ function targetRoute(target: TargetSummary): string
                     {{ target.owner }}/{{ target.repo }} · {{ target.head }} → {{ target.base }}
                 </RouterLink>
                 <div class="meta">
+                    <span v-if="hasRunningCampaign(target)" class="live"><span class="pulse">●</span> campaign running · </span>
                     {{ target.runCount }} run(s) · last {{ age(target.lastRunAt) }} · {{ usd(target.totalCostUsd) }}
                     <span v-if="target.latestConsolidationId === undefined" class="none">· no consolidation yet</span>
                 </div>
             </div>
-            <p v-if="targets.length === 0" class="empty">no runs stored yet</p>
+            <div
+                v-for="campaign in campaignOnlyTargets"
+                :key="`campaign-${campaign.id}`"
+                class="target"
+                :aria-current="isSelected(campaign)"
+            >
+                <RouterLink :to="targetRoute(campaign)" class="name">
+                    {{ campaign.owner }}/{{ campaign.repo }} · {{ campaign.head }} → {{ campaign.base }}
+                </RouterLink>
+                <div class="meta">
+                    <span class="live"><span class="pulse">●</span> campaign #{{ campaign.id }} running</span>
+                    <span class="none">· no runs stored yet — round 1 in flight</span>
+                </div>
+            </div>
+            <p v-if="targets.length === 0 && campaignOnlyTargets.length === 0" class="empty">no runs stored yet</p>
         </div>
     </section>
 </template>
@@ -103,6 +148,23 @@ function targetRoute(target: TargetSummary): string
     color: var(--muted);
     font-size: 0.78rem;
     font-variant-numeric: tabular-nums;
+}
+
+.live
+{
+    color: var(--chalk);
+}
+
+.live .pulse
+{
+    font-size: 0.65rem;
+    animation: tp-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tp-pulse
+{
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
 }
 
 .none
