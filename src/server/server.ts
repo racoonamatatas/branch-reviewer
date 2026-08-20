@@ -13,7 +13,7 @@ import type { Coverage } from '../coverage/coverage.js';
 import type { EventLog, PollStatus } from './events.js';
 import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
 import type { Id } from '../types/common.js';
-import { clusterId, consolidationId, jobId, runId, watchId } from '../types/ids.js';
+import { campaignId, clusterId, consolidationId, jobId, runId, watchId } from '../types/ids.js';
 import type { ClusterId, JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema, verifyJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
@@ -228,6 +228,28 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         return id === undefined || deps.store.getRun(id) === undefined
             ? json(res, 404, { error: 'No such run.' })
             : json(res, 200, { findings: deps.store.getFindings(id) });
+    }
+
+    if (path === '/campaigns' && req.method === 'GET')
+    {
+        const query = parseTargetFilter(url);
+        return query.ok
+            ? json(res, 200, { campaigns: deps.store.listCampaigns(query.filter) })
+            : json(res, 400, { error: FILTER_400 });
+    }
+
+    // The whole record, rounds included — as-it-happened snapshots, so the
+    // dashboard's loop band can answer "what did the campaign see when it
+    // decided to stop" instead of re-deriving from a partition that may have
+    // moved on.
+    const campaignDetail = /^\/campaigns\/(\d+)$/.exec(path);
+    if (campaignDetail !== null && req.method === 'GET')
+    {
+        const id = parseId(campaignDetail[1], campaignId);
+        const campaign = id === undefined ? undefined : deps.store.getCampaign(id);
+        return campaign === undefined
+            ? json(res, 404, { error: 'No such campaign.' })
+            : json(res, 200, { campaign });
     }
 
     if (path === '/consolidations' && req.method === 'GET')

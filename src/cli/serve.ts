@@ -84,6 +84,20 @@ function main(): void
     {
         console.error(`job #${id} was running when the server last stopped; marked failed — re-enqueue to re-run (bills credit)`);
         activityLog.push('server', `job #${id} was running at the last shutdown — marked failed`);
+
+        // A campaign job that died mid-loop leaves its campaign record
+        // claiming to run forever; it fails with the job. Scoped to the job's
+        // own linkage on purpose — a running campaign with no interrupted job
+        // here belongs to a CLI process that may be alive right now, and only
+        // its owner may fail it. The status check covers the loop finishing
+        // before the interrupt hit (e.g. mid-verification).
+        const campaignId = jobs.get(id)?.campaignId;
+        if (campaignId !== undefined && store.getCampaign(campaignId)?.status === 'running')
+        {
+            store.failCampaign(campaignId, 'Interrupted: the server stopped while this campaign was running.');
+            console.error(`  campaign #${campaignId} was mid-loop under job #${id}; marked failed — its rounds survive`);
+            activityLog.push('server', `campaign #${campaignId} was mid-loop at the last shutdown — marked failed`);
+        }
     }
 
     const worker = new Worker({

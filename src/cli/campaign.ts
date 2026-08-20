@@ -148,6 +148,33 @@ async function main(): Promise<number>
             reverify: args.reverify,
             ...(args.patience !== undefined ? { patience: args.patience } : {}),
             ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
+            onCampaign: (id) =>
+            {
+                console.log(`recorded as campaign #${id}\n`);
+                // Ctrl-C kills the in-flight query(); the rounds already
+                // appended survive, but the record must not claim to be
+                // running forever. Registered here rather than up front
+                // because the handler is useless without an id to fail.
+                process.once('SIGINT', () =>
+                {
+                    try
+                    {
+                        store.failCampaign(id, 'Interrupted: Ctrl-C during the campaign.');
+                        console.error(`\ncampaign #${id} marked failed (interrupted) — its rounds survive`);
+                    }
+                    catch (error)
+                    {
+                        // Already finished or failed — nothing left to mark.
+                        console.error(`\n${error instanceof Error ? error.message : String(error)}`);
+                    }
+                    store.close();
+                    process.exit(130);
+                });
+            },
+            onWarning: (message) =>
+            {
+                console.error(`  warning: ${message}`);
+            },
             onBaseline: (id, coverage) =>
             {
                 console.log(`baseline from stored runs — consolidation #${id}: ${coverageLine(coverage)}\n`);

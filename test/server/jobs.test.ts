@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JobStore } from '../../src/server/jobs.js';
 import type { NewJob } from '../../src/server/jobs.js';
-import { consolidationId, jobId, runId } from '../../src/types/ids.js';
+import { campaignId, consolidationId, jobId, runId } from '../../src/types/ids.js';
 
 let store: JobStore;
 
@@ -186,6 +186,30 @@ describe('state transitions', () =>
     {
         // Act + Assert
         expect(() => store.fail(jobId(42), 'x')).toThrow('No job #42');
+    });
+
+    it('should record the campaign a running job opened and keep it after finishing', () =>
+    {
+        // Arrange
+        const id = store.enqueue(reviewJob({ kind: 'campaign', params: { maxRuns: 3, verify: true } }));
+        store.claimNext();
+
+        // Act
+        store.recordCampaign(id, campaignId(7));
+        store.succeed(id);
+
+        // Assert: the linkage survives the job finishing — recovery reads it
+        // from failed jobs.
+        expect(store.get(id)?.campaignId).toBe(7);
+    });
+
+    it('should refuse to record a campaign on a job that is not running', () =>
+    {
+        // Arrange
+        const id = store.enqueue(reviewJob());
+
+        // Act + Assert
+        expect(() => store.recordCampaign(id, campaignId(7))).toThrow('it is queued, not running');
     });
 });
 

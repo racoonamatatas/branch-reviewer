@@ -15,8 +15,8 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import type { Created, Identified, New } from '../types/common.js';
-import { consolidationId, jobId, runId } from '../types/ids.js';
-import type { ConsolidationId, JobId, RunId } from '../types/ids.js';
+import { campaignId, consolidationId, jobId, runId } from '../types/ids.js';
+import type { CampaignId, ConsolidationId, JobId, RunId } from '../types/ids.js';
 
 // Params mirror the option surface of the stage they run (ReviewRunOptions /
 // CampaignOptions minus callbacks); policy like "verify defaults on" stays in
@@ -67,6 +67,9 @@ interface JobCommon extends Identified<'Job'>, Created
     // campaign — visible mid-flight, which is the point of a job model.
     runIds: RunId[];
     consolidationId?: ConsolidationId;
+    // The campaign record a campaign job's loop opened — the linkage startup
+    // recovery needs to fail the campaign a dead process left running.
+    campaignId?: CampaignId;
 }
 
 export interface ReviewJob extends JobCommon
@@ -91,7 +94,7 @@ export type Job = ReviewJob | CampaignJob | VerifyJob;
 
 // Everything beyond New<T>'s subtraction is lifecycle, assigned by the store
 // as the job progresses; a create call supplies only the request itself.
-type Lifecycle = 'state' | 'startedAt' | 'finishedAt' | 'error' | 'runIds' | 'consolidationId';
+type Lifecycle = 'state' | 'startedAt' | 'finishedAt' | 'error' | 'runIds' | 'consolidationId' | 'campaignId';
 export type NewReviewJob = Omit<New<ReviewJob>, Lifecycle>;
 export type NewCampaignJob = Omit<New<CampaignJob>, Lifecycle>;
 export type NewVerifyJob = Omit<New<VerifyJob>, Lifecycle>;
@@ -118,7 +121,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT,
     error TEXT,
     run_ids TEXT NOT NULL DEFAULT '[]',
-    consolidation_id INTEGER
+    consolidation_id INTEGER,
+    campaign_id INTEGER
 );
 `;
 
@@ -138,6 +142,7 @@ interface JobRow
     error: string | null;
     run_ids: string;
     consolidation_id: number | null;
+    campaign_id: number | null;
 }
 
 export class JobStore
@@ -156,6 +161,19 @@ export class JobStore
         // throw SQLITE_BUSY.
         this.db.exec('PRAGMA busy_timeout = 5000');
         this.db.exec(SCHEMA);
+        this.migrateJobCampaignId();
+    }
+
+    // Databases from before campaigns were persisted lack the column; the
+    // nullable ADD COLUMN is the whole migration, and old campaign jobs
+    // honestly stay NULL — their loops predate campaign records.
+    private migrateJobCampaignId(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('jobs') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'campaign_id'))
+        {
+            this.db.exec('ALTER TABLE jobs ADD COLUMN campaign_id INTEGER');
+        }
     }
 
     // held is the caller's choice at the door, not a transition: whether the
@@ -257,6 +275,15 @@ export class JobStore
         this.db.prepare('UPDATE jobs SET run_ids = ? WHERE id = ?').run(JSON.stringify(runIds), id);
     }
 
+    // A campaign job learns which campaign record its loop opened, as soon as
+    // it opens — so an interrupted job can name the campaign that recovery
+    // must fail alongside it.
+    recordCampaign(id: JobId, campaign: CampaignId): void
+    {
+        this.requireState(id, ['running'], 'record a campaign on');
+        this.db.prepare('UPDATE jobs SET campaign_id = ? WHERE id = ?').run(campaign, id);
+    }
+
     succeed(id: JobId, result: { consolidationId?: ConsolidationId } = {}): void
     {
         this.finish(id, 'succeeded', { consolidationId: result.consolidationId });
@@ -342,6 +369,7 @@ function toJob(row: JobRow): Job
         ...(row.error !== null ? { error: row.error } : {}),
         runIds: (JSON.parse(row.run_ids) as number[]).map(runId),
         ...(row.consolidation_id !== null ? { consolidationId: consolidationId(row.consolidation_id) } : {}),
+        ...(row.campaign_id !== null ? { campaignId: campaignId(row.campaign_id) } : {}),
     };
     // Params re-enter through Zod: the JSON column is as untrusted as the
     // HTTP body it originally arrived in.

@@ -580,6 +580,44 @@ describe('GET /consolidations/:id', () =>
     });
 });
 
+describe('campaigns', () =>
+{
+    it('should list summaries filtered by target and serve one whole, rounds included', async () =>
+    {
+        // Arrange: a finished campaign with one snapshot round.
+        const id = store.createCampaign({ owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main' });
+        store.appendCampaignRound(id, { round: 1, findings: 3, turns: 20, costUsd: 1.5, novelClusters: 3 });
+        store.finishCampaign(id, 'dry');
+
+        // Act
+        const match = await (await fetch(`${base}/campaigns?owner=acme&repo=widgets&head=feature/x`))
+            .json() as { campaigns: Array<{ status: string; stoppedBy?: string; roundCount: number; reviewCostUsd: number }> };
+        const miss = await (await fetch(`${base}/campaigns?owner=acme&repo=widgets&head=feature/z`))
+            .json() as { campaigns: unknown[] };
+        const detailRes = await fetch(`${base}/campaigns/${id}`);
+        const detail = await detailRes.json() as { campaign: { status: string; rounds: unknown[] } };
+
+        // Assert
+        expect(match.campaigns).toHaveLength(1);
+        expect(match.campaigns[0]).toMatchObject({ status: 'finished', stoppedBy: 'dry', roundCount: 1, reviewCostUsd: 1.5 });
+        expect(miss.campaigns).toHaveLength(0);
+        expect(detailRes.status).toBe(200);
+        expect(detail.campaign).toMatchObject({
+            status: 'finished',
+            stoppedBy: 'dry',
+            rounds: [{ round: 1, findings: 3, novelClusters: 3 }],
+        });
+    });
+
+    it('should reject a partial filter and 404 a campaign that cannot exist', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/campaigns?owner=acme`)).status).toBe(400);
+        expect((await fetch(`${base}/campaigns/99`)).status).toBe(404);
+        expect((await fetch(`${base}/campaigns/0`)).status).toBe(404);
+    });
+});
+
 describe('POST /clusters/:id/verdict', () =>
 {
     function seedCluster(): ClusterId

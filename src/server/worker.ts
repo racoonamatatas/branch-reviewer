@@ -216,6 +216,22 @@ export class Worker
                         this.jobs.recordRun(job.id, outcome.runId);
                     }
                 },
+                // The linkage startup recovery relies on: an interrupted
+                // campaign job names the campaign record to fail with it.
+                // Guarded like the verify proposal — a failed bookkeeping
+                // write must not kill a loop that is billing credit.
+                onCampaign: (campaign) =>
+                {
+                    try
+                    {
+                        this.jobs.recordCampaign(job.id, campaign);
+                    }
+                    catch (error)
+                    {
+                        this.onEvent?.(job.id, `could not link campaign #${campaign}: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                },
+                onWarning: message => this.onEvent?.(job.id, message),
                 onRoundStart: (round, of) => this.onEvent?.(job.id, `round ${round}/${of}`),
             },
         );

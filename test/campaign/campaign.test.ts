@@ -4,6 +4,7 @@ import type { CampaignResult, RoundOutcome } from '../../src/campaign/campaign.j
 import type { RepoClient } from '../../src/github/github.js';
 import { ReviewStore } from '../../src/store/store.js';
 import type { Finding } from '../../src/store/store.js';
+import type { CampaignId } from '../../src/types/ids.js';
 import { consolidationId, runId } from '../../src/types/ids.js';
 
 // The loop's two paid boundaries, mocked so the loop itself runs real:
@@ -231,6 +232,150 @@ describe('runCampaign', () =>
         expect(result.stoppedBy).toBe('empty-diff');
         const runId = result.rounds[0]!.runId!;
         expect(store.getRun(runId)?.status).toBe('empty');
+        store.close();
+    });
+});
+
+describe('runCampaign persistence', () =>
+{
+    const target = { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' };
+    const client: RepoClient = { compare: async () => [], readFile: async () => '' };
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+
+    function submittedReview(): unknown
+    {
+        return {
+            status: 'submitted',
+            review: { summary: 'reviewed', findings: [{ file: 'src/a.ts', severity: 'warning', title: 'T', detail: 'd' }] },
+            filesChanged: 2,
+            stats: { turns: 5, costUsd: 1, usage, perModel: {}, streamed: usage, turnUsage: [], compactions: 0 },
+        };
+    }
+
+    function emptyReview(): unknown
+    {
+        const zero = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+        return {
+            status: 'empty',
+            filesChanged: 0,
+            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, streamed: zero, turnUsage: [], compactions: 0 },
+        };
+    }
+
+    function seedRun(store: ReviewStore): void
+    {
+        store.saveRun({
+            ...target,
+            model: 'default',
+            status: 'submitted',
+            review: { summary: 'seeded', findings: [{ file: 'src/a.ts', severity: 'warning', title: 'T', detail: 'd' }] },
+            turns: 5,
+            costUsd: 1,
+            usage,
+            filesChanged: 2,
+        });
+    }
+
+    it('should record the campaign as it happened: rounds snapshotted, stop reason kept', async () =>
+    {
+        // Arrange: identical submissions, one all-member cluster — round 2 is
+        // the first consolidation and both consolidated rounds are barren, so
+        // the loop dries at 3 of 5.
+        const store = new ReviewStore(':memory:');
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        runReviewMock.mockResolvedValue(submittedReview());
+        runClusteringMock.mockImplementation(async (findings: Finding[]) =>
+            [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+        let announced: CampaignId | undefined;
+
+        // Act
+        const result = await runCampaign(store, client, target, {
+            maxRuns: 5, verify: false,
+            onCampaign: id => announced = id,
+        });
+
+        // Assert: the stored record and the returned result are the same story.
+        expect(result.campaignId).toBeDefined();
+        expect(announced).toBe(result.campaignId);
+        const campaign = store.getCampaign(result.campaignId!);
+        expect(campaign).toMatchObject({ status: 'finished', stoppedBy: result.stoppedBy });
+        expect(campaign?.baselineConsolidationId).toBeUndefined();
+        expect(campaign?.rounds).toEqual(result.rounds);
+        expect(result.stoppedBy).toBe('dry');
+        store.close();
+    });
+
+    it('should record the baseline consolidation when stored runs already exist', async () =>
+    {
+        // Arrange: two prior runs make a baseline; the campaign's own round
+        // hits an empty compare and stops.
+        const store = new ReviewStore(':memory:');
+        seedRun(store);
+        seedRun(store);
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        runReviewMock.mockResolvedValue(emptyReview());
+        runClusteringMock.mockImplementation(async (findings: Finding[]) =>
+            [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+
+        // Act
+        const result = await runCampaign(store, client, target, { maxRuns: 3, verify: false });
+
+        // Assert
+        const campaign = store.getCampaign(result.campaignId!);
+        expect(campaign?.baselineConsolidationId).toBeDefined();
+        expect(campaign).toMatchObject({ status: 'finished', stoppedBy: 'empty-diff' });
+        expect(campaign?.rounds).toEqual(result.rounds);
+        store.close();
+    });
+
+    it('should fail the campaign record when the loop dies structurally', async () =>
+    {
+        // Arrange: the baseline judge call is the one throw the loop cannot
+        // absorb into a round.
+        const store = new ReviewStore(':memory:');
+        seedRun(store);
+        seedRun(store);
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        runClusteringMock.mockRejectedValue(new Error('judge burned down'));
+
+        // Act + Assert: the throw still reaches the caller; the record says why.
+        await expect(runCampaign(store, client, target, { maxRuns: 3, verify: false }))
+            .rejects.toThrow('judge burned down');
+        const summaries = store.listCampaigns(target);
+        expect(summaries).toHaveLength(1);
+        const campaign = store.getCampaign(summaries[0]!.id);
+        expect(campaign).toMatchObject({ status: 'failed', error: expect.stringContaining('judge burned down') as string });
+        store.close();
+    });
+
+    it('should warn and keep looping when a campaign-record write fails', async () =>
+    {
+        // Arrange: the row is narrative, not evidence — a failed append must
+        // cost a warning, never a loop that is billing credit.
+        const store = new ReviewStore(':memory:');
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        runReviewMock.mockResolvedValue(emptyReview());
+        vi.spyOn(store, 'appendCampaignRound').mockImplementation(() =>
+        {
+            throw new Error('disk full');
+        });
+        const warnings: string[] = [];
+
+        // Act
+        const result = await runCampaign(store, client, target, {
+            maxRuns: 2, verify: false,
+            onWarning: message => warnings.push(message),
+        });
+
+        // Assert: the loop finished on its own terms and the record still
+        // closed — only the round snapshot is missing, and it was reported.
+        expect(result.stoppedBy).toBe('empty-diff');
+        expect(warnings.some(w => w.includes('disk full'))).toBe(true);
+        expect(store.getCampaign(result.campaignId!)?.status).toBe('finished');
         store.close();
     });
 });
