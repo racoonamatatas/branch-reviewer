@@ -19,7 +19,7 @@ import type { Severity } from '@server/schema/schema';
 import type { JobSummary } from '@server/server/jobs';
 import type { ConsolidationDetail } from '@server/server/server';
 import type { Watch } from '@server/server/trigger';
-import type { ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
+import type { Campaign, ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
 import type { ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest } from '../api/client';
@@ -53,6 +53,7 @@ interface Detail
 
 const runs = ref<RunSummary[]>([]);
 const consolidations = ref<ConsolidationSummary[]>([]);
+const campaign = ref<Campaign>();
 const detail = ref<Detail>();
 const connectionError = ref<string>();
 const actionError = ref<string>();
@@ -85,13 +86,19 @@ async function refresh(): Promise<void>
     const revId = selectedRevId.value;
     try
     {
-        const [runList, revList, revDetail] = await Promise.all([
+        const [runList, revList, campaignList, revDetail] = await Promise.all([
             api.listRuns(filter),
             api.listConsolidations(filter),
+            api.listCampaigns(filter),
             revId !== undefined ? api.getConsolidation(revId) : undefined,
         ]);
         runs.value = runList;
         consolidations.value = revList;
+        // The newest campaign is the band's subject. Its detail refetches
+        // every cycle like the rev detail: rounds append while it runs, and
+        // a finished status is exactly the change worth showing.
+        const newest = campaignList[0];
+        campaign.value = newest !== undefined ? await api.getCampaign(newest.id) : undefined;
         if (revId !== undefined && revDetail !== undefined)
         {
             detailCache.set(revId, revDetail);
@@ -332,11 +339,6 @@ function gateFor(held: JobSummary | undefined, kind: string): ActionGate
     return { allowed: true };
 }
 
-const rounds = computed(() =>
-    (consolidation.value?.runIds ?? []).map(id => ({
-        runId: id,
-        novel: (consolidation.value?.clusters ?? []).filter(c => c.members.every(m => m.runId === id)).length,
-    })));
 const reviewCostUsd = computed(() => revRuns.value.reduce((sum, r) => sum + r.costUsd, 0));
 const verifyCostUsd = computed(() =>
     (consolidation.value?.clusters ?? []).reduce(
@@ -406,9 +408,11 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
         <p v-if="actionError" class="msg action-error">{{ actionError }}</p>
 
         <LoopBand
-            v-if="consolidation"
-            :campaign="campaignJob"
-            :rounds="rounds"
+            v-if="campaign || consolidation"
+            :campaign="campaign"
+            :job="campaignJob"
+            :rev-run-ids="consolidation?.runIds ?? []"
+            :rev-clusters="consolidation?.clusters ?? []"
             :review-cost-usd="reviewCostUsd"
             :verify-cost-usd="verifyCostUsd"
         />
@@ -578,7 +582,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                                 :title="campaignGate.allowed ? 'Enqueue a campaign for this target — bills subscription credit.'
                                     : campaignGate.reason"
                                 @click="resumeCampaign"
-                            >↺ {{ campaignJob ? 'resume' : 'start' }} campaign</button>
+                            >↺ {{ campaign || campaignJob ? 'resume' : 'start' }} campaign</button>
                         </div>
                     </div>
                 </div>
