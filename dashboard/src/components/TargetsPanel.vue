@@ -5,10 +5,10 @@ import { age, usd } from '../format';
 
 const props = defineProps<{
     targets: TargetSummary[];
-    // Running campaign records for the whole store — the rows here are
-    // runs-derived, and a CLI campaign's first round takes minutes, so a
-    // campaign is the earlier (sometimes the only) sign of life.
-    runningCampaigns: CampaignSummary[];
+    // Live campaign records (running or verifying) for the whole store — the
+    // rows here are runs-derived, and a CLI campaign's first round takes
+    // minutes, so a campaign is the earlier (sometimes the only) sign of life.
+    liveCampaigns: CampaignSummary[];
     selected?: { owner: string; repo: string; head: string };
 }>();
 
@@ -24,20 +24,35 @@ function tripleKey(target: Triple): string
     return `${target.owner}/${target.repo}/${target.head}`;
 }
 
-const campaignTriples = computed(() => new Set(props.runningCampaigns.map(tripleKey)));
-
-function hasRunningCampaign(target: Triple): boolean
+// Newest campaign per triple (the list arrives newest-first): the marker
+// shows one status, and two concurrent loops on one triple must not render
+// duplicate rows on the very screen meant to make concurrent spend obvious.
+const liveByTriple = computed(() =>
 {
-    return campaignTriples.value.has(tripleKey(target));
+    const byTriple = new Map<string, CampaignSummary>();
+    for (const campaign of props.liveCampaigns)
+    {
+        const key = tripleKey(campaign);
+        if (!byTriple.has(key))
+        {
+            byTriple.set(key, campaign);
+        }
+    }
+    return byTriple;
+});
+
+function liveCampaignFor(target: Triple): CampaignSummary | undefined
+{
+    return liveByTriple.value.get(tripleKey(target));
 }
 
-// A running campaign on a target with no stored runs yet (round 1 still in
+// A live campaign on a target with no stored runs yet (round 1 still in
 // flight) has no runs-derived row to mark — it gets a synthetic one: the
 // moment something starts billing is the moment it must be findable here.
 const campaignOnlyTargets = computed(() =>
 {
     const known = new Set(props.targets.map(tripleKey));
-    return props.runningCampaigns.filter(campaign => !known.has(tripleKey(campaign)));
+    return [...liveByTriple.value.values()].filter(campaign => !known.has(tripleKey(campaign)));
 });
 
 function isSelected(target: Triple): boolean
@@ -68,7 +83,7 @@ function targetRoute(target: Triple): string
                     {{ target.owner }}/{{ target.repo }} · {{ target.head }} → {{ target.base }}
                 </RouterLink>
                 <div class="meta">
-                    <span v-if="hasRunningCampaign(target)" class="live"><span class="pulse">●</span> campaign running · </span>
+                    <span v-if="liveCampaignFor(target)" class="live"><span class="pulse">●</span> campaign {{ liveCampaignFor(target)!.status }} · </span>
                     {{ target.runCount }} run(s) · last {{ age(target.lastRunAt) }} · {{ usd(target.totalCostUsd) }}
                     <span v-if="target.latestConsolidationId === undefined" class="none">· no consolidation yet</span>
                 </div>
@@ -83,7 +98,7 @@ function targetRoute(target: Triple): string
                     {{ campaign.owner }}/{{ campaign.repo }} · {{ campaign.head }} → {{ campaign.base }}
                 </RouterLink>
                 <div class="meta">
-                    <span class="live"><span class="pulse">●</span> campaign #{{ campaign.id }} running</span>
+                    <span class="live"><span class="pulse">●</span> campaign #{{ campaign.id }} {{ campaign.status }}</span>
                     <span class="none">· no runs stored yet — round 1 in flight</span>
                 </div>
             </div>

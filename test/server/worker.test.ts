@@ -249,7 +249,7 @@ describe('campaign jobs', () =>
         expect(received).toMatchObject({ maxRuns: 5, patience: 2, verify: false, maxTurns: 24, model: 'claude-opus-5' });
     });
 
-    it('should link the campaign record the loop opens, for startup recovery to find', async () =>
+    it('should link the campaign record the loop opens, as provenance on the job', async () =>
     {
         // Arrange
         const id = jobs.enqueue(campaignJob());

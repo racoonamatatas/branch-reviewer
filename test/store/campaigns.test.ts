@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import type { RoundOutcome } from '../../src/campaign/campaign.js';
 import { ReviewStore } from '../../src/store/store.js';
@@ -174,7 +178,7 @@ describe('ReviewStore campaigns', () =>
 
         // Assert
         expect(() => store.finishCampaign(id, 'dry')).toThrow(/finished, not running/);
-        expect(() => store.failCampaign(id, 'late error')).toThrow(/finished, not running/);
+        expect(() => store.failCampaign(id, 'late error')).toThrow(/finished, not running or verifying/);
         expect(() => store.appendCampaignRound(id, { round: 1, findings: 0, turns: 0, costUsd: 0, failed: 'x', novelClusters: 0 }))
             .toThrow(/finished, not running/);
         expect(() => store.finishCampaign(campaignId(999), 'dry')).toThrow(/No campaign #999/);
@@ -222,6 +226,138 @@ describe('ReviewStore campaigns', () =>
             roundCount: 2,
             reviewCostUsd: 4,
         }]);
+    });
+
+    it('should enter verification with the stop reason already durable', () =>
+    {
+        // Arrange
+        const id = store.createCampaign(target);
+
+        // Act
+        store.beginCampaignVerification(id, 'dry');
+        const campaign = store.getCampaign(id)!;
+
+        // Assert: a live phase, not a terminal one — no finishedAt yet.
+        expect(campaign.status).toBe('verifying');
+        if (campaign.status === 'verifying')
+        {
+            expect(campaign.stoppedBy).toBe('dry');
+        }
+    });
+
+    it('should finish a verified campaign keeping the stop reason it recorded at the loop end', () =>
+    {
+        // Arrange
+        const id = store.createCampaign(target);
+        store.beginCampaignVerification(id, 'max-runs');
+
+        // Act
+        store.finishVerifiedCampaign(id);
+
+        // Assert
+        expect(store.getCampaign(id)).toMatchObject({ status: 'finished', stoppedBy: 'max-runs' });
+    });
+
+    it('should keep the stop reason when verification fails: the loop outcome is never lost', () =>
+    {
+        // Arrange
+        const id = store.createCampaign(target);
+        store.beginCampaignVerification(id, 'dry');
+
+        // Act
+        store.failCampaign(id, 'verifier exploded');
+        const campaign = store.getCampaign(id)!;
+
+        // Assert
+        expect(campaign.status).toBe('failed');
+        if (campaign.status === 'failed')
+        {
+            expect(campaign.error).toBe('verifier exploded');
+            expect(campaign.stoppedBy).toBe('dry');
+        }
+    });
+
+    it('should guard the verification transitions like every other', () =>
+    {
+        // Arrange
+        const id = store.createCampaign(target);
+
+        // Assert: verification cannot finish before it begins, cannot begin
+        // twice, and rounds never append once the loop is over.
+        expect(() => store.finishVerifiedCampaign(id)).toThrow(/running, not verifying/);
+        store.beginCampaignVerification(id, 'dry');
+        expect(() => store.beginCampaignVerification(id, 'dry')).toThrow(/verifying, not running/);
+        expect(() => store.appendCampaignRound(id, { round: 1, findings: 0, turns: 0, costUsd: 0, failed: 'x', novelClusters: 0 }))
+            .toThrow(/verifying, not running/);
+    });
+
+    it('should rebuild a pre-verifying campaigns table in place, rows intact', () =>
+    {
+        // Arrange: a database whose campaigns table carries the old CHECKs
+        // (no 'verifying' in the status list), holding one finished row AND
+        // a round referencing it — the referencing row is the point, because
+        // node:sqlite enforces foreign keys by default and dropping a
+        // referenced parent is exactly what the rebuild must survive. The
+        // raw builder opens with FKs off only to write the fixture without
+        // recreating every parent table.
+        const dir = mkdtempSync(join(tmpdir(), 'campaign-migrate-'));
+        const path = join(dir, 'reviews.db');
+        const raw = new DatabaseSync(path, { enableForeignKeyConstraints: false });
+        raw.exec(`
+            CREATE TABLE campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                head TEXT NOT NULL,
+                base TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'finished', 'failed')),
+                stopped_by TEXT,
+                error TEXT,
+                finished_at TEXT,
+                baseline_consolidation_id INTEGER REFERENCES consolidations(id),
+                CHECK ((status = 'finished') = (stopped_by IS NOT NULL)),
+                CHECK ((status = 'failed') = (error IS NOT NULL)),
+                CHECK ((status = 'running') = (finished_at IS NULL))
+            );
+            INSERT INTO campaigns (created_at, owner, repo, head, base, status, stopped_by, finished_at)
+                VALUES ('2026-08-19T00:00:00Z', 'acme', 'widgets', 'feature-x', 'main', 'finished', 'dry', '2026-08-19T01:00:00Z');
+            CREATE TABLE campaign_rounds (
+                campaign_id INTEGER NOT NULL REFERENCES campaigns(id),
+                round INTEGER NOT NULL,
+                run_id INTEGER,
+                findings INTEGER NOT NULL,
+                turns INTEGER NOT NULL,
+                cost_usd REAL NOT NULL,
+                aborted TEXT,
+                failed TEXT,
+                consolidation_failed TEXT,
+                consolidation_id INTEGER,
+                novel_clusters INTEGER NOT NULL,
+                observed INTEGER,
+                f1 INTEGER,
+                f2 INTEGER,
+                undiscovered INTEGER,
+                estimated_total INTEGER,
+                PRIMARY KEY (campaign_id, round)
+            );
+            INSERT INTO campaign_rounds (campaign_id, round, findings, turns, cost_usd, novel_clusters)
+                VALUES (1, 1, 3, 20, 1.5, 3);
+        `);
+        raw.close();
+
+        // Act: opening the store migrates; the new CHECKs accept 'verifying'.
+        const migrated = new ReviewStore(path);
+        const survivor = migrated.getCampaign(migrated.listCampaigns()[0]!.id)!;
+        const fresh = migrated.createCampaign(target);
+        migrated.beginCampaignVerification(fresh, 'dry');
+
+        // Assert: the row and its round both survived the rebuild.
+        expect(survivor).toMatchObject({ status: 'finished', stoppedBy: 'dry' });
+        expect(survivor.rounds).toHaveLength(1);
+        expect(migrated.getCampaign(fresh)?.status).toBe('verifying');
+        migrated.close();
+        rmSync(dir, { recursive: true, force: true });
     });
 
     it('should brand campaign ids at the type level', () =>

@@ -57,6 +57,8 @@ const stamp = computed(() =>
         {
             case 'running':
                 return { text: 'RUNNING', cls: 'und', title: `campaign #${campaign.id}, started ${campaign.createdAt}` };
+            case 'verifying':
+                return { text: 'VERIFYING', cls: 'und', title: `loop stopped (${campaign.stoppedBy}) — adversarial verification still billing` };
             case 'failed':
                 return { text: 'FAILED', cls: 'no', title: campaign.error };
             case 'finished':
@@ -71,9 +73,26 @@ const stamp = computed(() =>
 
 // An unusable round has no novelty to show — it cost a slot, and the × says
 // so without pretending "0 new findings" was measured.
+function unusable(round: CampaignRound): boolean
+{
+    return round.aborted !== undefined || round.failed !== undefined;
+}
+
 function roundValue(round: CampaignRound): string
 {
-    return round.aborted !== undefined || round.failed !== undefined ? '×' : String(round.novelClusters);
+    return unusable(round) ? '×' : String(round.novelClusters);
+}
+
+// Barren and unusable are different facts and style differently: barren is
+// what the patience rule counts, unusable deliberately is not — and the
+// classes branch on the data, never on the rendered string, so a formatting
+// change can't silently detach the styling.
+function roundClass(round: CampaignRound): Record<string, boolean>
+{
+    return {
+        unusable: unusable(round),
+        barren: !unusable(round) && round.novelClusters === 0,
+    };
 }
 
 function roundTitle(round: CampaignRound): string
@@ -110,7 +129,9 @@ const reviewsCost = computed(() =>
         <div class="what">
             <div v-if="campaign" class="name">Campaign #{{ campaign.id }} — stages 01↔02 repeat until dry</div>
             <div v-else class="name">Ad-hoc runs — no campaign yet</div>
-            <div class="m caps">{{ campaign ? 'novel clusters per round · as the loop saw them' : 'sole-source clusters per run · in this rev' }}</div>
+            <!-- "latest campaign": the band's subject is the newest record,
+                 which is not necessarily the one behind the pinned rev. -->
+            <div class="m caps">{{ campaign ? 'latest campaign · novel clusters per round · as the loop saw them' : 'sole-source clusters per run · in this rev' }}</div>
         </div>
         <div class="rounds">
             <template v-if="campaign">
@@ -118,12 +139,17 @@ const reviewsCost = computed(() =>
                     v-for="round in campaign.rounds"
                     :key="round.round"
                     class="round"
-                    :class="{ barren: roundValue(round) === '0' || roundValue(round) === '×' }"
+                    :class="roundClass(round)"
                     :title="roundTitle(round)"
                 >
                     <span class="r">r{{ round.round }}</span><span class="v">{{ roundValue(round) }}</span>
                 </div>
-                <div v-if="campaign.rounds.length === 0" class="none caps">no rounds yet — round 1 in flight</div>
+                <!-- "in flight" is a running-only claim: a failed campaign's
+                     structural death (baseline judge throw) also yields zero
+                     rounds, and the stamp beside it says FAILED. -->
+                <div v-if="campaign.rounds.length === 0" class="none caps">
+                    {{ campaign.status === 'running' ? 'no rounds yet — round 1 in flight' : 'no rounds recorded' }}
+                </div>
             </template>
             <template v-else>
                 <div v-for="(round, i) in derivedRounds" :key="round.runId" class="round" :class="{ barren: round.novel === 0 }" :title="`run ${round.runId}`">
@@ -132,7 +158,12 @@ const reviewsCost = computed(() =>
             </template>
         </div>
         <span v-if="stamp" class="statestamp" :class="stamp.cls" :title="stamp.title">{{ stamp.text }}</span>
-        <span class="cost">reviews {{ usd(reviewsCost) }} · verification {{ usd(verifyCostUsd) }}</span>
+        <!-- The two figures have different scopes when a campaign shows:
+             reviews are the campaign's own rounds, verification bills to the
+             displayed rev's clusters — the labels say so instead of letting
+             one line imply one population. -->
+        <span v-if="campaign" class="cost">campaign reviews {{ usd(reviewsCost) }} · rev verification {{ usd(verifyCostUsd) }}</span>
+        <span v-else class="cost">reviews {{ usd(reviewsCost) }} · verification {{ usd(verifyCostUsd) }}</span>
     </div>
 </template>
 
@@ -224,6 +255,18 @@ const reviewsCost = computed(() =>
 .round.barren .v
 {
     color: var(--faint);
+}
+
+/* Unusable ≠ barren: this round measured nothing (aborted or failed), and
+   the patience rule deliberately ignores it. */
+.round.unusable
+{
+    border-style: dotted;
+}
+
+.round.unusable .v
+{
+    color: var(--stamp-und);
 }
 
 .statestamp

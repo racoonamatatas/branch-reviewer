@@ -15,6 +15,7 @@ import { consolidationId, runId } from '../../src/types/ids.js';
 // the reviewer returns canned submissions, the judge is scriptable per call.
 const runClusteringMock = vi.hoisted(() => vi.fn());
 const runReviewMock = vi.hoisted(() => vi.fn());
+const verifyPendingMock = vi.hoisted(() => vi.fn());
 vi.mock('../../src/consolidate/consolidate.js', async (importOriginal) =>
 {
     const original = await importOriginal<typeof import('../../src/consolidate/consolidate.js')>();
@@ -24,6 +25,11 @@ vi.mock('../../src/review/review.js', async (importOriginal) =>
 {
     const original = await importOriginal<typeof import('../../src/review/review.js')>();
     return { ...original, runReview: runReviewMock };
+});
+vi.mock('../../src/verify/verify.js', async (importOriginal) =>
+{
+    const original = await importOriginal<typeof import('../../src/verify/verify.js')>();
+    return { ...original, verifyPending: verifyPendingMock };
 });
 
 function round(n: number, overrides: Partial<RoundOutcome> = {}): RoundOutcome
@@ -352,6 +358,98 @@ describe('runCampaign persistence', () =>
         expect(summaries).toHaveLength(1);
         const campaign = store.getCampaign(summaries[0]!.id);
         expect(campaign).toMatchObject({ status: 'failed', error: expect.stringContaining('judge burned down') as string });
+        store.close();
+    });
+
+    it('should spend the verification phase as `verifying` — a live, gated span — then finish', async () =>
+    {
+        // Arrange: two submitted rounds so a consolidation exists to verify.
+        const store = new ReviewStore(':memory:');
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        verifyPendingMock.mockReset();
+        runReviewMock.mockResolvedValue(submittedReview());
+        runClusteringMock.mockImplementation(async (findings: Finding[]) =>
+            [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+        let announced: CampaignId | undefined;
+        let statusDuringVerification: string | undefined;
+        verifyPendingMock.mockImplementation(async () =>
+        {
+            statusDuringVerification = store.getCampaign(announced!)?.status;
+            return { attempted: 1, verified: 1, failures: 0, costUsd: 0.5 };
+        });
+
+        // Act
+        const result = await runCampaign(store, client, target, {
+            maxRuns: 2, verify: true,
+            onCampaign: id => announced = id,
+        });
+
+        // Assert: the adversarial passes billed inside the record's life,
+        // and the stop reason recorded at the loop's end survived to the end.
+        expect(statusDuringVerification).toBe('verifying');
+        expect(store.getCampaign(result.campaignId!)).toMatchObject({ status: 'finished', stoppedBy: 'max-runs' });
+        expect(result.verification).toMatchObject({ verified: 1 });
+        store.close();
+    });
+
+    it('should fail the record on a verification crash without losing why the loop stopped', async () =>
+    {
+        // Arrange
+        const store = new ReviewStore(':memory:');
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        verifyPendingMock.mockReset();
+        runReviewMock.mockResolvedValue(submittedReview());
+        runClusteringMock.mockImplementation(async (findings: Finding[]) =>
+            [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+        verifyPendingMock.mockRejectedValue(new Error('verifier exploded'));
+
+        // Act + Assert
+        await expect(runCampaign(store, client, target, { maxRuns: 2, verify: true }))
+            .rejects.toThrow('verifier exploded');
+        expect(store.getCampaign(store.listCampaigns(target)[0]!.id)).toMatchObject({
+            status: 'failed',
+            error: expect.stringContaining('verifier exploded') as string,
+            stoppedBy: 'max-runs',
+        });
+        store.close();
+    });
+
+    it('should latch after the record is externally failed: one actionable warning, not one per round', async () =>
+    {
+        // Arrange: an external sweep (the degraded-liveness case) fails the
+        // row after round 1; rounds 2 and 3 would each hit the state guard.
+        const store = new ReviewStore(':memory:');
+        runReviewMock.mockReset();
+        runClusteringMock.mockReset();
+        runReviewMock.mockResolvedValue(submittedReview());
+        runClusteringMock.mockImplementation(async (findings: Finding[]) =>
+            [{ memberIds: findings.map(f => f.id), representativeId: findings[0]!.id }]);
+        let announced: CampaignId | undefined;
+        const warnings: string[] = [];
+        let failed = false;
+
+        // Act
+        await runCampaign(store, client, target, {
+            maxRuns: 3, verify: false,
+            onCampaign: id => announced = id,
+            onWarning: message => warnings.push(message),
+            onRun: () =>
+            {
+                if (!failed)
+                {
+                    failed = true;
+                    store.failCampaign(announced!, 'swept by another process');
+                }
+            },
+        });
+
+        // Assert: exactly one warning, and it names the consequence instead
+        // of vaguely reporting the same refused write every round.
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('no longer writable');
+        expect(warnings[0]).toContain('will not be persisted');
         store.close();
     });
 

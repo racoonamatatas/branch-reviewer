@@ -237,7 +237,7 @@ export const campaignSummarySchema = z.object({
     head: z.string(),
     base: z.string(),
     target: z.string(),
-    status: z.enum(['running', 'finished', 'failed']),
+    status: z.enum(['running', 'verifying', 'finished', 'failed']),
     stoppedBy: stoppedBySchema.optional(),
     roundCount: z.number().int(),
     reviewCostUsd: z.number(),
@@ -258,6 +258,10 @@ const campaignCommon = {
 
 export const campaignSchema = z.discriminatedUnion('status', [
     z.object({ ...campaignCommon, status: z.literal('running') }),
+    // 'verifying': the loop is over (stoppedBy is already durable) but the
+    // adversarial passes are still billing — a live phase, not a terminal one.
+    z.object({ ...campaignCommon, status: z.literal('verifying'), stoppedBy: stoppedBySchema }),
     z.object({ ...campaignCommon, status: z.literal('finished'), stoppedBy: stoppedBySchema, finishedAt: z.string() }),
-    z.object({ ...campaignCommon, status: z.literal('failed'), error: z.string(), finishedAt: z.string() }),
+    // stoppedBy present exactly when the failure hit during verification.
+    z.object({ ...campaignCommon, status: z.literal('failed'), error: z.string(), stoppedBy: stoppedBySchema.optional(), finishedAt: z.string() }),
 ]) satisfies z.ZodType<Campaign>;

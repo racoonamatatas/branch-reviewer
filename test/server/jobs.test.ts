@@ -198,8 +198,8 @@ describe('state transitions', () =>
         store.recordCampaign(id, campaignId(7));
         store.succeed(id);
 
-        // Assert: the linkage survives the job finishing — recovery reads it
-        // from failed jobs.
+        // Assert: the linkage survives the job finishing, as provenance —
+        // recovery is lease-based and does not read it.
         expect(store.get(id)?.campaignId).toBe(7);
     });
 

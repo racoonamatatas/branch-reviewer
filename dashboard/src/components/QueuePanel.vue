@@ -7,9 +7,10 @@ import { age } from '../format';
 
 const props = defineProps<{
     jobs: JobSummary[];
-    // Running campaign records join the in-flight section: "what is running
-    // right now" must be one list, and a CLI campaign holds no job.
-    runningCampaigns: CampaignSummary[];
+    // Live campaign records (running or verifying) join the in-flight
+    // section: "what is billing right now" must be one list, and a CLI
+    // campaign holds no job.
+    liveCampaigns: CampaignSummary[];
     selected?: { owner: string; repo: string; head: string };
 }>();
 
@@ -37,7 +38,7 @@ const cliCampaigns = computed(() =>
         props.jobs
             .filter(j => j.kind === 'campaign' && ACTIVE.has(j.state))
             .map(j => `${j.owner}/${j.repo}/${j.head}`));
-    return props.runningCampaigns.filter(c => !represented.has(`${c.owner}/${c.repo}/${c.head}`));
+    return props.liveCampaigns.filter(c => !represented.has(`${c.owner}/${c.repo}/${c.head}`));
 });
 
 const inFlightCount = computed(() => active.value.length + cliCampaigns.value.length);
@@ -94,7 +95,7 @@ function targetRoute(target: { owner: string; repo: string; head: string }): str
                         <td class="target">
                             <RouterLink :to="targetRoute(c)">{{ c.target }}</RouterLink>
                         </td>
-                        <td class="state mono state-running">▶ RUNNING</td>
+                        <td class="state mono state-running">▶ {{ c.status.toUpperCase() }}</td>
                         <td class="num">{{ c.roundCount > 0 ? c.roundCount : '–' }}</td>
                         <td class="num">{{ age(c.createdAt) }}</td>
                         <td></td>

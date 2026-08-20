@@ -192,7 +192,8 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
 // Campaign records are process-independent liveness: a CLI campaign holds
 // no job, so the worker can read idle while credit burns — this count and
 // the target-row markers are how mission control tells the truth about it.
-const runningCampaigns = computed(() => campaigns.value.filter(c => c.status === 'running'));
+// 'verifying' counts: the loop is over but the adversarial passes still bill.
+const liveCampaigns = computed(() => campaigns.value.filter(c => c.status === 'running' || c.status === 'verifying'));
 </script>
 
 <template>
@@ -209,9 +210,10 @@ const runningCampaigns = computed(() => campaigns.value.filter(c => c.status ===
                     <span class="kv caps">queued <b class="mono">{{ queuedCount }}</b></span>
                     <!-- Held is the count that wants a human — it earns the chalk. -->
                     <span v-if="heldCount > 0" class="kv caps">held <b class="mono busy">{{ heldCount }}</b></span>
-                    <!-- Running campaign records, jobs or not — a CLI loop
-                         billing rounds shows here even while the worker idles. -->
-                    <span v-if="runningCampaigns.length > 0" class="kv caps">campaigns <b class="mono busy">{{ runningCampaigns.length }} running</b></span>
+                    <!-- Live campaign records (running or verifying), jobs or
+                         not — a CLI loop billing shows here even while the
+                         worker idles. -->
+                    <span v-if="liveCampaigns.length > 0" class="kv caps">campaigns <b class="mono busy">{{ liveCampaigns.length }} in flight</b></span>
                     <span class="kv caps">poll <b class="mono">{{ pollLabel }}</b></span>
                     <span class="kv caps">updated <b class="mono">{{ updatedLabel }}</b></span>
                 </template>
@@ -223,12 +225,12 @@ const runningCampaigns = computed(() => campaigns.value.filter(c => c.status ===
 
         <main>
             <div class="col">
-                <QueuePanel :jobs="jobs" :running-campaigns="runningCampaigns" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
+                <QueuePanel :jobs="jobs" :live-campaigns="liveCampaigns" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
                 <NewJobForm @enqueue="enqueue" />
             </div>
             <div class="col side">
                 <WatchesPanel :watches="watches" @add="addWatch" @remove="removeWatch" />
-                <TargetsPanel :targets="targets" :running-campaigns="runningCampaigns" :selected="selectedTarget" />
+                <TargetsPanel :targets="targets" :live-campaigns="liveCampaigns" :selected="selectedTarget" />
             </div>
         </main>
 
@@ -318,9 +320,18 @@ main
 }
 
 /* The side column's last panel (Targets) absorbs the leftover height and
-   scrolls internally; Watches above it keeps its natural size. The child
-   component's root <section> carries this component's scope id, so the
-   selector reaches it. */
+   scrolls internally; Watches above it keeps its natural size up to a cap,
+   past which it scrolls too — otherwise a long watch list pushes content
+   past the pinned bottom and over the activity feed. The child components'
+   root <section>s carry this component's scope id, so the selectors reach
+   them. */
+.col.side > *:first-child
+{
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 55%;
+}
+
 .col.side > *:last-child
 {
     flex: 1;

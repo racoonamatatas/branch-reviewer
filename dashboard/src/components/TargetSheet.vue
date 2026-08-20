@@ -19,8 +19,8 @@ import type { Severity } from '@server/schema/schema';
 import type { JobSummary } from '@server/server/jobs';
 import type { ConsolidationDetail } from '@server/server/server';
 import type { Watch } from '@server/server/trigger';
-import type { Campaign, ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
-import type { ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
+import type { Campaign, CampaignSummary, ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
+import type { CampaignId, ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest } from '../api/client';
 import { usd } from '../format';
@@ -94,11 +94,6 @@ async function refresh(): Promise<void>
         ]);
         runs.value = runList;
         consolidations.value = revList;
-        // The newest campaign is the band's subject. Its detail refetches
-        // every cycle like the rev detail: rounds append while it runs, and
-        // a finished status is exactly the change worth showing.
-        const newest = campaignList[0];
-        campaign.value = newest !== undefined ? await api.getCampaign(newest.id) : undefined;
         if (revId !== undefined && revDetail !== undefined)
         {
             detailCache.set(revId, revDetail);
@@ -108,10 +103,50 @@ async function refresh(): Promise<void>
             }
         }
         connectionError.value = undefined;
+        // Last, and self-guarded: a campaign read failing must not discard
+        // the rev detail fetched above or flip the sheet OFFLINE over a
+        // secondary read (campaign #1 finding, confirmed).
+        await refreshCampaign(campaignList[0]);
     }
     catch (e)
     {
         connectionError.value = describe(e);
+    }
+}
+
+// The newest campaign is the band's subject. Terminal records (finished,
+// failed) are immutable and cache forever; live ones refetch every cycle —
+// rounds append while they run, and a status change is exactly the news.
+// The token drops a stale response when act()'s refresh overlaps the
+// poller's; its own catch keeps the previous value on a failed read.
+const campaignCache = new Map<CampaignId, Campaign>();
+let campaignFetchToken = 0;
+async function refreshCampaign(newest: CampaignSummary | undefined): Promise<void>
+{
+    const token = ++campaignFetchToken;
+    if (newest === undefined)
+    {
+        campaign.value = undefined;
+        return;
+    }
+    const cached = campaignCache.get(newest.id);
+    if (cached !== undefined && (cached.status === 'finished' || cached.status === 'failed'))
+    {
+        campaign.value = cached;
+        return;
+    }
+    try
+    {
+        const fetched = await api.getCampaign(newest.id);
+        if (token === campaignFetchToken)
+        {
+            campaignCache.set(newest.id, fetched);
+            campaign.value = fetched;
+        }
+    }
+    catch
+    {
+        // Keep the previous value; the next poll cycle retries.
     }
 }
 
@@ -305,13 +340,13 @@ const campaignJob = computed(() =>
 // it does not touch. A review touches stage 01; a campaign loops through
 // review, consolidate, and verify, so all three pulse. Stamps stay PENDING
 // while the dot blinks: "in motion" and "no verdict yet" are both true.
-// A running campaign *record* counts as campaign liveness too: CLI
-// campaigns have no job, and a sheet that reads idle while one bills
-// rounds is the exact invisibility slice 12 existed to fix.
+// A live campaign *record* counts as campaign liveness too: CLI campaigns
+// have no job, and a sheet that reads idle while one bills — looping OR
+// verifying — is the exact invisibility slice 12 existed to fix.
 const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
-const campaignRunning = computed(() => campaign.value?.status === 'running');
-const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign' || campaignRunning.value);
-const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify' || campaignRunning.value);
+const campaignLive = computed(() => campaign.value?.status === 'running' || campaign.value?.status === 'verifying');
+const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign' || campaignLive.value);
+const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify' || campaignLive.value);
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 
 // "verify now" also yields to a held verify job: the worker auto-proposes
@@ -328,11 +363,11 @@ const campaignGate = computed<ActionGate>(() => gateFor(heldCampaignJob.value, '
 
 function gateFor(held: JobSummary | undefined, kind: string): ActionGate
 {
-    // A CLI campaign holds no job, but its running record gates the same
-    // way: these buttons bill, and a duplicate loop is the expensive kind.
-    if (campaignRunning.value)
+    // A CLI campaign holds no job, but its live record gates the same way:
+    // these buttons bill, and a duplicate loop is the expensive kind.
+    if (campaignLive.value)
     {
-        return { allowed: false, reason: 'A campaign for this target is running right now (see the loop band).' };
+        return { allowed: false, reason: 'A campaign for this target is in flight (see the loop band).' };
     }
     if (hasActiveJob.value)
     {
@@ -584,7 +619,10 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                         <div v-else class="vnote">no estimate yet — coverage reads occurrence counts across runs</div>
                         <!-- Outside the coverage gate on purpose: the moment a campaign is most
                              wanted is a one-run target, which has no coverage to show yet. -->
-                        <div v-if="campaignJob" class="verdictline">campaign #{{ campaignJob.id }}: {{ campaignJob.state }}</div>
+                        <!-- "campaign job", not "campaign": the loop band above
+                             names campaign-record ids, and two unrelated numbers
+                             under one label read as a data inconsistency. -->
+                        <div v-if="campaignJob" class="verdictline">campaign job #{{ campaignJob.id }}: {{ campaignJob.state }}</div>
                         <div class="cta">
                             <button
                                 class="bp-btn chalk"

@@ -170,6 +170,12 @@ export interface CampaignRound
 // Status is a discriminated union, not optional fields: a finished campaign
 // always knows why it stopped, a failed one always carries its error, and a
 // running one may claim neither. The CHECKs restate the same rule in SQL.
+// 'verifying' is the loop's tail made visible: the sampling is over (so
+// stoppedBy is already durable — a verification failure can never lose why
+// the loop stopped) but credit is still burning on adversarial passes, and
+// campaign #1's verification phase proved that span must stay covered by
+// liveness and billing gates — the record read 'finished' while the CLI
+// process billed five more dollars, and every gate reopened.
 interface CampaignBase extends Identified<'Campaign'>, Created
 {
     owner: string;
@@ -188,6 +194,12 @@ export interface RunningCampaign extends CampaignBase
     status: 'running';
 }
 
+export interface VerifyingCampaign extends CampaignBase
+{
+    status: 'verifying';
+    stoppedBy: StoppedBy;
+}
+
 export interface FinishedCampaign extends CampaignBase
 {
     status: 'finished';
@@ -199,10 +211,13 @@ export interface FailedCampaign extends CampaignBase
 {
     status: 'failed';
     error: string;
+    // Present exactly when the failure hit during verification: the loop's
+    // outcome was already durable and must not be lost to a verify crash.
+    stoppedBy?: StoppedBy;
     finishedAt: string;
 }
 
-export type Campaign = RunningCampaign | FinishedCampaign | FailedCampaign;
+export type Campaign = RunningCampaign | VerifyingCampaign | FinishedCampaign | FailedCampaign;
 
 // Everything beyond New<T>'s subtraction is lifecycle, assigned as the
 // campaign progresses; a create call supplies only the target.
@@ -244,6 +259,30 @@ export interface ConsolidationSummary extends Pick<Consolidation, 'id' | 'create
 {
     target: string;
     clusterCount: number;
+}
+
+// Shared with migrateCampaignVerifying's rebuild: CHECKs live in the table
+// definition, so changing them means recreating the table, and two copies of
+// this DDL would drift apart.
+function campaignsTable(name: string): string
+{
+    return `
+CREATE TABLE IF NOT EXISTS ${name} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    head TEXT NOT NULL,
+    base TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'verifying', 'finished', 'failed')),
+    stopped_by TEXT,
+    error TEXT,
+    finished_at TEXT,
+    baseline_consolidation_id INTEGER REFERENCES consolidations(id),
+    CHECK ((status IN ('verifying', 'finished')) = (stopped_by IS NOT NULL) OR (status = 'failed')),
+    CHECK ((status = 'failed') = (error IS NOT NULL)),
+    CHECK ((status IN ('running', 'verifying')) = (finished_at IS NULL))
+);`;
 }
 
 const SCHEMA = `
@@ -308,22 +347,7 @@ CREATE TABLE IF NOT EXISTS verifications (
     cost_usd REAL,
     CHECK ((source = 'agent') = (confidence IS NOT NULL AND cost_usd IS NOT NULL))
 );
-CREATE TABLE IF NOT EXISTS campaigns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    owner TEXT NOT NULL,
-    repo TEXT NOT NULL,
-    head TEXT NOT NULL,
-    base TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'finished', 'failed')),
-    stopped_by TEXT,
-    error TEXT,
-    finished_at TEXT,
-    baseline_consolidation_id INTEGER REFERENCES consolidations(id),
-    CHECK ((status = 'finished') = (stopped_by IS NOT NULL)),
-    CHECK ((status = 'failed') = (error IS NOT NULL)),
-    CHECK ((status = 'running') = (finished_at IS NULL))
-);
+${campaignsTable('campaigns')}
 CREATE TABLE IF NOT EXISTS campaign_rounds (
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id),
     round INTEGER NOT NULL,
@@ -454,6 +478,50 @@ export class ReviewStore
         this.db.exec(SCHEMA);
         this.migrateRunFilesChanged();
         this.migrateEmptyRuns();
+        this.migrateCampaignVerifying();
+    }
+
+    // Databases from before the 'verifying' phase carry CHECKs that reject
+    // it; CHECKs live in the table definition, so the fix is a rebuild in
+    // place — same columns, rows copied verbatim (every old row already
+    // satisfies the new constraints). Detected from the stored DDL: the old
+    // shape is the one whose status CHECK does not name 'verifying'.
+    private migrateCampaignVerifying(): void
+    {
+        const table = this.db.prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'campaigns'",
+        ).get() as unknown as { sql: string } | undefined;
+        if (table === undefined || table.sql.includes("'verifying'"))
+        {
+            return;
+        }
+        // New-table-first, unlike the verifications rebuild: renaming the
+        // old table aside would drag campaign_rounds' REFERENCES along with
+        // it (RENAME rewrites dependents since SQLite 3.25) and then drop
+        // the name they point at. Dropping and re-creating under the
+        // original name leaves that reference text untouched and true.
+        // FK enforcement is suspended for the dance (node:sqlite enables it
+        // by default, unlike raw SQLite): dropping a parent whose rounds
+        // still reference it would otherwise refuse — the rows all point at
+        // the same ids the re-created table holds again two statements
+        // later. The pragma is a no-op inside a transaction, so it brackets
+        // one rather than joining it.
+        this.db.exec('PRAGMA foreign_keys = OFF');
+        try
+        {
+            this.db.exec(`
+                BEGIN;
+                ${campaignsTable('campaigns_new')}
+                INSERT INTO campaigns_new SELECT * FROM campaigns;
+                DROP TABLE campaigns;
+                ALTER TABLE campaigns_new RENAME TO campaigns;
+                COMMIT;
+            `);
+        }
+        finally
+        {
+            this.db.exec('PRAGMA foreign_keys = ON');
+        }
     }
 
     // Rows written while the empty-diff short-circuit fabricated a submitted
@@ -929,18 +997,50 @@ export class ReviewStore
 
     finishCampaign(id: CampaignId, stoppedBy: StoppedBy): void
     {
-        this.requireRunningCampaign(id, 'finish');
+        this.requireCampaignState(id, ['running'], 'finish');
         this.db.prepare(
             "UPDATE campaigns SET status = 'finished', stopped_by = ?, finished_at = ? WHERE id = ? AND status = 'running'",
         ).run(stoppedBy, new Date().toISOString(), id);
     }
 
+    // The loop is over and knows why — stoppedBy becomes durable HERE, before
+    // any verification credit is spent, so a verify crash can never lose it.
+    beginCampaignVerification(id: CampaignId, stoppedBy: StoppedBy): void
+    {
+        this.requireCampaignState(id, ['running'], 'begin verification on');
+        this.db.prepare(
+            "UPDATE campaigns SET status = 'verifying', stopped_by = ? WHERE id = ? AND status = 'running'",
+        ).run(stoppedBy, id);
+    }
+
+    finishVerifiedCampaign(id: CampaignId): void
+    {
+        this.requireCampaignState(id, ['verifying'], 'finish verification on');
+        this.db.prepare(
+            "UPDATE campaigns SET status = 'finished', finished_at = ? WHERE id = ? AND status = 'verifying'",
+        ).run(new Date().toISOString(), id);
+    }
+
+    // Fails from either live phase; a stopped_by already recorded (the loop
+    // completed, verification died) survives the transition.
     failCampaign(id: CampaignId, error: string): void
     {
-        this.requireRunningCampaign(id, 'fail');
+        this.requireCampaignState(id, ['running', 'verifying'], 'fail');
         this.db.prepare(
-            "UPDATE campaigns SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+            "UPDATE campaigns SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status IN ('running', 'verifying')",
         ).run(error, new Date().toISOString(), id);
+    }
+
+    // The sweep's question and nothing more: which campaigns claim to be
+    // alive, and since when. listCampaigns aggregates rounds and costs over
+    // the whole table — history-sized work a per-poll maintenance task must
+    // not do.
+    openCampaigns(): Array<{ id: CampaignId; createdAt: string }>
+    {
+        const rows = this.db.prepare(
+            "SELECT id, created_at FROM campaigns WHERE status IN ('running', 'verifying') ORDER BY id",
+        ).all() as unknown as Array<{ id: number; created_at: string }>;
+        return rows.map(row => ({ id: campaignId(row.id), createdAt: row.created_at }));
     }
 
     getCampaign(id: CampaignId): Campaign | undefined
@@ -976,7 +1076,7 @@ export class ReviewStore
             head: row.head,
             base: row.base,
             target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
-            status: row.status as Campaign['status'],
+            status: campaignStatus(row.id, row.status),
             ...(row.stopped_by !== null ? { stoppedBy: row.stopped_by as StoppedBy } : {}),
             roundCount: row.round_count,
             reviewCostUsd: row.review_cost_usd,
@@ -985,14 +1085,19 @@ export class ReviewStore
 
     private requireRunningCampaign(id: CampaignId, action: string): void
     {
+        this.requireCampaignState(id, ['running'], action);
+    }
+
+    private requireCampaignState(id: CampaignId, expected: Array<Campaign['status']>, action: string): void
+    {
         const row = this.db.prepare('SELECT status FROM campaigns WHERE id = ?').get(id) as unknown as { status: string } | undefined;
         if (row === undefined)
         {
             throw new Error(`No campaign #${id}.`);
         }
-        if (row.status !== 'running')
+        if (!expected.includes(row.status as Campaign['status']))
         {
-            throw new Error(`Cannot ${action} campaign #${id}: it is ${row.status}, not running.`);
+            throw new Error(`Cannot ${action} campaign #${id}: it is ${row.status}, not ${expected.join(' or ')}.`);
         }
     }
 
@@ -1018,17 +1123,35 @@ function toCampaign(row: CampaignRow, rounds: CampaignRound[]): Campaign
             : {}),
         rounds,
     };
-    switch (row.status)
+    switch (campaignStatus(row.id, row.status))
     {
         case 'running':
             return { ...common, status: 'running' };
+        case 'verifying':
+            return { ...common, status: 'verifying', stoppedBy: row.stopped_by as StoppedBy };
         case 'finished':
             return { ...common, status: 'finished', stoppedBy: row.stopped_by as StoppedBy, finishedAt: row.finished_at as string };
         case 'failed':
-            return { ...common, status: 'failed', error: row.error as string, finishedAt: row.finished_at as string };
-        default:
-            throw new Error(`Campaign #${row.id} has unknown status '${row.status}'.`);
+            return {
+                ...common, status: 'failed', error: row.error as string, finishedAt: row.finished_at as string,
+                ...(row.stopped_by !== null ? { stoppedBy: row.stopped_by as StoppedBy } : {}),
+            };
     }
+}
+
+// One trust posture for the status column, wherever it is read: the CHECK
+// makes an unknown value unreachable today, and this keeps a future value or
+// a hand-edited row a named error at the boundary instead of a Zod surprise
+// on the dashboard.
+const CAMPAIGN_STATUSES: ReadonlyArray<Campaign['status']> = ['running', 'verifying', 'finished', 'failed'];
+
+function campaignStatus(id: number, status: string): Campaign['status']
+{
+    if (!CAMPAIGN_STATUSES.includes(status as Campaign['status']))
+    {
+        throw new Error(`Campaign #${id} has unknown status '${status}'.`);
+    }
+    return status as Campaign['status'];
 }
 
 function toCampaignRound(row: CampaignRoundRow): CampaignRound

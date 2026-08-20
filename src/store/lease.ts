@@ -76,22 +76,36 @@ export function acquireCampaignLease(dir: string | undefined, id: CampaignId): L
     };
 }
 
-// Every running campaign whose lease is acquirable lost its owner — mark it
-// failed and report it. Per-campaign failures (unreadable lock file, a
-// finish racing the probe) skip that campaign rather than aborting the
-// sweep: this is maintenance, and the next sweep gets another chance. A
-// campaign that ran without its lease (acquisition failed and warned) is
-// deliberately sweepable — degraded liveness was the stated cost.
-export function sweepInterruptedCampaigns(store: ReviewStore): CampaignId[]
+// A row is inserted a beat before its lease is taken — synchronous within
+// the owner, but a sweep in another process can land inside that beat,
+// find the lease acquirable, and fail a live, billing campaign (campaign
+// #1 reported this in all six runs). The grace window closes it: rows
+// younger than this are never probed, and everything older keeps the
+// proof-not-heuristic property.
+const CREATE_GRACE_MS = 10_000;
+
+// Every open campaign (running or verifying — both phases bill) whose lease
+// is acquirable lost its owner — mark it failed and report it. Per-campaign
+// failures (unreadable lock file, a finish racing the probe) skip that
+// campaign rather than aborting the sweep: this is maintenance, and the
+// next sweep gets another chance. A campaign that ran without its lease
+// (acquisition failed and warned) is deliberately sweepable — degraded
+// liveness was the stated cost.
+export function sweepInterruptedCampaigns(store: ReviewStore, opts: { graceMs?: number } = {}): CampaignId[]
 {
     const dir = store.leaseDir;
     if (dir === undefined)
     {
         return [];
     }
+    const graceMs = opts.graceMs ?? CREATE_GRACE_MS;
     const swept: CampaignId[] = [];
-    for (const campaign of store.listCampaigns().filter(c => c.status === 'running'))
+    for (const campaign of store.openCampaigns())
     {
+        if (Date.now() - Date.parse(campaign.createdAt) < graceMs)
+        {
+            continue;
+        }
         const probe = attempt(() => acquireCampaignLease(dir, campaign.id));
         if (probe === undefined)
         {

@@ -268,7 +268,32 @@ the truth. Test gotcha: vitest's NODE_OPTIONS loaders break a bare
 `node -e` child — strip the env var when spawning. The parked road-not-
 taken (an N-API flock addon) lives outside this repo, deliberately.
 
-Remaining roadmap (sequencing user-confirmed): Vue TS dashboard (last,
+**Campaign #1 on the slice-12/13 branch itself** (2026-08-20, first
+campaign to run under its own persistence: 6 runs, $19.38, stopped at
+max-runs, 16 distinct findings, 7/7 once-seen CONFIRMED, textbook
+saturation curve — est. ~4 of ~20 unseen). Its fix round: **campaigns
+gained a `verifying` status** (running → verifying → finished; stoppedBy
+becomes durable at the verifying transition, so a verify crash fails the
+record without losing why the loop stopped — FailedCampaign carries an
+optional stoppedBy for exactly that case; table-rebuild migration since
+CHECKs live in the DDL). The lease is held through verification and the
+sweep covers both live phases — the record had read 'finished' while the
+CLI process billed five more dollars of adversarial passes, with every
+billing gate reopened (user-felt live, then reported by the campaign in
+4/6 runs). The create→lease race (6/6 runs) closed with a 10s grace window
+in the sweep; the recorder now latches when the row leaves its hands (one
+actionable warning, not one per round). Migration gotchas worth keeping:
+**node:sqlite enables foreign-key enforcement by default** (unlike raw
+SQLite), so dropping a referenced parent needs `PRAGMA foreign_keys=OFF`
+bracketing the rebuild transaction (the pragma is a no-op inside one), and
+`ALTER TABLE ... RENAME` rewrites dependents' REFERENCES since SQLite 3.25
+— rebuild new-table-first, never rename-aside, when children point at the
+table. Dashboard: 'verifying' counts as in-flight everywhere (header,
+markers, lane, pulses, VERIFYING band stamp), the campaign fetch is
+isolated/token-guarded/cached-when-terminal, unusable rounds render
+dotted-× (distinct from barren — the patience rule's distinction, drawn),
+the band is labeled "latest campaign" with per-scope cost labels, and the
+watches panel got the bounded-scroll treatment inside the pinned column. Vue TS dashboard (last,
 standing decision) → deploy (webhooks may replace polling then; needs server
 auth first). Eventually: read→write promotion (posting findings to PRs)
 — a deliberate, separately-decided step with its own risk profile, not a drift.

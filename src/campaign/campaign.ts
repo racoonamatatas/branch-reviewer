@@ -252,10 +252,20 @@ export async function runCampaign(
             }
         }
 
-        // The sampling loop is over and knows why — recorded now, before
-        // verification, because verification bills to the consolidation's
-        // clusters and its failure must not un-finish a finished loop.
-        recorder.finish(stoppedBy);
+        // The sampling loop is over and knows why — stoppedBy becomes
+        // durable NOW, whichever transition follows, so a verification
+        // failure can never lose it. When verification will run, the record
+        // enters its 'verifying' phase instead of closing: the adversarial
+        // passes bill for minutes, and liveness and the billing gates must
+        // cover the whole paid span.
+        if (opts.verify && latest !== undefined)
+        {
+            recorder.beginVerification(stoppedBy);
+        }
+        else
+        {
+            recorder.finish(stoppedBy);
+        }
     }
     catch (error)
     {
@@ -276,12 +286,23 @@ export async function runCampaign(
 
     if (opts.verify && latest !== undefined)
     {
-        const consolidation = store.getConsolidation(latest.id)!;
-        campaign.verification = await verifyPending(store, client, consolidation, {
-            model: opts.model,
-            ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
-            ...opts.verifyReporting,
-        });
+        try
+        {
+            const consolidation = store.getConsolidation(latest.id)!;
+            campaign.verification = await verifyPending(store, client, consolidation, {
+                model: opts.model,
+                ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
+                ...opts.verifyReporting,
+            });
+            recorder.complete();
+        }
+        catch (error)
+        {
+            // Verification died with the loop's outcome already durable:
+            // the record fails, stoppedBy survives on the failed row.
+            recorder.fail(error instanceof Error ? error.message : String(error));
+            throw error;
+        }
     }
 
     return campaign;
@@ -292,9 +313,10 @@ export async function runCampaign(
 // failure warns through the campaign's own channel, and after a failed
 // create the rest quietly no-op — there is no row to write to, and the loop
 // was told once. The lease pairs with the record: held exactly while the
-// row says running, released when finish/fail closes it — and released by
-// the kernel on any death, SIGKILL included, which is what lets a sweeper
-// prove an abandoned row instead of guessing.
+// row is live (running or verifying — both phases bill), released when
+// finish/complete/fail closes it — and released by the kernel on any death,
+// SIGKILL included, which is what lets a sweeper prove an abandoned row
+// instead of guessing.
 class CampaignRecorder
 {
     private id: CampaignId | undefined;
@@ -338,8 +360,8 @@ class CampaignRecorder
         }
     }
 
-    // finish/fail release the lease even when the closing write itself
-    // failed (warned, row stuck on running): a limbo row with no holder is
+    // finish/complete/fail release the lease even when the closing write
+    // itself failed (warned, row stuck live): a limbo row with no holder is
     // exactly what the sweep exists to give a terminal state.
     finish(stoppedBy: StoppedBy): void
     {
@@ -347,6 +369,30 @@ class CampaignRecorder
         if (id !== undefined)
         {
             this.guarded(`finish campaign #${id}`, () => this.store.finishCampaign(id, stoppedBy));
+        }
+        this.releaseLease();
+    }
+
+    // The loop's tail: stoppedBy becomes durable now, before verification
+    // spends anything, and the lease is deliberately KEPT — the adversarial
+    // passes are the longest-billing span of a campaign, and liveness and
+    // billing gates must cover it (campaign #1 found its own record reading
+    // 'finished' while it verified).
+    beginVerification(stoppedBy: StoppedBy): void
+    {
+        const id = this.id;
+        if (id !== undefined)
+        {
+            this.guarded(`begin verification on campaign #${id}`, () => this.store.beginCampaignVerification(id, stoppedBy));
+        }
+    }
+
+    complete(): void
+    {
+        const id = this.id;
+        if (id !== undefined)
+        {
+            this.guarded(`finish verification on campaign #${id}`, () => this.store.finishVerifiedCampaign(id));
         }
         this.releaseLease();
     }
@@ -375,7 +421,20 @@ class CampaignRecorder
         }
         catch (error)
         {
-            this.warn?.(`could not ${action}: ${error instanceof Error ? error.message : String(error)}`);
+            const message = error instanceof Error ? error.message : String(error);
+            // A state-guard refusal means the row left our hands — an
+            // external sweep marked it failed. Latch rather than repeat:
+            // every later write would fail identically, so say the
+            // actionable thing once and go quiet, instead of one vague
+            // warning per round for the rest of a long, paid campaign.
+            if (this.id !== undefined && /: it is \w+, not /.test(message))
+            {
+                this.warn?.(`campaign #${this.id}'s record is no longer writable (${message}) — its remaining history will not be persisted`);
+                this.id = undefined;
+                this.releaseLease();
+                return undefined;
+            }
+            this.warn?.(`could not ${action}: ${message}`);
             return undefined;
         }
     }

@@ -71,7 +71,7 @@ describe('sweepInterruptedCampaigns', () =>
         const lease = acquireCampaignLease(store.leaseDir, id)!;
 
         // Act
-        const swept = sweepInterruptedCampaigns(store);
+        const swept = sweepInterruptedCampaigns(store, { graceMs: 0 });
 
         // Assert
         expect(swept).toEqual([]);
@@ -86,7 +86,7 @@ describe('sweepInterruptedCampaigns', () =>
         acquireCampaignLease(store.leaseDir, id)!.release();
 
         // Act
-        const swept = sweepInterruptedCampaigns(store);
+        const swept = sweepInterruptedCampaigns(store, { graceMs: 0 });
 
         // Assert
         expect(swept).toEqual([id]);
@@ -102,19 +102,46 @@ describe('sweepInterruptedCampaigns', () =>
         const id = store.createCampaign(target);
 
         // Act + Assert
-        expect(sweepInterruptedCampaigns(store)).toEqual([id]);
+        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([id]);
+    });
+
+    it('should skip rows younger than the grace window: a row exists a beat before its lease', () =>
+    {
+        // Arrange: freshly created, no lease yet — exactly the sub-second
+        // window a concurrent sweep must not treat as proof of death
+        // (campaign #1 reported the race in all six runs).
+        const id = store.createCampaign(target);
+
+        // Act + Assert: the default grace protects it; it is still running.
+        expect(sweepInterruptedCampaigns(store)).toEqual([]);
+        expect(store.getCampaign(id)?.status).toBe('running');
+    });
+
+    it('should sweep a verifying campaign the same way — that phase bills too', () =>
+    {
+        // Arrange: the loop finished (stoppedBy durable) and died during
+        // the adversarial passes.
+        const id = store.createCampaign(target);
+        store.beginCampaignVerification(id, 'dry');
+
+        // Act
+        const swept = sweepInterruptedCampaigns(store, { graceMs: 0 });
+
+        // Assert: failed, with the loop's outcome preserved on the row.
+        expect(swept).toEqual([id]);
+        expect(store.getCampaign(id)).toMatchObject({ status: 'failed', stoppedBy: 'dry' });
     });
 
     it('should never probe finished or failed campaigns', () =>
     {
-        // Arrange: neither row is running, neither holds a lease.
+        // Arrange: neither row is live, neither holds a lease.
         const finished = store.createCampaign(target);
         store.finishCampaign(finished, 'dry');
         const failed = store.createCampaign(target);
         store.failCampaign(failed, 'boom');
 
         // Act + Assert
-        expect(sweepInterruptedCampaigns(store)).toEqual([]);
+        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([]);
     });
 
     it('should reclaim a lease from a SIGKILLed process: the kernel releases what no handler could', async () =>
@@ -154,14 +181,14 @@ describe('sweepInterruptedCampaigns', () =>
         });
 
         // Assert: while the child lives, the campaign is provably alive.
-        expect(sweepInterruptedCampaigns(store)).toEqual([]);
+        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([]);
 
         // Act: SIGKILL — no signal handler runs, only the kernel cleans up.
         child.kill('SIGKILL');
         await new Promise(resolve => child.once('exit', resolve));
 
         // Assert
-        expect(sweepInterruptedCampaigns(store)).toEqual([id]);
+        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([id]);
         expect(store.getCampaign(id)?.status).toBe('failed');
     });
 });
