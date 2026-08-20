@@ -361,6 +361,21 @@ describe('runCampaign persistence', () =>
         store.close();
     });
 
+    it('should refuse to start while another campaign is live for the target: the gate at the spending door', async () =>
+    {
+        // Arrange: a live record, whichever door opened it.
+        const store = new ReviewStore(':memory:');
+        runReviewMock.mockReset();
+        store.createCampaign(target);
+
+        // Act + Assert: refused before any credit moves — the reviewer is
+        // never called.
+        await expect(runCampaign(store, client, target, { maxRuns: 3, verify: false }))
+            .rejects.toThrow(/already running for this target/);
+        expect(runReviewMock).not.toHaveBeenCalled();
+        store.close();
+    });
+
     it('should spend the verification phase as `verifying` — a live, gated span — then finish', async () =>
     {
         // Arrange: two submitted rounds so a consolidation exists to verify.

@@ -99,7 +99,7 @@ function targetRoute(target: { owner: string; repo: string; head: string }): str
                         <td class="target">
                             <RouterLink :to="targetRoute(c)">{{ c.target }}</RouterLink>
                         </td>
-                        <td class="state mono state-running">▶ {{ c.status.toUpperCase() }}</td>
+                        <td class="state mono" :class="`state-${c.status}`">{{ c.status === 'running' ? '▶' : '⧖' }} {{ c.status.toUpperCase() }}</td>
                         <td class="num">{{ c.roundCount > 0 ? c.roundCount : '–' }}</td>
                         <td class="num">{{ age(c.createdAt) }}</td>
                         <td></td>
@@ -230,6 +230,7 @@ tr.done td, tr.done .target a
 
 .state-held      { color: var(--bright); }
 .state-running   { color: var(--chalk); }
+.state-verifying { color: var(--chalk); }
 .state-queued    { color: var(--bright); }
 .state-succeeded { color: var(--stamp-ok); }
 .state-failed    { color: var(--stamp-no); }

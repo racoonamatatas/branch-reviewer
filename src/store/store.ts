@@ -186,6 +186,13 @@ interface CampaignBase extends Identified<'Campaign'>, Created
     // this campaign's own contribution is measured against. Absent when the
     // target had fewer than two prior runs.
     baselineConsolidationId?: ConsolidationId;
+    // Whether the loop proved it holds this row's liveness lease. Starts
+    // false and is marked true only on successful acquisition — so a crash
+    // in the gap fails safe (unprovable, unsweepable) instead of unsafe
+    // (sweepable while possibly alive). A live row with leased false is the
+    // degraded mode the UI must be able to explain, because nothing but an
+    // operator's force-fail can ever retire it.
+    leased: boolean;
     rounds: CampaignRound[];
 }
 
@@ -221,10 +228,10 @@ export type Campaign = RunningCampaign | VerifyingCampaign | FinishedCampaign | 
 
 // Everything beyond New<T>'s subtraction is lifecycle, assigned as the
 // campaign progresses; a create call supplies only the target.
-type CampaignLifecycle = 'status' | 'baselineConsolidationId' | 'rounds';
+type CampaignLifecycle = 'status' | 'baselineConsolidationId' | 'rounds' | 'leased';
 export type NewCampaign = Omit<New<RunningCampaign>, CampaignLifecycle>;
 
-export interface CampaignSummary extends Pick<CampaignBase, 'id' | 'createdAt' | 'owner' | 'repo' | 'head' | 'base'>
+export interface CampaignSummary extends Pick<CampaignBase, 'id' | 'createdAt' | 'owner' | 'repo' | 'head' | 'base' | 'leased'>
 {
     target: string;  // "owner/repo head → base"
     status: Campaign['status'];
@@ -279,7 +286,7 @@ CREATE TABLE IF NOT EXISTS ${name} (
     error TEXT,
     finished_at TEXT,
     baseline_consolidation_id INTEGER REFERENCES consolidations(id),
-    leased INTEGER NOT NULL DEFAULT 1,
+    leased INTEGER NOT NULL DEFAULT 0,
     CHECK ((status IN ('verifying', 'finished')) = (stopped_by IS NOT NULL) OR (status = 'failed')),
     CHECK ((status = 'failed') = (error IS NOT NULL)),
     CHECK ((status IN ('running', 'verifying')) = (finished_at IS NULL))
@@ -430,6 +437,7 @@ interface CampaignRow
     error: string | null;
     finished_at: string | null;
     baseline_consolidation_id: number | null;
+    leased: number;
 }
 
 interface CampaignRoundRow
@@ -484,15 +492,15 @@ export class ReviewStore
     }
 
     // Databases rebuilt for 'verifying' before the leased column existed
-    // lack it; the defaulted ADD COLUMN is the whole migration, and old
-    // rows honestly read leased — their loops predate the degraded mode
-    // being recorded at all.
+    // lack it; the defaulted ADD COLUMN is the whole migration. Old rows
+    // read unproven — for terminal rows the flag is inert, and any live row
+    // from before the column cannot testify anyway.
     private migrateCampaignLeased(): void
     {
         const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('campaigns') as unknown as Array<{ name: string }>;
         if (!columns.some(c => c.name === 'leased'))
         {
-            this.db.exec('ALTER TABLE campaigns ADD COLUMN leased INTEGER NOT NULL DEFAULT 1');
+            this.db.exec('ALTER TABLE campaigns ADD COLUMN leased INTEGER NOT NULL DEFAULT 0');
         }
     }
 
@@ -501,6 +509,9 @@ export class ReviewStore
     // place — same columns, rows copied verbatim (every old row already
     // satisfies the new constraints). Detected from the stored DDL: the old
     // shape is the one whose status CHECK does not name 'verifying'.
+    // campaign_rounds is deliberately not rebuilt: its DDL has never
+    // changed since the table was born, so no legacy variance exists — the
+    // day its CHECKs change, it gets its own migration.
     private migrateCampaignVerifying(): void
     {
         const table = this.db.prepare(
@@ -993,38 +1004,50 @@ export class ReviewStore
     // CLI campaigns rendered as "no campaign yet" mid-loop until this landed.
     createCampaign(campaign: NewCampaign): CampaignId
     {
+        // leased is written explicitly, never left to the column default: a
+        // row born claiming a provable lease it does not hold yet would make
+        // a crash in the create→acquire gap sweepable while possibly alive —
+        // the unsafe direction (campaign #4/#5 finding, confirmed).
         const result = this.db.prepare(
-            'INSERT INTO campaigns (created_at, owner, repo, head, base) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO campaigns (created_at, owner, repo, head, base, leased) VALUES (?, ?, ?, ?, ?, 0)',
         ).run(new Date().toISOString(), campaign.owner, campaign.repo, campaign.head, campaign.base);
         return campaignId(Number(result.lastInsertRowid));
     }
 
     recordCampaignBaseline(id: CampaignId, consolidation: ConsolidationId): void
     {
-        this.requireRunningCampaign(id, 'record a baseline on');
-        this.db.prepare(
+        this.transition(id, ['running'], 'record a baseline on',
             "UPDATE campaigns SET baseline_consolidation_id = ? WHERE id = ? AND status = 'running'",
-        ).run(consolidation, id);
+            consolidation, id);
     }
 
     // Rounds append as they happen, so an interrupted campaign keeps every
     // round it paid for. The composite primary key rejects a duplicate round
-    // number — the loop is the only writer, so a collision is a bug, not a race.
+    // number — the loop is the only writer, so a collision is a bug, not a
+    // race. The INSERT carries its own running-status guard (the rounds
+    // table has no status column to guard on), so a sweep racing the append
+    // is a named error, never a round quietly attached to a terminal row.
     appendCampaignRound(id: CampaignId, round: CampaignRound): void
     {
         this.requireRunningCampaign(id, 'append a round to');
-        this.db.prepare(
+        const result = this.db.prepare(
             `INSERT INTO campaign_rounds (campaign_id, round, run_id, findings, turns, cost_usd,
                                           aborted, failed, consolidation_failed, consolidation_id, novel_clusters,
                                           observed, f1, f2, undiscovered, estimated_total)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM campaigns WHERE id = ? AND status = 'running')`,
         ).run(
             id, round.round, round.runId ?? null, round.findings, round.turns, round.costUsd,
             round.aborted ?? null, round.failed ?? null, round.consolidationFailed ?? null,
             round.consolidationId ?? null, round.novelClusters,
             round.coverage?.observed ?? null, round.coverage?.f1 ?? null, round.coverage?.f2 ?? null,
             round.coverage?.undiscovered ?? null, round.coverage?.estimatedTotal ?? null,
+            id,
         );
+        if (result.changes === 0)
+        {
+            throw new Error(`Cannot append a round to campaign #${id}: it changed state concurrently.`);
+        }
     }
 
     finishCampaign(id: CampaignId, stoppedBy: StoppedBy): void
@@ -1059,13 +1082,14 @@ export class ReviewStore
             error, new Date().toISOString(), id);
     }
 
-    // The record's admission that its loop runs unprotected: lease
-    // acquisition failed, so "lease acquirable" proves nothing about this
-    // row and the sweep must not read it as a death certificate.
-    markCampaignUnleased(id: CampaignId): void
+    // The loop's proof of protection: recorded only after the lease is
+    // actually held, so "lease acquirable" testifies about exactly the rows
+    // that once held one. Rows that never mark stay unprovable and the
+    // sweep refuses to judge them.
+    markCampaignLeased(id: CampaignId): void
     {
-        this.transition(id, ['running'], 'mark unleased',
-            "UPDATE campaigns SET leased = 0 WHERE id = ? AND status = 'running'", id);
+        this.transition(id, ['running'], 'mark leased',
+            "UPDATE campaigns SET leased = 1 WHERE id = ? AND status = 'running'", id);
     }
 
     // The sweep's question and nothing more: which campaigns claim to be
@@ -1128,11 +1152,12 @@ export class ReviewStore
             base: string;
             status: string;
             stopped_by: string | null;
+            leased: number;
             round_count: number;
             review_cost_usd: number;
         }
         const rows = this.db.prepare(
-            `SELECT c.id, c.created_at, c.owner, c.repo, c.head, c.base, c.status, c.stopped_by,
+            `SELECT c.id, c.created_at, c.owner, c.repo, c.head, c.base, c.status, c.stopped_by, c.leased,
                     COUNT(r.round) AS round_count, COALESCE(SUM(r.cost_usd), 0) AS review_cost_usd
              FROM campaigns c LEFT JOIN campaign_rounds r ON r.campaign_id = c.id
              ${clause}
@@ -1150,6 +1175,7 @@ export class ReviewStore
             target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
             status: campaignStatus(row.id, row.status),
             ...(row.stopped_by !== null ? { stoppedBy: row.stopped_by as StoppedBy } : {}),
+            leased: row.leased === 1,
             roundCount: row.round_count,
             reviewCostUsd: row.review_cost_usd,
         }));
@@ -1193,6 +1219,7 @@ function toCampaign(row: CampaignRow, rounds: CampaignRound[]): Campaign
         ...(row.baseline_consolidation_id !== null
             ? { baselineConsolidationId: consolidationId(row.baseline_consolidation_id) }
             : {}),
+        leased: row.leased === 1,
         rounds,
     };
     switch (campaignStatus(row.id, row.status))

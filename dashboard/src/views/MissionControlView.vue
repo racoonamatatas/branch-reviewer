@@ -93,14 +93,24 @@ async function refresh(): Promise<void>
     const feedPromise = api.listEvents(cursor.value).catch(() => undefined);
     try
     {
-        [jobs.value, watches.value, targets.value, campaigns.value] = await Promise.all([
+        // The campaign read rides with its own catch, like the sheet's: it
+        // is secondary, and one bad campaign row 500-ing /campaigns must not
+        // blank the queue, watches, and targets it shares a Promise.all
+        // with. Live rows only: this poll asks "what is billing now" every
+        // 3s, and must not make the server aggregate all campaign history.
+        const [jobList, watchList, targetList, campaignList] = await Promise.all([
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
-            // Live rows only: this poll asks "what is billing now" every 3s,
-            // and must not make the server aggregate all campaign history.
-            api.listCampaigns(undefined, { liveOnly: true }),
+            api.listCampaigns(undefined, { liveOnly: true }).catch(() => undefined),
         ]);
+        jobs.value = jobList;
+        watches.value = watchList;
+        targets.value = targetList;
+        if (campaignList !== undefined)
+        {
+            campaigns.value = campaignList;
+        }
         refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
     }

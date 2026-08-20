@@ -94,6 +94,21 @@ export async function runCampaign(
     opts: CampaignOptions,
 ): Promise<CampaignResult>
 {
+    // The duplicate gate at the spending door itself, not just on dashboard
+    // buttons: two loops on one target double-bill it, whichever doors they
+    // entered through (CLI, released job, or one of each). Store-level and
+    // shared by both callers — the worker maps the throw to a failed job,
+    // the CLI to exit 1. A wedged live row (liveness unprovable) blocks
+    // this too; the operator's way out is `--force-fail <id>`.
+    const alreadyLive = store.listCampaigns(target, { liveOnly: true })[0];
+    if (alreadyLive !== undefined)
+    {
+        throw new Error(`Campaign #${alreadyLive.id} is already ${alreadyLive.status} for this target — a second loop would double-bill it. `
+            + (alreadyLive.leased
+                ? 'Wait for it to finish, or investigate why it is stuck.'
+                : `Its liveness is unprovable (never leased); if it is dead, retire it with: npm run campaign -- --force-fail ${alreadyLive.id}`));
+    }
+
     const reviewTarget = { base: target.base, head: target.head };
     const rounds: RoundOutcome[] = [];
     let reviewCostUsd = 0;
@@ -110,10 +125,6 @@ export async function runCampaign(
     // write must warn, never kill a loop that is billing credit.
     const recorder = new CampaignRecorder(store, opts.onWarning);
     const campaignId = recorder.create(target);
-    if (campaignId !== undefined)
-    {
-        opts.onCampaign?.(campaignId);
-    }
 
     // Rounds land in three places (the result, the record, the caller) and
     // must never drift apart — one helper, three exits from the loop.
@@ -126,6 +137,14 @@ export async function runCampaign(
 
     try
     {
+        // Inside the try on purpose: a throwing listener reaches the same
+        // catch as any structural failure, so the record is failed and the
+        // lease released instead of both dangling on a callback bug.
+        if (campaignId !== undefined)
+        {
+            opts.onCampaign?.(campaignId);
+        }
+
         // Runs already stored for this target are part of the union, so the
         // campaign's own contribution is only measurable against them.
         const baseline = await consolidateTarget(store, target, opts.model);
@@ -338,16 +357,22 @@ class CampaignRecorder
             try
             {
                 this.lease = acquireCampaignLease(this.store.leaseDir, id);
+                // Provability is claimed only AFTER the lease is held: rows
+                // are born unproven, so a crash inside this very gap fails
+                // safe (unsweepable) instead of sweepable-while-alive.
+                if (this.lease !== undefined)
+                {
+                    this.guarded(`mark campaign #${id} leased`, () => this.store.markCampaignLeased(id));
+                }
             }
             catch (error)
             {
-                // A loop that cannot be leased still runs and bills — and
-                // the row records the degraded mode, because for THIS row an
-                // acquirable lease proves nothing and the sweep must not
-                // read one as a death certificate (a false fail would also
-                // reopen the duplicate-campaign billing gates mid-spend).
+                // A loop that cannot be leased still runs and bills; the row
+                // simply never claims provability, and the sweep will refuse
+                // to judge it — for THIS row an acquirable lease proves
+                // nothing, and a false fail would also reopen the
+                // duplicate-campaign billing gates mid-spend.
                 this.emitWarning(`could not acquire the liveness lease for campaign #${id}: ${error instanceof Error ? error.message : String(error)} — liveness is unprovable for this record`);
-                this.guarded(`mark campaign #${id} unleased`, () => this.store.markCampaignUnleased(id));
             }
         }
         return this.id;

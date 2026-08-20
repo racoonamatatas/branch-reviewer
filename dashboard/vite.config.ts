@@ -11,8 +11,9 @@ export default defineConfig({
     plugins: [vue()],
     resolve: {
         // Mirrors the tsconfig paths entry. Views import server types
-        // (type-only, erased at build); the ids module is the one deliberate
-        // value import — pure code, and the source of branded-id parsing.
+        // (type-only, erased at build); the deliberate value imports are the
+        // ids module (branded-id parsing) and the coverage module
+        // (novelClusters for the loop band's fallback) — both pure code.
         // Anything else from @server that reaches the bundle fails the build
         // on its node:* imports, which is the guard working.
         alias: { '@server': fileURLToPath(new URL('../src', import.meta.url)) },

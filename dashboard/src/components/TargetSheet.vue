@@ -94,7 +94,11 @@ async function refresh(): Promise<void>
         // secondary, and NEITHER the list nor the detail may flip the sheet
         // OFFLINE or discard the rev data fetched alongside (campaign #2
         // finding: the earlier comment claimed this while only the detail
-        // was actually isolated).
+        // was actually isolated). The list is deliberately unfiltered by
+        // liveness — the band's subject is the newest record whatever its
+        // status — and stays bounded by being target-scoped: one target
+        // accumulates campaigns at human speed, unlike the store-wide
+        // aggregate mission control's poll was weaned off.
         const [runList, revList, campaignList, revDetail] = await Promise.all([
             api.listRuns(filter),
             api.listConsolidations(filter),
@@ -169,7 +173,12 @@ async function refreshCampaign(newest: CampaignSummary | undefined): Promise<voi
     }
     catch
     {
-        campaignFetchFailures.value++;
+        // Token-checked like success: a stale request's failure must not
+        // count a strike against the refresh that superseded it.
+        if (token === campaignFetchToken)
+        {
+            campaignFetchFailures.value++;
+        }
     }
 }
 
@@ -391,10 +400,19 @@ const campaignGate = computed<ActionGate>(() => gateFor(heldCampaignJob.value, '
 function gateFor(held: JobSummary | undefined, kind: string): ActionGate
 {
     // A CLI campaign holds no job, but its live record gates the same way:
-    // these buttons bill, and a duplicate loop is the expensive kind.
-    if (campaignLive.value)
+    // these buttons bill, and a duplicate loop is the expensive kind. This
+    // UI gate is advisory — runCampaign enforces the same rule at the
+    // spending door itself. An unprovable row (never leased) explains the
+    // only way it can ever be cleared.
+    const live = campaignSummaries.value.find(c => c.status === 'running' || c.status === 'verifying');
+    if (live !== undefined)
     {
-        return { allowed: false, reason: 'A campaign for this target is in flight (see the loop band).' };
+        return {
+            allowed: false,
+            reason: live.leased
+                ? 'A campaign for this target is in flight (see the loop band).'
+                : `Campaign #${live.id} reads ${live.status} but its liveness is unprovable (never leased) — if it is dead, retire it with: npm run campaign -- --force-fail ${live.id}`,
+        };
     }
     if (hasActiveJob.value)
     {

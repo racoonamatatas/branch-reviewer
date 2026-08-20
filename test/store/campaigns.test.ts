@@ -223,6 +223,7 @@ describe('ReviewStore campaigns', () =>
             target: 'acme/widgets feature-x → main',
             status: 'finished',
             stoppedBy: 'dry',
+            leased: false,
             roundCount: 2,
             reviewCostUsd: 4,
         }]);

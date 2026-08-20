@@ -66,8 +66,9 @@ describe('sweepInterruptedCampaigns', () =>
         // Arrange: fcntl locks are per-process (the classic footgun), so
         // this asserts SQLite's own per-inode tracking makes a same-process
         // probe see the truth — the serve process sweeps while its worker
-        // holds a campaign.
+        // holds a campaign. Marked leased, as the recorder does on success.
         const id = store.createCampaign(target);
+        store.markCampaignLeased(id);
         const lease = acquireCampaignLease(store.leaseDir, id)!;
 
         // Act
@@ -83,6 +84,7 @@ describe('sweepInterruptedCampaigns', () =>
     {
         // Arrange
         const id = store.createCampaign(target);
+        store.markCampaignLeased(id);
         acquireCampaignLease(store.leaseDir, id)!.release();
 
         // Act
@@ -92,25 +94,32 @@ describe('sweepInterruptedCampaigns', () =>
         expect(swept).toEqual([id]);
         expect(store.getCampaign(id)).toMatchObject({
             status: 'failed',
-            error: expect.stringContaining('liveness lease') as string,
+            // The cause names its own uncertainty: released lease proves
+            // "owner gone OR finished without its closing write", not death.
+            error: expect.stringContaining('no live lease') as string,
         });
     });
 
-    it('should fail a running campaign that never held a lease: degraded liveness is sweepable by design', () =>
+    it('should refuse to sweep a campaign that never proved a lease: rows are born unprovable', () =>
     {
-        // Arrange
+        // Arrange: creation alone claims nothing — provability is marked
+        // only after acquisition succeeds, so a crash in that gap (or a
+        // failed acquisition) fails safe: unsweepable, never
+        // sweepable-while-possibly-alive.
         const id = store.createCampaign(target);
 
         // Act + Assert
-        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([id]);
+        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([]);
+        expect(store.getCampaign(id)?.status).toBe('running');
     });
 
     it('should skip rows younger than the grace window: a row exists a beat before its lease', () =>
     {
-        // Arrange: freshly created, no lease yet — exactly the sub-second
-        // window a concurrent sweep must not treat as proof of death
-        // (campaign #1 reported the race in all six runs).
+        // Arrange: freshly created and marked leased — the grace window is
+        // the protection under test, so provability must not be what saves
+        // the row.
         const id = store.createCampaign(target);
+        store.markCampaignLeased(id);
 
         // Act + Assert: the default grace protects it; it is still running.
         expect(sweepInterruptedCampaigns(store)).toEqual([]);
@@ -122,6 +131,7 @@ describe('sweepInterruptedCampaigns', () =>
         // Arrange: the loop finished (stoppedBy durable) and died during
         // the adversarial passes.
         const id = store.createCampaign(target);
+        store.markCampaignLeased(id);
         store.beginCampaignVerification(id, 'dry');
 
         // Act
@@ -130,19 +140,6 @@ describe('sweepInterruptedCampaigns', () =>
         // Assert: failed, with the loop's outcome preserved on the row.
         expect(swept).toEqual([id]);
         expect(store.getCampaign(id)).toMatchObject({ status: 'failed', stoppedBy: 'dry' });
-    });
-
-    it('should refuse to sweep an unleased campaign: an acquirable lease proves nothing there', () =>
-    {
-        // Arrange: the loop admitted its lease acquisition failed. Sweeping
-        // it would fail a possibly-live, billing loop AND reopen the
-        // duplicate-campaign gates — worse than the stuck-row residual.
-        const id = store.createCampaign(target);
-        store.markCampaignUnleased(id);
-
-        // Act + Assert
-        expect(sweepInterruptedCampaigns(store, { graceMs: 0 })).toEqual([]);
-        expect(store.getCampaign(id)?.status).toBe('running');
     });
 
     it('should never probe finished or failed campaigns', () =>
@@ -164,6 +161,7 @@ describe('sweepInterruptedCampaigns', () =>
         // directory is normally acquireCampaignLease's job; the child opens
         // the lock file bare, so it is made here.
         const id = store.createCampaign(target);
+        store.markCampaignLeased(id);
         mkdirSync(store.leaseDir!, { recursive: true });
         const script = `
             const { DatabaseSync } = require('node:sqlite');

@@ -16,7 +16,7 @@
 // path) is harmless here — the worst a confused probe can do is attempt a
 // fail that the guard refuses.
 
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { CampaignId } from '../types/ids.js';
@@ -125,10 +125,20 @@ export function sweepInterruptedCampaigns(
         }
         catch (error)
         {
-            const message = error instanceof Error ? error.message : String(error);
-            if (!/SQLITE_BUSY|database is locked/i.test(message))
+            // Busy is judged by SQLite's error CODE, never by message shape:
+            // a busy that failed a regex would read as "broken" and the
+            // warning below would advise deleting a LIVE campaign's lock
+            // file — turning the escape hatch into a kill instruction. Only
+            // a definite non-busy code earns the delete advice; an error
+            // with no code at all is reported without it.
+            const verdict = classifyProbeError(error);
+            if (verdict === 'broken')
             {
-                opts.onWarning?.(`campaign #${campaign.id}'s lock file is unusable (${message}) — remove ${leasePath(dir, campaign.id)} to let the sweep decide`);
+                opts.onWarning?.(`campaign #${campaign.id}'s lock file is unusable (${describeError(error)}) — remove ${leasePath(dir, campaign.id)} to let the sweep decide`);
+            }
+            else if (verdict === 'unknown')
+            {
+                opts.onWarning?.(`campaign #${campaign.id}'s lease probe failed for an unrecognized reason (${describeError(error)}) — treating it as alive`);
             }
             continue;   // busy proves life; anything else was reported, not judged
         }
@@ -136,18 +146,62 @@ export function sweepInterruptedCampaigns(
         {
             continue;
         }
-        const failed = attempt(() =>
+        try
         {
-            store.failCampaign(campaign.id, 'Interrupted: the owning process is gone — its liveness lease was released by the kernel.');
-            return true;
-        });
-        probe.release();
-        if (failed === true)
-        {
+            // The cause names its own uncertainty: the lease being released
+            // proves the owner is gone OR that it finished without managing
+            // its closing write — the recorder releases on finish even when
+            // that write failed, and a fabricated "process is gone" would
+            // pollute exactly the cost history campaigns exist to keep.
+            store.failCampaign(campaign.id, 'Interrupted: no live lease and no closing write — the owning process died, or finished without closing its record.');
             swept.push(campaign.id);
         }
+        catch (error)
+        {
+            // A finish racing the probe lands here — named, not swallowed.
+            opts.onWarning?.(`campaign #${campaign.id} could not be marked failed (${describeError(error)}) — the next sweep retries`);
+        }
+        probe.release();
     }
+    cleanOrphanedLocks(store, dir);
     return swept;
+}
+
+// Lock files probes and dead owners leave behind: once a row is terminal it
+// is never probed again, so its file would otherwise sit in data/leases
+// forever. Best-effort tidiness — a failure here costs nothing but litter.
+function cleanOrphanedLocks(store: ReviewStore, dir: string): void
+{
+    attempt(() =>
+    {
+        const open = new Set(store.openCampaigns().map(c => Number(c.id)));
+        for (const file of readdirSync(dir))
+        {
+            const match = /^campaign-(\d+)\.lock$/.exec(file);
+            if (match !== null && !open.has(Number(match[1])))
+            {
+                attempt(() => rmSync(join(dir, file), { force: true }));
+            }
+        }
+    });
+}
+
+// SQLITE_BUSY (5) and SQLITE_LOCKED (6) are proof of life; any other
+// definite code is a broken lock file; an error carrying no code is not
+// judged either way.
+function classifyProbeError(error: unknown): 'busy' | 'broken' | 'unknown'
+{
+    const errcode = (error as { errcode?: unknown }).errcode;
+    if (typeof errcode !== 'number')
+    {
+        return 'unknown';
+    }
+    return errcode === 5 || errcode === 6 ? 'busy' : 'broken';
+}
+
+function describeError(error: unknown): string
+{
+    return error instanceof Error ? error.message : String(error);
 }
 
 // Best-effort wrapper for the lock-file plumbing: undefined is the only

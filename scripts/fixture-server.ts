@@ -169,7 +169,9 @@ store.finishCampaign(campaign, 'max-runs');
 // A CLI-shaped campaign: a running record with no job carrying it (round 1
 // still in flight, nothing appended yet). This is what the sheet's
 // campaign-record liveness path renders — pulses and gates without any job.
-store.createCampaign({ owner: 'acme', repo: 'gadgets', head: 'feature/uploads', base: 'develop' });
+// Marked leased, the normal healthy shape (unproven rows render the
+// force-fail hint instead).
+store.markCampaignLeased(store.createCampaign({ owner: 'acme', repo: 'gadgets', head: 'feature/uploads', base: 'develop' }));
 
 // ── a queue in every state ──────────────────────────────
 const done = jobs.enqueue({ kind: 'campaign', ...target, params: { maxRuns: 5, verify: true } });

@@ -239,6 +239,10 @@ export const campaignSummarySchema = z.object({
     target: z.string(),
     status: z.enum(['running', 'verifying', 'finished', 'failed']),
     stoppedBy: stoppedBySchema.optional(),
+    // false on a live row = liveness unprovable: the loop never proved it
+    // holds the lease, the sweep refuses to judge it, and only an operator
+    // force-fail can retire it — the UI must be able to say so.
+    leased: z.boolean(),
     roundCount: z.number().int(),
     reviewCostUsd: z.number(),
 }) satisfies z.ZodType<CampaignSummary>;
@@ -253,6 +257,7 @@ const campaignCommon = {
     head: z.string(),
     base: z.string(),
     baselineConsolidationId: toTypedId(consolidationId).optional(),
+    leased: z.boolean(),
     rounds: z.array(campaignRoundSchema),
 };
 

@@ -8,10 +8,12 @@ import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
 import { sweepInterruptedCampaigns } from '../store/lease.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
+import { campaignId } from '../types/ids.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
-    + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]';
+    + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]\n'
+    + '       npm run campaign -- --force-fail <campaign-id>   (retire a wedged live record)';
 
 const DEFAULT_MAX_RUNS = 3;
 
@@ -129,9 +131,40 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
     }
 }
 
+// The operator's way out of a wedged record: a live row whose liveness is
+// unprovable (never leased, or a broken lock file) is deliberately never
+// swept, but it holds the duplicate-campaign gates shut — this is the only
+// write that can retire it. failCampaign's own guard refuses terminal rows,
+// so the command cannot rewrite history.
+function forceFail(raw: string | undefined): number
+{
+    const n = Number(raw);
+    if (raw === undefined || !Number.isInteger(n) || n < 1)
+    {
+        throw new Error(`--force-fail needs a campaign id.\n${USAGE}`);
+    }
+    const store = new ReviewStore(DEFAULT_DB_PATH);
+    try
+    {
+        store.failCampaign(campaignId(n), 'Manually failed: operator force-fail — the record was wedged or could not close on its own.');
+        console.log(`campaign #${n} marked failed — its rounds survive`);
+        return 0;
+    }
+    finally
+    {
+        store.close();
+    }
+}
+
 async function main(): Promise<number>
 {
-    const args = parseArgs(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    const forceFailAt = argv.indexOf('--force-fail');
+    if (forceFailAt !== -1)
+    {
+        return forceFail(argv[forceFailAt + 1]);
+    }
+    const args = parseArgs(argv);
     const model = process.env.REVIEW_MODEL ?? 'claude-opus-5';
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);

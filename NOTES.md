@@ -325,6 +325,35 @@ the dashboard's 3s poll; the activity log height is fixed, not capped,
 so the no-shift claim holds from line one; and the vacuous mid-loop lease
 test now disables the grace window so it tests the lease.
 
+**Campaigns #4–5 (fix-round-two head) and the third fix round.** 6 runs
+($15.84), 15 findings, 8/8 once-seen CONFIRMED; the estimate stayed high
+(~16 of ~31) because each fix round is its own fresh population — the
+churn signal, not a bottomless branch. The round: **the duplicate-campaign
+gate moved to the spending door** — runCampaign itself refuses when a live
+record exists for the target (CLI exits 1, worker fails the job; the UI
+gate is now advisory), closing the two-terminals double-bill. **Liveness
+provability inverted to fail-safe**: rows are born `leased = 0` and marked
+only after acquisition succeeds, so a crash in the create→acquire gap is
+unsweepable instead of sweepable-while-alive; `leased` is surfaced on the
+entity/summary so the UI can say "reads running but liveness is
+unprovable". **The operator escape hatch exists**: `npm run campaign --
+--force-fail <id>` retires a wedged live row (the store guard still
+refuses terminal rows) — without it, an unprovable row wedged every
+billing gate on its target forever, and now also the door gate. Probe
+errors classify by SQLite errcode (5/6 = busy = alive; verified
+empirically that node:sqlite sets errcode), never by message shape — a
+regex miss would have advised deleting a LIVE campaign's lock file. The
+sweep's cause names its own uncertainty ("owner died, or finished without
+closing its record"), reports failCampaign refusals, and tidies orphaned
+lock files of terminal rows. Mission control's campaign read got the same
+isolation the sheet's had (one bad row 500-ing /campaigns blanked the
+whole poll); baseline/round writes joined the changes-guard discipline
+(the round INSERT carries its own EXISTS-status guard); onCampaign moved
+inside the try that guarantees fail-and-release. Accepted with rationale
+rather than changed: the sheet's target-scoped campaign list (bounded by
+one target's history) and campaign_rounds keeping its original DDL (never
+changed since birth; its own migration when it does).
+
 Remaining roadmap (sequencing user-confirmed): deploy (webhooks may replace
 polling then; needs server auth first). Eventually: read→write promotion
 (posting findings to PRs) — a deliberate, separately-decided step with its
@@ -656,7 +685,9 @@ base rules. Still open (deliberately deferred):
   endpoint after verdicts — revoking spend is the inverse of ▶ release.
   To settle when built: skip verification on abort (default yes — the
   click said "stop spending"; verify stays one click away); hard kills
-  stay the lease sweep's job, not this flag's.
+  stay the lease sweep's job, not this flag's. The CLI half-sibling
+  already exists: `--force-fail <id>` retires a wedged record (but does
+  not stop a live loop — that is exactly what the flag adds).
 - Judge golden set is a single fixture — grow it as human-verified
   consolidations accumulate (`npm run eval:freeze`).
 - **Areas to explore (finding presentation, unscheduled):**
