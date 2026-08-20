@@ -223,7 +223,7 @@ const runningCampaigns = computed(() => campaigns.value.filter(c => c.status ===
 
         <main>
             <div class="col">
-                <QueuePanel :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
+                <QueuePanel :jobs="jobs" :running-campaigns="runningCampaigns" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
                 <NewJobForm @enqueue="enqueue" />
             </div>
             <div class="col side">
