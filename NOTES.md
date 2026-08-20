@@ -354,6 +354,21 @@ rather than changed: the sheet's target-scoped campaign list (bounded by
 one target's history) and campaign_rounds keeping its original DDL (never
 changed since birth; its own migration when it does).
 
+**Run 60 (single-review tripwire) and the merge stopping rule.** After
+three fix rounds the meta-loop needed a terminator: a single released
+review ($3.16) with the decision pre-made — nit-only → merge; warning+ →
+one targeted fix, then merge with the rest as follow-ups. It found 2
+warnings + 3 nits. Fixed: `classifyProbeError` masks EXTENDED result
+codes to the primary byte (node:sqlite reports sqlite3_extended_errcode —
+SQLITE_BUSY_SNAPSHOT is 517, and unmasked it took the "broken" path and
+its delete-a-live-lock advice); and the duplicate gate became atomic by
+moving INTO `createCampaign` under BEGIN IMMEDIATE with a typed
+`DuplicateCampaignError` that escapes the recorder's observational guard
+— policy throws, persistence warns — closing the check-then-act window
+the pre-check version had (and enforcing one live campaign per target at
+the store level, which the tests now respect). Remaining nits logged
+above.
+
 Remaining roadmap (sequencing user-confirmed): deploy (webhooks may replace
 polling then; needs server auth first). Eventually: read→write promotion
 (posting findings to PRs) — a deliberate, separately-decided step with its
@@ -666,6 +681,17 @@ base rules. Still open (deliberately deferred):
 - A standing watch exists on this repo (label `agent-review`): any labeled
   PR gets auto-reviewed whenever the server runs. Deliberate — remove via
   DELETE /watches if unwanted.
+- **Run-60 follow-ups (nit-grade, logged per the merge stopping rule):**
+  a campaign finishing between `openCampaigns()` and the sweep's probe
+  produces an alarming "could not be marked failed" warning for a healthy
+  outcome — detect the guard-refusal case and stay quiet or say "finished
+  normally mid-sweep"; and `leaseDir` derives from the database's
+  *directory*, so two ReviewStore databases in one directory would share a
+  lock namespace and `cleanOrphanedLocks` could delete a neighbour's live
+  lock — derive it from the filename (e.g. `reviews.db.leases/`) if a
+  second store ever shares a directory. Fixed from the same review, beyond
+  the two warnings: `--force-fail` honored only as the leading argument (a
+  destructive flag must be the whole command, not a stray rider).
 - **Stale-tab OFFLINE costume (user-felt, unscheduled).** A long-lived
   dashboard tab keeps polling with its old bundle; when the server starts
   sending a value the old wire schema doesn't know (seen live 2026-08-20:

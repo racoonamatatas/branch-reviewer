@@ -159,10 +159,12 @@ function forceFail(raw: string | undefined): number
 async function main(): Promise<number>
 {
     const argv = process.argv.slice(2);
-    const forceFailAt = argv.indexOf('--force-fail');
-    if (forceFailAt !== -1)
+    // Honored only as the leading argument: a destructive write must be the
+    // whole command, never a stray flag that silently hijacks a campaign
+    // request it happens to ride along with (run-60 finding).
+    if (argv[0] === '--force-fail')
     {
-        return forceFail(argv[forceFailAt + 1]);
+        return forceFail(argv[1]);
     }
     const args = parseArgs(argv);
     const model = process.env.REVIEW_MODEL ?? 'claude-opus-5';

@@ -15,7 +15,7 @@ import { coverageOf, novelClusters, shouldContinue } from '../coverage/coverage.
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
-import { ReviewStore } from '../store/store.js';
+import { DuplicateCampaignError, ReviewStore } from '../store/store.js';
 import type { Consolidation, StoppedBy } from '../store/store.js';
 import type { CampaignId, ConsolidationId, RunId } from '../types/ids.js';
 import { verifyPending } from '../verify/verify.js';
@@ -94,21 +94,12 @@ export async function runCampaign(
     opts: CampaignOptions,
 ): Promise<CampaignResult>
 {
-    // The duplicate gate at the spending door itself, not just on dashboard
-    // buttons: two loops on one target double-bill it, whichever doors they
-    // entered through (CLI, released job, or one of each). Store-level and
-    // shared by both callers — the worker maps the throw to a failed job,
-    // the CLI to exit 1. A wedged live row (liveness unprovable) blocks
-    // this too; the operator's way out is `--force-fail <id>`.
-    const alreadyLive = store.listCampaigns(target, { liveOnly: true })[0];
-    if (alreadyLive !== undefined)
-    {
-        throw new Error(`Campaign #${alreadyLive.id} is already ${alreadyLive.status} for this target — a second loop would double-bill it. `
-            + (alreadyLive.leased
-                ? 'Wait for it to finish, or investigate why it is stuck.'
-                : `Its liveness is unprovable (never leased); if it is dead, retire it with: npm run campaign -- --force-fail ${alreadyLive.id}`));
-    }
-
+    // The duplicate gate lives inside createCampaign (atomic under SQLite's
+    // writer lock — a pre-check here was check-then-act, run-60 finding) and
+    // its typed refusal escapes the recorder's observational guard: the
+    // worker maps the throw to a failed job, the CLI to exit 1, and no
+    // credit moves. A wedged live row (liveness unprovable) blocks this
+    // too; the operator's way out is `--force-fail <id>`.
     const reviewTarget = { base: target.base, head: target.head };
     const rounds: RoundOutcome[] = [];
     let reviewCostUsd = 0;
@@ -348,9 +339,22 @@ class CampaignRecorder
     {
     }
 
+    // Throws DuplicateCampaignError — the one store answer that is policy,
+    // not persistence, and must stop the loop rather than degrade it.
     create(target: CampaignTarget): CampaignId | undefined
     {
-        this.id = this.guarded('create the campaign record', () => this.store.createCampaign(target));
+        try
+        {
+            this.id = this.store.createCampaign(target);
+        }
+        catch (error)
+        {
+            if (error instanceof DuplicateCampaignError)
+            {
+                throw error;
+            }
+            this.emitWarning(`could not create the campaign record: ${error instanceof Error ? error.message : String(error)}`);
+        }
         const id = this.id;
         if (id !== undefined)
         {

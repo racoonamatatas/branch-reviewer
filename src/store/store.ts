@@ -240,6 +240,25 @@ export interface CampaignSummary extends Pick<CampaignBase, 'id' | 'createdAt' |
     reviewCostUsd: number;  // sum of round costs; verification bills to the consolidation's clusters, not here
 }
 
+// The duplicate gate's refusal, typed so the campaign recorder can tell
+// policy from persistence: this one error must escape the observational
+// write-guard and stop the loop before credit moves — a swallowed gate
+// would run the duplicate loop it exists to prevent, just unrecorded.
+export class DuplicateCampaignError extends Error
+{
+    constructor(
+        public readonly campaignId: CampaignId,
+        status: Campaign['status'],
+        leased: boolean,
+    )
+    {
+        super(`Campaign #${campaignId} is already ${status} for this target — a second loop would double-bill it. `
+            + (leased
+                ? 'Wait for it to finish, or investigate why it is stuck.'
+                : `Its liveness is unprovable (never leased); if it is dead, retire it with: npm run campaign -- --force-fail ${campaignId}`));
+    }
+}
+
 // A defect's stable identity across consolidations. Cluster rows are one
 // judge call's opinion and get new ids every time the same runs are
 // re-clustered; the set of findings they group does not. Sorted so two
@@ -1002,16 +1021,47 @@ export class ReviewStore
     // A campaign row exists before its first round: the loop is visible as a
     // campaign from the moment it starts, not once it has something to show —
     // CLI campaigns rendered as "no campaign yet" mid-loop until this landed.
+    // Creation IS the duplicate gate, and it is atomic: BEGIN IMMEDIATE
+    // takes SQLite's single writer lock across processes, so two loops
+    // entering the same millisecond serialize here — the second sees the
+    // first's row and gets the typed refusal, never a duplicate billing
+    // loop (a bare pre-check in the caller was check-then-act, run-60
+    // finding). leased is written explicitly, never left to the column
+    // default: a row born claiming a provable lease it does not hold yet
+    // would make a crash in the create→acquire gap sweepable while
+    // possibly alive — the unsafe direction.
     createCampaign(campaign: NewCampaign): CampaignId
     {
-        // leased is written explicitly, never left to the column default: a
-        // row born claiming a provable lease it does not hold yet would make
-        // a crash in the create→acquire gap sweepable while possibly alive —
-        // the unsafe direction (campaign #4/#5 finding, confirmed).
-        const result = this.db.prepare(
-            'INSERT INTO campaigns (created_at, owner, repo, head, base, leased) VALUES (?, ?, ?, ?, ?, 0)',
-        ).run(new Date().toISOString(), campaign.owner, campaign.repo, campaign.head, campaign.base);
-        return campaignId(Number(result.lastInsertRowid));
+        this.db.exec('BEGIN IMMEDIATE');
+        try
+        {
+            const live = this.db.prepare(
+                `SELECT id, status, leased FROM campaigns
+                 WHERE owner = ? AND repo = ? AND head = ? AND base = ? AND status IN ('running', 'verifying')
+                 LIMIT 1`,
+            ).get(campaign.owner, campaign.repo, campaign.head, campaign.base) as unknown as { id: number; status: string; leased: number } | undefined;
+            if (live !== undefined)
+            {
+                throw new DuplicateCampaignError(campaignId(live.id), campaignStatus(live.id, live.status), live.leased === 1);
+            }
+            const result = this.db.prepare(
+                'INSERT INTO campaigns (created_at, owner, repo, head, base, leased) VALUES (?, ?, ?, ?, ?, 0)',
+            ).run(new Date().toISOString(), campaign.owner, campaign.repo, campaign.head, campaign.base);
+            this.db.exec('COMMIT');
+            return campaignId(Number(result.lastInsertRowid));
+        }
+        catch (error)
+        {
+            try
+            {
+                this.db.exec('ROLLBACK');
+            }
+            catch
+            {
+                // No transaction to roll back — the BEGIN itself failed.
+            }
+            throw error;
+        }
     }
 
     recordCampaignBaseline(id: CampaignId, consolidation: ConsolidationId): void

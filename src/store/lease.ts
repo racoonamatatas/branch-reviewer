@@ -188,7 +188,11 @@ function cleanOrphanedLocks(store: ReviewStore, dir: string): void
 
 // SQLITE_BUSY (5) and SQLITE_LOCKED (6) are proof of life; any other
 // definite code is a broken lock file; an error carrying no code is not
-// judged either way.
+// judged either way. node:sqlite reports EXTENDED result codes
+// (sqlite3_extended_errcode — SQLITE_BUSY_SNAPSHOT is 517, not 5), and the
+// primary code lives in the low byte, so it is masked out before comparing:
+// an unmasked check would send a live row's busy down the "broken" path
+// and its delete advice.
 function classifyProbeError(error: unknown): 'busy' | 'broken' | 'unknown'
 {
     const errcode = (error as { errcode?: unknown }).errcode;
@@ -196,7 +200,8 @@ function classifyProbeError(error: unknown): 'busy' | 'broken' | 'unknown'
     {
         return 'unknown';
     }
-    return errcode === 5 || errcode === 6 ? 'busy' : 'broken';
+    const primary = errcode & 0xff;
+    return primary === 5 || primary === 6 ? 'busy' : 'broken';
 }
 
 function describeError(error: unknown): string

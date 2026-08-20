@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import type { RoundOutcome } from '../../src/campaign/campaign.js';
-import { ReviewStore } from '../../src/store/store.js';
+import { DuplicateCampaignError, ReviewStore } from '../../src/store/store.js';
 import type { CampaignRound, NewRun } from '../../src/store/store.js';
 import { campaignId } from '../../src/types/ids.js';
 import type { CampaignId, ConsolidationId, RunId } from '../../src/types/ids.js';
@@ -186,11 +186,12 @@ describe('ReviewStore campaigns', () =>
 
     it('should record the baseline consolidation only while running', () =>
     {
-        // Arrange
+        // Arrange: done first, then running — the create gate allows one
+        // live campaign per target at a time.
         const { consolidationId } = storedConsolidation();
-        const running = store.createCampaign(target);
         const done = store.createCampaign(target);
         store.finishCampaign(done, 'dry');
+        const running = store.createCampaign(target);
 
         // Act
         store.recordCampaignBaseline(running, consolidationId);
@@ -363,11 +364,12 @@ describe('ReviewStore campaigns', () =>
 
     it('should list only live campaigns when asked: the poll must not aggregate history', () =>
     {
-        // Arrange
+        // Arrange: live rows on distinct targets — the create gate allows
+        // one live campaign per target.
         const done = store.createCampaign(target);
         store.finishCampaign(done, 'dry');
         const running = store.createCampaign(target);
-        const verifying = store.createCampaign(target);
+        const verifying = store.createCampaign({ ...target, head: 'feature-y' });
         store.beginCampaignVerification(verifying, 'max-runs');
 
         // Act
@@ -375,6 +377,17 @@ describe('ReviewStore campaigns', () =>
 
         // Assert: both live phases, newest first, the finished row absent.
         expect(live.map(c => c.id)).toEqual([verifying, running]);
+    });
+
+    it('should refuse to create a second live campaign for a target: the gate is the INSERT itself', () =>
+    {
+        // Arrange
+        const first = store.createCampaign(target);
+
+        // Act + Assert: typed refusal while live, allowed again once closed.
+        expect(() => store.createCampaign(target)).toThrow(DuplicateCampaignError);
+        store.finishCampaign(first, 'dry');
+        expect(() => store.createCampaign(target)).not.toThrow();
     });
 
     it('should brand campaign ids at the type level', () =>
