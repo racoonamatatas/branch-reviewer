@@ -136,7 +136,7 @@ target is exactly when a campaign is most wanted. The consolidate CLI now
 accepts a single run (`< 2` guard relaxed): verification hangs off clusters,
 so clustering one run is how its findings become verifiable — campaign
 already produced single-run consolidations after round 1. The path is
-proven: run #14 (target-org/target-repo PR 1909) consolidated alone and
+proven: run #14 (a real PR on the target repo) consolidated alone and
 verified 5/5 clusters — 4 confirmed, 1 undetermined ($3.26).
 
 Chunk-7 (human verdicts — the first write endpoint, deliberately decided):
