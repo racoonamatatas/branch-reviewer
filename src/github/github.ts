@@ -109,6 +109,15 @@ export class GitHubClient implements RepoClient, PullSource
             // 'empty', job succeeded, head SHA never re-enqueued), so an
             // unreviewed branch would vanish without a failure signal.
             // Throwing fails the run/job loudly and leaves it retryable.
+            // Only page 1 can mean that: `per_page` pages commits, not files,
+            // so a 120-file compare lists all 120 on page 1 and page 2 drops
+            // the key — a missing list past page 1 is the end of it (found
+            // live: the first campaign on a 114-commit history failed two
+            // rounds in two seconds, no credit spent).
+            if (data.files === undefined && page > 1)
+            {
+                break;
+            }
             if (data.files === undefined)
             {
                 throw new Error(`GitHub omitted the files list for ${base}...${head} (comparison too large to enumerate?) — cannot distinguish this from an empty diff, refusing to report one.`);

@@ -184,4 +184,25 @@ describe('compare', () =>
         await expect(new GitHubClient('acme', 'widgets').compare('main', 'feature-x'))
             .rejects.toThrow('omitted the files list');
     });
+
+    it('should return every file when page 1 holds 100+ files and page 2 omits the files list', async () =>
+    {
+        // Arrange: the live shape from a 120-file compare — `per_page` pages
+        // commits, not files, so page 1 lists all 120 and page 2 carries no
+        // `files` key at all.
+        const files = Array.from({ length: 120 }, (_, i) =>
+            ({ filename: `f${i}.ts`, status: 'added', additions: 1, deletions: 0 }));
+        vi.stubGlobal('fetch', vi.fn(async (url: string | URL) =>
+        {
+            const page = Number(new URL(String(url)).searchParams.get('page'));
+            const body = page === 1 ? { files } : { total_commits: 114 };
+            return new Response(JSON.stringify(body), { status: 200 });
+        }));
+
+        // Act
+        const result = await new GitHubClient('acme', 'widgets').compare('main', 'feature-x');
+
+        // Assert
+        expect(result).toHaveLength(120);
+    });
 });
