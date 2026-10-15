@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GitHubClient } from '../../src/github/github.js';
 
-// compare and readFile are the verbatim port from branch-reviewer-api and
-// deliberately stay untouched (and untested here); listOpenPulls and
-// listFiles are this project's own additions.
+// readFile stays the untested verbatim port from branch-reviewer-api;
+// listOpenPulls and listFiles are this project's own additions. compare() is
+// tested only where it deliberately diverges from the port: the
+// omitted-`files` guard (an empty diff is a terminal success downstream, so
+// a truncated compare payload must throw, never read as one).
 
 function rawPull(number: number, overrides: Record<string, unknown> = {}): Record<string, unknown>
 {
@@ -152,5 +154,34 @@ describe('listFiles', () =>
 
         // Assert
         expect(result.truncated).toBe(true);
+    });
+});
+
+describe('compare', () =>
+{
+    function stubCompare(body: unknown): void
+    {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+    }
+
+    it('should return an empty list for a compare that enumerates zero files', async () =>
+    {
+        // Arrange: `files: []` present — GitHub verified the diff is empty.
+        stubCompare({ files: [] });
+
+        // Act + Assert
+        await expect(new GitHubClient('acme', 'widgets').compare('main', 'feature-x')).resolves.toEqual([]);
+    });
+
+    it('should throw when GitHub omits the files list instead of reporting an empty diff', async () =>
+    {
+        // Arrange: no `files` key at all — the oversized-comparison shape.
+        stubCompare({ total_commits: 3 });
+
+        // Act + Assert: downstream treats an empty diff as terminal success
+        // (status 'empty', job succeeded, SHA never re-enqueued), so this
+        // must fail loudly and stay retryable.
+        await expect(new GitHubClient('acme', 'widgets').compare('main', 'feature-x'))
+            .rejects.toThrow('omitted the files list');
     });
 });

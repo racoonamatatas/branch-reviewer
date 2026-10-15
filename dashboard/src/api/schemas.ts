@@ -15,10 +15,11 @@ import type { Job, JobState, JobSummary } from '@server/server/jobs';
 import type { ClusterDetail, ConsolidationDetail } from '@server/server/server';
 import type { Watch } from '@server/server/trigger';
 import type {
-    ConsolidationSummary, Finding, RunSummary, TargetSummary, Verification, VerificationStatus,
+    Campaign, CampaignRound, CampaignSummary, ConsolidationSummary, Finding, RunSummary,
+    StoppedBy, TargetSummary, Verification, VerificationStatus,
 } from '@server/store/store';
 import {
-    clusterId, consolidationId, findingId, jobId, runId, toTypedId, verificationId, watchId,
+    campaignId, clusterId, consolidationId, findingId, jobId, runId, toTypedId, verificationId, watchId,
 } from '@server/types/ids';
 
 const severitySchema = z.enum(['critical', 'warning', 'nit']) satisfies z.ZodType<Severity>;
@@ -121,12 +122,14 @@ export const targetSummarySchema = z.object({
 export const runSummarySchema = z.object({
     id: toTypedId(runId),
     createdAt: z.string(),
-    status: z.enum(['submitted', 'aborted']),
+    // 'empty': the compare listed no files, no model ran — its own status,
+    // never a submitted review with zero findings.
+    status: z.enum(['submitted', 'aborted', 'empty']),
     turns: z.number().int(),
     costUsd: z.number(),
     target: z.string(),
     findingsCount: z.number().int(),
-    // Absent on runs saved before the column existed; 0 is the empty-diff tell.
+    // Absent on runs saved before the column existed.
     filesChanged: z.number().int().optional(),
 }) satisfies z.ZodType<RunSummary>;
 
@@ -219,3 +222,66 @@ export const coverageSchema = z.object({
     undiscovered: z.number().int(),
     estimatedTotal: z.number().int(),
 }) satisfies z.ZodType<Coverage>;
+
+const stoppedBySchema = z.enum(['dry', 'max-runs', 'no-usable-runs', 'empty-diff', 'no-consolidation', 'stopped']) satisfies z.ZodType<StoppedBy>;
+
+// A round is the loop's own snapshot — coverage rides along whole because a
+// later estimator tweak must not rewrite what the campaign saw when it
+// decided to stop.
+const campaignRoundSchema = z.object({
+    round: z.number().int(),
+    runId: toTypedId(runId).optional(),
+    lens: z.string().optional(),
+    model: z.string().optional(),
+    findings: z.number().int(),
+    turns: z.number().int(),
+    costUsd: z.number(),
+    aborted: z.string().optional(),
+    failed: z.string().optional(),
+    consolidationFailed: z.string().optional(),
+    consolidationId: toTypedId(consolidationId).optional(),
+    coverage: coverageSchema.optional(),
+    novelClusters: z.number().int(),
+}) satisfies z.ZodType<CampaignRound>;
+
+export const campaignSummarySchema = z.object({
+    id: toTypedId(campaignId),
+    createdAt: z.string(),
+    owner: z.string(),
+    repo: z.string(),
+    head: z.string(),
+    base: z.string(),
+    target: z.string(),
+    status: z.enum(['running', 'verifying', 'finished', 'failed']),
+    stoppedBy: stoppedBySchema.optional(),
+    // false on a live row = liveness unprovable: the loop never proved it
+    // holds the lease, the sweep refuses to judge it, and only an operator
+    // force-fail can retire it — the UI must be able to say so.
+    leased: z.boolean(),
+    roundCount: z.number().int(),
+    reviewCostUsd: z.number(),
+}) satisfies z.ZodType<CampaignSummary>;
+
+// Status mirrors the server's union: a finished campaign always knows why it
+// stopped, a failed one always carries its error, a running one claims neither.
+const campaignCommon = {
+    id: toTypedId(campaignId),
+    createdAt: z.string(),
+    owner: z.string(),
+    repo: z.string(),
+    head: z.string(),
+    base: z.string(),
+    baselineConsolidationId: toTypedId(consolidationId).optional(),
+    leased: z.boolean(),
+    rounds: z.array(campaignRoundSchema),
+};
+
+export const campaignSchema = z.discriminatedUnion('status', [
+    z.object({ ...campaignCommon, status: z.literal('running') }),
+    // 'verifying': the loop is over (stoppedBy is already durable) but the
+    // adversarial passes are still billing — a live phase, not a terminal one.
+    z.object({ ...campaignCommon, status: z.literal('verifying'), stoppedBy: stoppedBySchema }),
+    z.object({ ...campaignCommon, status: z.literal('finished'), stoppedBy: stoppedBySchema, finishedAt: z.string() }),
+    // stoppedBy present exactly when the failure hit during verification.
+    z.object({ ...campaignCommon, status: z.literal('failed'), error: z.string(), stoppedBy: stoppedBySchema.optional(), finishedAt: z.string() }),
+]) satisfies z.ZodType<Campaign>;

@@ -32,6 +32,9 @@ export const clusterId = idConstructor<'Cluster'>('ClusterId');
 export type VerificationId = Id<'Verification'>;
 export const verificationId = idConstructor<'Verification'>('VerificationId');
 
+export type CampaignId = Id<'Campaign'>;
+export const campaignId = idConstructor<'Campaign'>('CampaignId');
+
 export type JobId = Id<'Job'>;
 export const jobId = idConstructor<'Job'>('JobId');
 

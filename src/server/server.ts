@@ -13,7 +13,7 @@ import type { Coverage } from '../coverage/coverage.js';
 import type { EventLog, PollStatus } from './events.js';
 import type { Cluster, Consolidation, ReviewStore, TargetFilter, Verification } from '../store/store.js';
 import type { Id } from '../types/common.js';
-import { clusterId, consolidationId, jobId, runId, watchId } from '../types/ids.js';
+import { campaignId, clusterId, consolidationId, jobId, runId, watchId } from '../types/ids.js';
 import type { ClusterId, JobId, WatchId } from '../types/ids.js';
 import { campaignJobParamsSchema, reviewJobParamsSchema, verifyJobParamsSchema } from './jobs.js';
 import type { JobStore } from './jobs.js';
@@ -259,7 +259,7 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
         const query = parseTargetFilter(url);
         return query.ok
             ? json(res, 200, { runs: deps.store.listRuns(query.filter) })
-            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+            : json(res, 400, { error: FILTER_400 });
     }
 
     // A run's own findings, ids and provenance included — the dashboard's
@@ -275,12 +275,38 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
             : json(res, 200, { findings: deps.store.getFindings(id) });
     }
 
+    // ?live=1 bounds the aggregate to running/verifying rows — the
+    // dashboard's per-poll question, asked every 3 seconds, must not join
+    // every campaign ever stored to be answered.
+    if (path === '/campaigns' && req.method === 'GET')
+    {
+        const query = parseTargetFilter(url);
+        const live = url.searchParams.get('live') === '1';
+        return query.ok
+            ? json(res, 200, { campaigns: deps.store.listCampaigns(query.filter, { liveOnly: live }) })
+            : json(res, 400, { error: FILTER_400 });
+    }
+
+    // The whole record, rounds included — as-it-happened snapshots, so the
+    // dashboard's loop band can answer "what did the campaign see when it
+    // decided to stop" instead of re-deriving from a partition that may have
+    // moved on.
+    const campaignDetail = /^\/campaigns\/(\d+)$/.exec(path);
+    if (campaignDetail !== null && req.method === 'GET')
+    {
+        const id = parseId(campaignDetail[1], campaignId);
+        const campaign = id === undefined ? undefined : deps.store.getCampaign(id);
+        return campaign === undefined
+            ? json(res, 404, { error: 'No such campaign.' })
+            : json(res, 200, { campaign });
+    }
+
     if (path === '/consolidations' && req.method === 'GET')
     {
         const query = parseTargetFilter(url);
         return query.ok
             ? json(res, 200, { consolidations: deps.store.listConsolidations(query.filter) })
-            : json(res, 400, { error: 'Filtering needs owner, repo, and head together.' });
+            : json(res, 400, { error: FILTER_400 });
     }
 
     const detail = /^\/consolidations\/(\d+)$/.exec(path);
@@ -316,22 +342,30 @@ async function route(deps: ServerDeps, req: IncomingMessage, res: ServerResponse
     json(res, 404, { error: 'No such route.' });
 }
 
+// One string, used by every filtered route: the 400 must describe every
+// rejection parseTargetFilter produces, base rules included.
+const FILTER_400 = 'Filtering needs owner, repo, and head together, all non-empty; base is optional but must be non-empty and ride on the full triple.';
+
 // The target filter is all-or-nothing (see TargetFilter): a partial triple
-// is a caller mistake, not a broader query.
+// is a caller mistake, not a broader query, and a present-but-empty value
+// is rejected the same way — an empty string pins to a target that cannot
+// exist. base rides optionally on top of a complete triple: it pins the
+// comparison, it never widens the query, so a lone base is rejected too.
 function parseTargetFilter(url: URL): { ok: true; filter: TargetFilter | undefined } | { ok: false }
 {
     const owner = url.searchParams.get('owner');
     const repo = url.searchParams.get('repo');
     const head = url.searchParams.get('head');
+    const base = url.searchParams.get('base');
     if (owner === null && repo === null && head === null)
     {
-        return { ok: true, filter: undefined };
+        return base === null ? { ok: true, filter: undefined } : { ok: false };
     }
-    if (owner === null || repo === null || head === null)
+    if (owner === null || owner === '' || repo === null || repo === '' || head === null || head === '' || base === '')
     {
         return { ok: false };
     }
-    return { ok: true, filter: { owner, repo, head } };
+    return { ok: true, filter: { owner, repo, head, ...(base !== null ? { base } : {}) } };
 }
 
 // Assembled per request: cluster counts are small and the store is

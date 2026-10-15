@@ -238,8 +238,11 @@ async function judgeOnce(prompt: string, opts: ClusteringOptions): Promise<Judge
             // Not 1: Sonnet answers and then hands back structured output in
             // a second round-trip, so a cap of 1 aborted every judge call the
             // moment the judge moved off Opus (caught live by the first
-            // rotating campaign; deterministic in the CLI). tools: [] is
-            // what bounds this loop — the cap is just a backstop.
+            // rotating campaign; deterministic in the CLI), and a harness
+            // retry of a truncated first attempt needs the same headroom (a
+            // 1-turn budget aborted a real judge call clustering 12 findings,
+            // 2026-08-19). tools: [] is what bounds this loop — the cap is
+            // just a backstop.
             maxTurns: 4,
             tools: [],
             outputFormat: { type: 'json_schema', schema: clusterResponseJsonSchema },

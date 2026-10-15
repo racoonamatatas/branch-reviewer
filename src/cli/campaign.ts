@@ -8,13 +8,16 @@ import type { Target } from '../types/target.js';
 import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
 import { judgeModel, reviewModels, verifyModel } from '../sdk/models.js';
+import { sweepInterruptedCampaigns } from '../store/lease.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
+import { campaignId } from '../types/ids.js';
 import { requirePositiveInt, requireValue, runMain } from './main.js';
 import { printConsolidation, printVerdictProgress } from './render.js';
 
 const USAGE = 'Usage: npm run campaign -- <owner>/<repo> <branch> '
     + '[--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify]'
-    + ' [--verify-all] [--models a,b] [--no-lenses]';
+    + ' [--verify-all] [--models a,b] [--no-lenses]\n'
+    + '       npm run campaign -- --force-fail <campaign-id>   (retire a wedged live record)';
 
 const DEFAULT_MAX_RUNS = 3;
 
@@ -122,6 +125,8 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
         'dry': 'discovery dried up',
         'max-runs': `run cap reached (${args.maxRuns})`,
         'no-usable-runs': 'consecutive runs aborted',
+        'empty-diff': 'the compare listed no files — nothing to sample',
+        'no-consolidation': 'consecutive judge calls failed — union unusable',
         // The CLI wires no stop signal (Ctrl-C kills the process outright);
         // only the server path can produce this.
         'stopped': 'stopped by shutdown',
@@ -143,14 +148,63 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
     }
 }
 
+// The operator's way out of a wedged record: a live row whose liveness is
+// unprovable (never leased, or a broken lock file) is deliberately never
+// swept, but it holds the duplicate-campaign gates shut — this is the only
+// write that can retire it. failCampaign's own guard refuses terminal rows,
+// so the command cannot rewrite history.
+function forceFail(raw: string | undefined): number
+{
+    const n = Number(raw);
+    if (raw === undefined || !Number.isInteger(n) || n < 1)
+    {
+        throw new Error(`--force-fail needs a campaign id.\n${USAGE}`);
+    }
+    const store = new ReviewStore(DEFAULT_DB_PATH);
+    try
+    {
+        store.failCampaign(campaignId(n), 'Manually failed: operator force-fail — the record was wedged or could not close on its own.');
+        console.log(`campaign #${n} marked failed — its rounds survive`);
+        return 0;
+    }
+    finally
+    {
+        store.close();
+    }
+}
+
 async function main(): Promise<number>
 {
-    const args = parseArgs(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    // Honored only as the leading argument: a destructive write must be the
+    // whole command, never a stray flag that silently hijacks a campaign
+    // request it happens to ride along with (run-60 finding).
+    if (argv[0] === '--force-fail')
+    {
+        return forceFail(argv[1]);
+    }
+    const args = parseArgs(argv);
     // --models wins; otherwise REVIEW_MODELS (or the single reviewer model).
     // One entry means every round bills the same model, exactly as before.
     const models = args.models ?? reviewModels();
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);
+
+    // Writer-startup sweep: any live campaign whose liveness lease is
+    // acquirable lost its owner (the kernel released it on death) and gets
+    // its terminal state now, before this campaign adds a new running row.
+    // Guarded: maintenance must never block the campaign the user asked for.
+    try
+    {
+        for (const swept of sweepInterruptedCampaigns(store, { onWarning: message => console.error(`  sweep: ${message}`) }))
+        {
+            console.error(`campaign #${swept} was left running by a dead process; marked failed — its rounds survive`);
+        }
+    }
+    catch (error)
+    {
+        console.error(`campaign sweep failed (continuing): ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}"`);
     console.log(`models: review ${models.length > 1 ? `${models.join(' / ')} (rotating per round)` : models[0]}, `
@@ -172,6 +226,19 @@ async function main(): Promise<number>
             verifyAll: args.verifyAll,
             ...(args.patience !== undefined ? { patience: args.patience } : {}),
             ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
+            // No exit handlers: the record's liveness lease is released by
+            // the kernel on any death — Ctrl-C, SIGKILL, power loss alike —
+            // and the next writer startup (or the server's poll-interval
+            // sweep) marks the abandoned row failed. One mechanism, no
+            // signal-handler special cases.
+            onCampaign: (id) =>
+            {
+                console.log(`recorded as campaign #${id}\n`);
+            },
+            onWarning: (message) =>
+            {
+                console.error(`  warning: ${message}`);
+            },
             onBaseline: (id, coverage) =>
             {
                 console.log(`baseline from stored runs — consolidation #${id}: ${coverageLine(coverage)}\n`);
@@ -230,7 +297,8 @@ async function main(): Promise<number>
             printConsolidation(store.getConsolidation(campaign.consolidationId)!);
         }
 
-        const aborted = campaign.rounds.some(r => r.aborted !== undefined || r.failed !== undefined);
+        const aborted = campaign.rounds.some(r =>
+            r.aborted !== undefined || r.failed !== undefined || r.consolidationFailed !== undefined);
         const incomplete = (campaign.verification?.failures ?? 0) > 0;
         return aborted || incomplete ? 2 : 0;
     }

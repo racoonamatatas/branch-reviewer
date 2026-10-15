@@ -13,6 +13,12 @@ import type { Target } from '../types/target.js';
 // a campaign would have produced. The quad filter (base included) is pushed
 // into the store: a campaign re-reads this on every round, and pulling the
 // whole runs table to filter in JS grew with the database, not the target.
+// 'empty' runs never qualify by the status check alone: they are not
+// samples, and letting them in would inflate the verifier's "1 of N runs"
+// denominator and churn the runIds set that verifyTarget's reuse check
+// compares, forcing paid re-consolidations of unchanged findings. (The store
+// migrates old submitted + filesChanged 0 rows to 'empty', so no second tell
+// is needed here.)
 export function submittedRunsFor(store: ReviewStore, target: Target): Run[]
 {
     const runs: Run[] = [];

@@ -23,13 +23,13 @@ import type { Severity } from '@server/schema/schema';
 import type { JobSummary } from '@server/server/jobs';
 import type { ConsolidationDetail } from '@server/server/server';
 import type { Watch } from '@server/server/trigger';
-import type { ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
-import type { ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
+import type { Campaign, CampaignSummary, ConsolidationSummary, Finding, RunSummary } from '@server/store/store';
+import type { CampaignId, ClusterId, ConsolidationId, FindingId, JobId, RunId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest } from '../api/client';
 import { usd } from '../format';
 import BlueprintCallout from './blueprint/BlueprintCallout.vue';
-import type { CalloutSubject } from './blueprint/BlueprintCallout.vue';
+import type { ActionGate, CalloutSubject } from './blueprint/BlueprintCallout.vue';
 import BlueprintIntake from './blueprint/BlueprintIntake.vue';
 import LoopBand from './blueprint/LoopBand.vue';
 
@@ -57,6 +57,11 @@ interface Detail
 
 const runs = ref<RunSummary[]>([]);
 const consolidations = ref<ConsolidationSummary[]>([]);
+// The whole filtered list drives the gates (any live record must hold them
+// shut — an older campaign can still be billing after a newer one finished);
+// the newest record alone is only the loop band's display subject.
+const campaignSummaries = ref<CampaignSummary[]>([]);
+const campaign = ref<Campaign>();
 const detail = ref<Detail>();
 const connectionError = ref<string>();
 const actionError = ref<string>();
@@ -84,6 +89,10 @@ let refreshGeneration = 0;
 async function refresh(): Promise<void>
 {
     const generation = ++refreshGeneration;
+    // Deliberately the triple, not the quad: the sheet is keyed and routed by
+    // owner/repo/head, and a second base for the same head is rare enough
+    // that showing the union beats hiding a series the URL cannot reach.
+    // Revisit if the sheet is ever keyed by the full quad.
     const filter = { owner: props.owner, repo: props.repo, head: props.head };
     // The selected rev's detail re-fetches every cycle: a consolidation row is
     // immutable but its verification history is not — agent verdicts and human
@@ -92,9 +101,19 @@ async function refresh(): Promise<void>
     const revId = selectedRevId.value;
     try
     {
-        const [runList, revList, revDetail] = await Promise.all([
+        // The campaign list rides with its own catch: campaign reads are
+        // secondary, and NEITHER the list nor the detail may flip the sheet
+        // OFFLINE or discard the rev data fetched alongside (campaign #2
+        // finding: the earlier comment claimed this while only the detail
+        // was actually isolated). The list is deliberately unfiltered by
+        // liveness — the band's subject is the newest record whatever its
+        // status — and stays bounded by being target-scoped: one target
+        // accumulates campaigns at human speed, unlike the store-wide
+        // aggregate mission control's poll was weaned off.
+        const [runList, revList, campaignList, revDetail] = await Promise.all([
             api.listRuns(filter),
             api.listConsolidations(filter),
+            api.listCampaigns(filter).catch(() => undefined),
             revId !== undefined ? api.getConsolidation(revId) : undefined,
         ]);
         if (generation !== refreshGeneration)
@@ -112,6 +131,15 @@ async function refresh(): Promise<void>
             }
         }
         connectionError.value = undefined;
+        if (campaignList !== undefined)
+        {
+            campaignSummaries.value = campaignList;
+            await refreshCampaign(campaignList[0]);
+        }
+        else
+        {
+            campaignFetchFailures.value++;
+        }
     }
     catch (e)
     {
@@ -120,6 +148,56 @@ async function refresh(): Promise<void>
             return;
         }
         connectionError.value = describe(e);
+    }
+}
+
+// The newest campaign is the band's subject. Terminal records (finished,
+// failed) are immutable and cache forever; live ones refetch every cycle —
+// rounds append while they run, and a status change is exactly the news.
+// The token drops a stale response when act()'s refresh overlaps the
+// poller's. A failed read keeps the previous value, but counts: a blip
+// self-heals next cycle, while a persistent failure (version-skew schema
+// mismatch, say) must not leave the band silently frozen on the one panel
+// whose job is making live spend visible — after a few strikes it wears a
+// quiet stale marker instead.
+const campaignCache = new Map<CampaignId, Campaign>();
+const campaignFetchFailures = ref(0);
+const campaignStale = computed(() => campaignFetchFailures.value >= 3);
+let campaignFetchToken = 0;
+async function refreshCampaign(newest: CampaignSummary | undefined): Promise<void>
+{
+    const token = ++campaignFetchToken;
+    if (newest === undefined)
+    {
+        campaign.value = undefined;
+        campaignFetchFailures.value = 0;
+        return;
+    }
+    const cached = campaignCache.get(newest.id);
+    if (cached !== undefined && (cached.status === 'finished' || cached.status === 'failed'))
+    {
+        campaign.value = cached;
+        campaignFetchFailures.value = 0;
+        return;
+    }
+    try
+    {
+        const fetched = await api.getCampaign(newest.id);
+        if (token === campaignFetchToken)
+        {
+            campaignCache.set(newest.id, fetched);
+            campaign.value = fetched;
+            campaignFetchFailures.value = 0;
+        }
+    }
+    catch
+    {
+        // Token-checked like success: a stale request's failure must not
+        // count a strike against the refresh that superseded it.
+        if (token === campaignFetchToken)
+        {
+            campaignFetchFailures.value++;
+        }
     }
 }
 
@@ -192,6 +270,8 @@ const coverage = computed(() => detail.value?.coverage);
 // run id exactly like consolidation details do.
 const sampleFindings = ref<Finding[]>([]);
 const findingsCache = new Map<RunId, Finding[]>();
+// status === 'submitted' also keeps empty-diff runs out of the sample: an
+// 'empty' run in first position must not hide an older real run's findings.
 const sampleRunId = computed(() =>
     consolidations.value.length > 0 ? undefined : runs.value.find(r => r.status === 'submitted')?.id);
 watch(sampleRunId, async (id) =>
@@ -311,9 +391,17 @@ const campaignJob = computed(() =>
 // it does not touch. A review touches stage 01; a campaign loops through
 // review, consolidate, and verify, so all three pulse. Stamps stay PENDING
 // while the dot blinks: "in motion" and "no verdict yet" are both true.
+// A live campaign *record* counts as campaign liveness too: CLI campaigns
+// have no job, and a sheet that reads idle while one bills — looping OR
+// verifying — is the exact invisibility slice 12 existed to fix.
 const runningKind = computed(() => targetJobs.value.find(j => j.state === 'running')?.kind);
-const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign');
-const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify');
+// From the whole list, not the newest record: an older campaign still
+// billing after a newer one finished must keep the gates shut (campaign #2
+// finding — listCampaigns orders newest-first, so the newest can be the
+// wrong one to ask).
+const campaignLive = computed(() => campaignSummaries.value.some(c => c.status === 'running' || c.status === 'verifying'));
+const reviewing = computed(() => runningKind.value === 'review' || runningKind.value === 'campaign' || campaignLive.value);
+const verifying = computed(() => runningKind.value === 'campaign' || runningKind.value === 'verify' || campaignLive.value);
 const hasActiveJob = computed(() => targetJobs.value.some(j => j.state === 'queued' || j.state === 'running'));
 // A held verify job blocks "verify now" too: the worker auto-proposes one
 // after a review with findings, and a click here would stack a second job —
@@ -326,6 +414,50 @@ const rounds = computed(() =>
         runId: id,
         novel: novelClusters(consolidation.value?.clusters ?? [], id),
     })));
+// "verify now" also yields to a held verify job: the worker auto-proposes
+// one after a review with findings, and a click that ignored it would stack
+// a second job for the same work — the held job's ▶ is the click that bills.
+const heldVerifyJob = computed(() => targetJobs.value.find(j => j.kind === 'verify' && j.state === 'held'));
+const verifyGate = computed<ActionGate>(() => gateFor(heldVerifyJob.value, 'Verify'));
+
+// The campaign CTA carries the same gate: promote() parks its campaign held,
+// so straight after a promote the button would otherwise be live and a click
+// would bill a full duplicate campaign while the held one awaits its ▶.
+const heldCampaignJob = computed(() => targetJobs.value.find(j => j.kind === 'campaign' && j.state === 'held'));
+const campaignGate = computed<ActionGate>(() => gateFor(heldCampaignJob.value, 'Campaign'));
+
+function gateFor(held: JobSummary | undefined, kind: string): ActionGate
+{
+    // A CLI campaign holds no job, but its live record gates the same way:
+    // these buttons bill, and a duplicate loop is the expensive kind. This
+    // UI gate is advisory — runCampaign enforces the same rule at the
+    // spending door itself. An unprovable row (never leased) explains the
+    // only way it can ever be cleared.
+    const live = campaignSummaries.value.find(c => c.status === 'running' || c.status === 'verifying');
+    if (live !== undefined)
+    {
+        return {
+            allowed: false,
+            reason: live.leased
+                ? 'A campaign for this target is in flight (see the loop band).'
+                : `Campaign #${live.id} reads ${live.status} but its liveness is unprovable (never leased) — if it is dead, retire it with: npm run campaign -- --force-fail ${live.id}`,
+        };
+    }
+    if (hasActiveJob.value)
+    {
+        return { allowed: false, reason: 'A job for this target is already queued or running.' };
+    }
+    if (held !== undefined)
+    {
+        return { allowed: false, reason: `${kind} job #${held.id} is already proposed — release it (▶) in the intake stage instead.` };
+    }
+    if (base.value === undefined)
+    {
+        return { allowed: false, reason: 'No base known for this target yet.' };
+    }
+    return { allowed: true };
+}
+
 const reviewCostUsd = computed(() => revRuns.value.reduce((sum, r) => sum + r.costUsd, 0));
 const verifyCostUsd = computed(() =>
     (consolidation.value?.clusters ?? []).reduce(
@@ -398,9 +530,12 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
         <p v-if="actionError" class="msg action-error">{{ actionError }}</p>
 
         <LoopBand
-            v-if="consolidation"
-            :campaign="campaignJob"
-            :rounds="rounds"
+            v-if="campaign || consolidation"
+            :campaign="campaign"
+            :job="campaignJob"
+            :stale="campaignStale"
+            :rev-run-ids="consolidation?.runIds ?? []"
+            :rev-clusters="consolidation?.clusters ?? []"
             :review-cost-usd="reviewCostUsd"
             :verify-cost-usd="verifyCostUsd"
         />
@@ -423,7 +558,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">01</span><span class="name">Review</span>
-                        <span v-if="reviewing" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="reviewing" class="pulse" title="a job or campaign for this target is running">●</span>
                         <span class="desc caps">{{ consolidation ? `${runCount} runs` : `${runs.length} runs` }}</span>
                     </div>
                     <div class="stage-body">
@@ -435,9 +570,10 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                             <span class="dbid">run {{ run.id }}</span>
                             <span class="m">{{ run.turns }} turns · {{ usd(run.costUsd) }}</span>
                             <!-- An empty compare is a review of nothing (merged or stale
-                                 head) — it must not read as a clean bill of health. -->
+                                 head) — its own status, so it can never read as a clean
+                                 bill of health. -->
                             <span class="f">{{ run.status === 'aborted' ? 'aborted'
-                                : run.filesChanged === 0 ? 'empty diff — reviewed nothing'
+                                : run.status === 'empty' ? 'empty diff — reviewed nothing'
                                     : `${run.findingsCount} findings` }}</span>
                         </div>
                         <div v-if="runs.length === 0" class="vnote">no runs recorded for this target yet</div>
@@ -456,7 +592,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">02</span><span class="name">Consolidate</span>
-                        <span v-if="verifying" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="verifying" class="pulse" title="a job or campaign for this target is running">●</span>
                         <!-- The desc names what the body shows: clusters when a rev
                              exists, raw unclustered findings in the fallback. -->
                         <span class="desc caps">{{ consolidation ? `${orderedClusters.length} clusters · click for detail` : `${sampleFindings.length} findings · unclustered` }}</span>
@@ -509,7 +645,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                 <div class="stage">
                     <div class="stage-head">
                         <span class="no">03</span><span class="name">Verify</span>
-                        <span v-if="verifying" class="pulse" title="a job for this target is running">●</span>
+                        <span v-if="verifying" class="pulse" title="a job or campaign for this target is running">●</span>
                         <span class="desc caps">adversarial</span>
                     </div>
                     <div class="stage-body">
@@ -562,16 +698,18 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
                         <div v-else class="vnote">no estimate yet — coverage reads occurrence counts across runs</div>
                         <!-- Outside the coverage gate on purpose: the moment a campaign is most
                              wanted is a one-run target, which has no coverage to show yet. -->
-                        <div v-if="campaignJob" class="verdictline">campaign #{{ campaignJob.id }}: {{ campaignJob.state }}</div>
+                        <!-- "campaign job", not "campaign": the loop band above
+                             names campaign-record ids, and two unrelated numbers
+                             under one label read as a data inconsistency. -->
+                        <div v-if="campaignJob" class="verdictline">campaign job #{{ campaignJob.id }}: {{ campaignJob.state }}</div>
                         <div class="cta">
                             <button
                                 class="bp-btn chalk"
-                                :disabled="hasActiveJob || base === undefined"
-                                :title="hasActiveJob ? 'A job for this target is already queued or running.'
-                                    : base === undefined ? 'No base known for this target yet.'
-                                        : 'Enqueue a campaign for this target — bills subscription credit.'"
+                                :disabled="!campaignGate.allowed"
+                                :title="campaignGate.allowed ? 'Enqueue a campaign for this target — bills subscription credit.'
+                                    : campaignGate.reason"
                                 @click="resumeCampaign"
-                            >↺ {{ campaignJob ? 'resume' : 'start' }} campaign</button>
+                            >↺ {{ campaign || campaignJob ? 'resume' : 'start' }} campaign</button>
                         </div>
                     </div>
                 </div>
@@ -583,7 +721,7 @@ async function stamp(verdict: 'confirmed' | 'refuted', rationale: string): Promi
             :subject="calloutSubject"
             :run-count="runCount"
             :rev-run-ids="consolidation?.runIds"
-            :can-verify="!hasActiveJob && !hasOpenVerify && base !== undefined"
+            :verify-gate="verifyGate"
             @stamp="stamp"
             @verify="verifyNow"
         />

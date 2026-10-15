@@ -353,6 +353,9 @@ export interface VerifyTargetResult
     // Absent only when the target had no findings at all — nothing existed
     // to consolidate, let alone verify.
     consolidationId?: ConsolidationId;
+    // The latest consolidation already covered exactly the submitted runs
+    // and was reused instead of paying for a fresh judge call.
+    reused: boolean;
     summary: VerifyPendingSummary;
 }
 
@@ -360,9 +363,10 @@ export interface VerifyTargetResult
 // them with the adversary. Reuses the latest consolidation when it covers
 // exactly the submitted runs — verdicts inherit by member set, so a fresh
 // judge call over the same runs would buy nothing — and consolidates first
-// otherwise. Throwing on a target with no submitted runs is deliberate: a
+// otherwise. Throwing on a target with no submitted runs is deliberate — a
 // verify job for such a target is a caller mistake, and failing the job
-// names it.
+// names it — with one exception: a target whose stored runs all reviewed an
+// empty diff succeeds vacuously, because those runs are real and complete.
 export async function verifyTarget(
     store: ReviewStore,
     client: RepoClient,
@@ -373,6 +377,17 @@ export async function verifyTarget(
     const runs = submittedRunsFor(store, target);
     if (runs.length === 0)
     {
+        // A target whose stored runs ALL reviewed an empty diff has nothing
+        // to verify but is not a caller mistake — "nothing to verify" is a
+        // completed plan, same as the no-findings path below. Every, not
+        // some: one empty run must not mask a target whose real attempts all
+        // aborted — that target wants a retry, and the throw says so.
+        const stored = store.listRuns({ owner: target.owner, repo: target.repo, head: target.head, base: target.base });
+        if (stored.length > 0 && stored.every(r => r.status === 'empty'))
+        {
+            opts.onEvent?.('every stored run of this target reviewed an empty diff — nothing to verify');
+            return { reused: false, summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+        }
         throw new Error('No submitted runs for this target — nothing to verify.');
     }
 
@@ -408,7 +423,7 @@ export async function verifyTarget(
     if (consolidation === undefined)
     {
         opts.onEvent?.('no findings on any submitted run — nothing to verify');
-        return { summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+        return { reused: false, summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
     }
 
     const summary = await verifyPending(store, client, consolidation, {
@@ -423,5 +438,5 @@ export async function verifyTarget(
             opts.onEvent?.(`cluster #${cluster.id}: ${response.verdict} ($${stats.costUsd.toFixed(2)})`),
         onFailure: (cluster, reason) => opts.onEvent?.(`cluster #${cluster.id} failed: ${reason}`),
     });
-    return { consolidationId: consolidation.id, summary };
+    return { consolidationId: consolidation.id, reused: covered, summary };
 }

@@ -503,6 +503,54 @@ describe('GET /runs', () =>
         // Act + Assert
         expect((await fetch(`${base}/runs?owner=acme`)).status).toBe(400);
     });
+
+    it('should 400 a lone base instead of silently widening the query', async () =>
+    {
+        // Arrange
+        seedRun('feature/x', []);
+
+        // Act + Assert: base rides on a complete triple, never alone.
+        expect((await fetch(`${base}/runs?base=develop`)).status).toBe(400);
+    });
+
+    it('should 400 an empty base instead of pinning to a base that cannot exist', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x&base=`)).status).toBe(400);
+    });
+
+    it('should 400 present-but-empty triple values the same as an empty base', async () =>
+    {
+        // Act + Assert: '' pins to a target that cannot exist, exactly like
+        // an empty base — the rejection must be symmetric.
+        expect((await fetch(`${base}/runs?owner=&repo=&head=`)).status).toBe(400);
+        expect((await fetch(`${base}/runs?owner=acme&repo=widgets&head=`)).status).toBe(400);
+    });
+
+    it('should pin the base when the query carries one', async () =>
+    {
+        // Arrange: same triple, two bases — two review series.
+        seedRun('feature/x', []);
+        store.saveRun({
+            owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'develop', model: 'test-model',
+            status: 'submitted',
+            review: { summary: 'a summary', findings: [] },
+            turns: 5,
+            costUsd: 1.25,
+            usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        });
+
+        // Act
+        const triple = await (await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x`))
+            .json() as { runs: unknown[] };
+        const pinned = await (await fetch(`${base}/runs?owner=acme&repo=widgets&head=feature/x&base=develop`))
+            .json() as { runs: Array<{ target: string }> };
+
+        // Assert
+        expect(triple.runs).toHaveLength(2);
+        expect(pinned.runs).toHaveLength(1);
+        expect(pinned.runs[0]?.target).toBe('acme/widgets feature/x → develop');
+    });
 });
 
 describe('GET /runs/:id/findings', () =>
@@ -617,6 +665,44 @@ describe('GET /consolidations/:id', () =>
         // Act + Assert
         expect((await fetch(`${base}/consolidations/99`)).status).toBe(404);
         expect((await fetch(`${base}/consolidations/0`)).status).toBe(404);
+    });
+});
+
+describe('campaigns', () =>
+{
+    it('should list summaries filtered by target and serve one whole, rounds included', async () =>
+    {
+        // Arrange: a finished campaign with one snapshot round.
+        const id = store.createCampaign({ owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main' });
+        store.appendCampaignRound(id, { round: 1, findings: 3, turns: 20, costUsd: 1.5, novelClusters: 3 });
+        store.finishCampaign(id, 'dry');
+
+        // Act
+        const match = await (await fetch(`${base}/campaigns?owner=acme&repo=widgets&head=feature/x`))
+            .json() as { campaigns: Array<{ status: string; stoppedBy?: string; roundCount: number; reviewCostUsd: number }> };
+        const miss = await (await fetch(`${base}/campaigns?owner=acme&repo=widgets&head=feature/z`))
+            .json() as { campaigns: unknown[] };
+        const detailRes = await fetch(`${base}/campaigns/${id}`);
+        const detail = await detailRes.json() as { campaign: { status: string; rounds: unknown[] } };
+
+        // Assert
+        expect(match.campaigns).toHaveLength(1);
+        expect(match.campaigns[0]).toMatchObject({ status: 'finished', stoppedBy: 'dry', roundCount: 1, reviewCostUsd: 1.5 });
+        expect(miss.campaigns).toHaveLength(0);
+        expect(detailRes.status).toBe(200);
+        expect(detail.campaign).toMatchObject({
+            status: 'finished',
+            stoppedBy: 'dry',
+            rounds: [{ round: 1, findings: 3, novelClusters: 3 }],
+        });
+    });
+
+    it('should reject a partial filter and 404 a campaign that cannot exist', async () =>
+    {
+        // Act + Assert
+        expect((await fetch(`${base}/campaigns?owner=acme`)).status).toBe(400);
+        expect((await fetch(`${base}/campaigns/99`)).status).toBe(404);
+        expect((await fetch(`${base}/campaigns/0`)).status).toBe(404);
     });
 });
 

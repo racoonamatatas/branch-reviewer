@@ -78,7 +78,8 @@ function saveRun(args: CliArgs, model: string, result: ReviewResult): void
             base: args.base,
             model,
             status: result.status,
-            ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
+            ...(result.status === 'aborted' ? { reason: result.reason } : {}),
+            ...(result.status === 'submitted' ? { review: result.review } : {}),
             turns: result.stats.turns,
             costUsd: result.stats.costUsd,
             usage: result.stats.usage,
@@ -121,6 +122,15 @@ async function main(): Promise<number>
     {
         console.error(`Review aborted: ${result.reason}`);
         return 2;
+    }
+
+    // Clean exit, worded as the observation: an omitted `files` key in the
+    // compare payload also lands here, so this must not assert the branch
+    // itself is empty.
+    if (result.status === 'empty')
+    {
+        console.log('Empty diff: the compare listed no changed files — nothing was reviewed, no credit spent.');
+        return 0;
     }
 
     printReview(result.review);

@@ -1,20 +1,25 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { JobSummary } from '@server/server/jobs';
+import type { CampaignSummary } from '@server/store/store';
 import type { JobId } from '@server/types/ids';
 import { age } from '../format';
 
 const props = defineProps<{
     jobs: JobSummary[];
+    // Live campaign records (running or verifying) join the in-flight
+    // section: "what is billing right now" must be one list, and a CLI
+    // campaign holds no job.
+    liveCampaigns: CampaignSummary[];
     selected?: { owner: string; repo: string; head: string };
 }>();
 
-function isSelected(job: JobSummary): boolean
+function isSelected(target: { owner: string; repo: string; head: string }): boolean
 {
     return props.selected !== undefined
-        && job.owner === props.selected.owner
-        && job.repo === props.selected.repo
-        && job.head === props.selected.head;
+        && target.owner === props.selected.owner
+        && target.repo === props.selected.repo
+        && target.head === props.selected.head;
 }
 
 // The server returns the full ledger; mission control shows the pending work
@@ -23,6 +28,24 @@ function isSelected(job: JobSummary): boolean
 const ACTIVE = new Set<JobSummary['state']>(['held', 'running', 'queued']);
 const active = computed(() =>
     props.jobs.filter(j => ACTIVE.has(j.state)).sort((a, b) => a.id - b.id));
+
+// A worker campaign is in flight as both a job and a record — the job row
+// (which carries the controls) speaks for it; only records with no such
+// job left to represent them get their own row: the CLI loops. Only a
+// RUNNING job owns a loop: a held or queued campaign job is a proposal,
+// and letting it hide a live record would show ◌ HELD for a target whose
+// CLI campaign is billing right now — the exact invisibility this lane
+// exists to remove.
+const cliCampaigns = computed(() =>
+{
+    const represented = new Set(
+        props.jobs
+            .filter(j => j.kind === 'campaign' && j.state === 'running')
+            .map(j => `${j.owner}/${j.repo}/${j.head}`));
+    return props.liveCampaigns.filter(c => !represented.has(`${c.owner}/${c.repo}/${c.head}`));
+});
+
+const inFlightCount = computed(() => active.value.length + cliCampaigns.value.length);
 // Newest-first sorted here, not trusted from the API — the tail is truncated
 // to 8, and truncating an arbitrary order would misreport "+N older".
 const recent = computed(() =>
@@ -48,9 +71,9 @@ const GLYPH: Record<JobSummary['state'], string> = {
     cancelled: '⊘',
 };
 
-function targetRoute(job: JobSummary): string
+function targetRoute(target: { owner: string; repo: string; head: string }): string
 {
-    return `/target/${encodeURIComponent(job.owner)}/${encodeURIComponent(job.repo)}/${job.head}`;
+    return `/target/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/${target.head}`;
 }
 </script>
 
@@ -58,7 +81,7 @@ function targetRoute(job: JobSummary): string
     <section class="stage">
         <div class="stage-head">
             <span class="name">Queue</span>
-            <span class="desc caps">{{ active.length }} active</span>
+            <span class="desc caps">{{ inFlightCount }} in flight</span>
         </div>
         <div class="stage-body tablewrap">
             <table>
@@ -66,6 +89,21 @@ function targetRoute(job: JobSummary): string
                     <tr><th>Nº</th><th>Kind</th><th>Target</th><th>State</th><th>Runs</th><th>Age</th><th></th></tr>
                 </thead>
                 <tbody>
+                    <!-- CLI campaigns first — they are running *now*, and their
+                         only controls live at the terminal that owns them: no
+                         cancel or ▶ here, because this server cannot reach into
+                         another process's loop. Runs counts finished rounds. -->
+                    <tr v-for="c in cliCampaigns" :key="`campaign-${c.id}`" :aria-current="isSelected(c)">
+                        <td class="num mono">C{{ c.id }}</td>
+                        <td>campaign <span class="via caps">via cli</span></td>
+                        <td class="target">
+                            <RouterLink :to="targetRoute(c)">{{ c.target }}</RouterLink>
+                        </td>
+                        <td class="state mono" :class="`state-${c.status}`">{{ c.status === 'running' ? '▶' : '⧖' }} {{ c.status.toUpperCase() }}</td>
+                        <td class="num">{{ c.roundCount > 0 ? c.roundCount : '–' }}</td>
+                        <td class="num">{{ age(c.createdAt) }}</td>
+                        <td></td>
+                    </tr>
                     <tr v-for="job in active" :key="job.id" :aria-current="isSelected(job)">
                         <td class="num mono">#{{ job.id }}</td>
                         <td>{{ job.kind }}</td>
@@ -84,8 +122,8 @@ function targetRoute(job: JobSummary): string
                             </template>
                         </td>
                     </tr>
-                    <tr v-if="active.length === 0">
-                        <td colspan="7" class="empty">nothing queued — label a PR or enqueue below</td>
+                    <tr v-if="inFlightCount === 0">
+                        <td colspan="7" class="empty">nothing in flight — label a PR or enqueue below</td>
                     </tr>
                     <!-- Subhead as a spanning row so both sections share column alignment. -->
                     <tr v-if="recent.length > 0" class="subhead">
@@ -192,6 +230,7 @@ tr.done td, tr.done .target a
 
 .state-held      { color: var(--bright); }
 .state-running   { color: var(--chalk); }
+.state-verifying { color: var(--chalk); }
 .state-queued    { color: var(--bright); }
 .state-succeeded { color: var(--stamp-ok); }
 .state-failed    { color: var(--stamp-no); }
@@ -207,5 +246,13 @@ tr.done td, tr.done .target a
 .empty
 {
     color: var(--faint);
+}
+
+/* Provenance chip: which door the work entered through. */
+.via
+{
+    color: var(--faint);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
 }
 </style>

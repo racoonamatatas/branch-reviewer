@@ -38,8 +38,9 @@ export interface ReviewTools
     server: McpSdkServerConfigWithInstance;
     // Exposed for tests: handlers are directly callable without a harness.
     defs: RegisteredTool[];
-    // The memoized comparison the tools share — exposed so a runner can
-    // measure the diff without buying a second paginated compare.
+    // The memoized comparison every tool shares — exposed so the runner's
+    // pre-flight count rides the same GitHub request instead of buying a
+    // second one (full patch bodies, paginated).
     changedFiles: () => Promise<ChangedFile[]>;
 }
 

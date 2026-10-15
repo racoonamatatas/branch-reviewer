@@ -67,6 +67,11 @@ export class Worker
     // Drains chain rather than overlap, so a job enqueued in the race window
     // between the final empty claimNext and the drain resolving is still
     // picked up by the chained pass instead of stranded until the next kick.
+    // The catch heals a rejected tail before chaining: an escaped throw (a
+    // worker bug — e.g. an onEvent listener throwing after the job left
+    // `running`) still reaches the caller that owned that drain, but must
+    // cost one drain, not every future one — an unhealed rejection would
+    // short-circuit all later notifies and silently kill the queue.
     // Resolves with the number of jobs this drain processed.
     // The stored tail is the settled copy, not the pass itself: a drain can
     // reject (execute rethrows when a job escapes `running`), and chaining
@@ -162,7 +167,8 @@ export class Worker
             base: job.base,
             model,
             status: result.status,
-            ...(result.status === 'aborted' ? { reason: result.reason } : { review: result.review }),
+            ...(result.status === 'aborted' ? { reason: result.reason } : {}),
+            ...(result.status === 'submitted' ? { review: result.review } : {}),
             turns: result.stats.turns,
             costUsd: result.stats.costUsd,
             usage: result.stats.usage,
@@ -176,6 +182,14 @@ export class Worker
             return;
         }
 
+        // An empty compare is a completed job (nothing was owed a review),
+        // with no review to propose verification for.
+        if (result.status === 'empty')
+        {
+            this.onEvent?.(job.id, 'empty diff — the compare listed no files, nothing was reviewed (no credit spent)');
+            this.jobs.succeed(job.id);
+            return;
+        }
         // The review ran, billed, and saved — it has succeeded, and nothing
         // after this line may change that. The verify proposal below is a
         // convenience on top of a finished job, so its failure only reports.
@@ -184,26 +198,31 @@ export class Worker
         // Findings are claims until verified, and this run may be the only
         // one this target ever gets — propose the adversarial pass as a held
         // job (a human release bills it). Skipped when one is already open,
-        // and when there is nothing to verify.
-        try
+        // and when there is nothing to verify. The review is succeeded first
+        // and the proposal has its own catch: a write failure here must not
+        // fail a review that ran, billed, and saved — persistence never
+        // changes an outcome, and the proposal is a bonus, not the job.
+        if (result.review.findings.length > 0)
         {
-            if (result.review.findings.length > 0
-                && !this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+            try
             {
-                const verifyId = this.jobs.enqueue({
-                    kind: 'verify',
-                    owner: job.owner,
-                    repo: job.repo,
-                    head: job.head,
-                    base: job.base,
-                    params: {},
-                }, { held: true });
-                this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
+                if (!this.jobs.hasOpenJobFor(job.owner, job.repo, job.head, 'verify'))
+                {
+                    const verifyId = this.jobs.enqueue({
+                        kind: 'verify',
+                        owner: job.owner,
+                        repo: job.repo,
+                        head: job.head,
+                        base: job.base,
+                        params: {},
+                    }, { held: true });
+                    this.onEvent?.(job.id, `${result.review.findings.length} finding(s) are unverified claims — verify job #${verifyId} enqueued held, release to run`);
+                }
             }
-        }
-        catch (error)
-        {
-            this.onEvent?.(job.id, `could not propose a verify job: ${error instanceof Error ? error.message : String(error)}`);
+            catch (error)
+            {
+                this.onEvent?.(job.id, `could not propose a verify job: ${error instanceof Error ? error.message : String(error)}`);
+            }
         }
     }
 
@@ -234,11 +253,21 @@ export class Worker
                 // Rounds land on the job as they finish — a campaign's
                 // progress is visible mid-flight, which is the point of a
                 // job model. A failed round has no run to record.
+                // Guarded like onCampaign below: a failed bookkeeping write
+                // must not throw into the loop and fail a campaign that is
+                // running, billing, and saving its own evidence.
                 onRun: (outcome) =>
                 {
                     if (outcome.runId !== undefined)
                     {
-                        this.jobs.recordRun(job.id, outcome.runId);
+                        try
+                        {
+                            this.jobs.recordRun(job.id, outcome.runId);
+                        }
+                        catch (error)
+                        {
+                            this.onEvent?.(job.id, `could not record run #${outcome.runId}: ${error instanceof Error ? error.message : String(error)}`);
+                        }
                     }
                     // An unusable round otherwise vanishes: the campaign
                     // abort only says "no-usable-runs", and whoever is
@@ -276,12 +305,28 @@ export class Worker
                     onFailure: (cluster, reason) =>
                         this.onEvent?.(job.id, `cluster #${cluster.id} failed: ${reason}`),
                 },
+                // Provenance: the job names the campaign its loop opened.
+                // Guarded like the verify proposal — a failed bookkeeping
+                // write must not kill a loop that is billing credit.
+                onCampaign: (campaign) =>
+                {
+                    try
+                    {
+                        this.jobs.recordCampaign(job.id, campaign);
+                    }
+                    catch (error)
+                    {
+                        this.onEvent?.(job.id, `could not link campaign #${campaign}: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                },
+                onWarning: message => this.onEvent?.(job.id, message),
             },
         );
 
         // Two consecutive unusable rounds is the campaign's own abort path —
-        // structural, mirroring a single review's cap — while running dry or
-        // out of runs are both successful completions of the sampling plan.
+        // structural, mirroring a single review's cap — while running dry,
+        // out of runs, or into an empty diff are all successful completions
+        // of the sampling plan.
         if (result.stoppedBy === 'no-usable-runs')
         {
             this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed', {
@@ -301,6 +346,11 @@ export class Worker
             this.jobs.abort(job.id, 'stopped: shutdown interrupted the campaign — completed rounds and verdicts are saved; re-enqueue to continue', {
                 ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
             });
+            return;
+        }
+        if (result.stoppedBy === 'no-consolidation')
+        {
+            this.jobs.abort(job.id, 'no-consolidation: two consecutive judge calls failed — the union is unusable without one');
             return;
         }
         this.jobs.succeed(job.id, {

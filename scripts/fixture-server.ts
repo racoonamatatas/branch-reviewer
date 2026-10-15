@@ -134,11 +134,49 @@ store.saveVerification({
     costUsd: 0.38,
 });
 
-// ── a queue in every state ──────────────────────────────
+// ── the campaign record those runs came from ────────────
+// Rounds are as-it-happened snapshots: round 1 has no consolidation (one
+// run is below the union guard), later rounds carry the estimate the loop
+// saw. f2 stays 0 here, so the coverage tail is the bias-corrected form.
 const target = { owner: 'acme', repo: 'widgets', head: 'feature/retry-taxonomy', base: 'main' } as const;
 
+const campaign = store.createCampaign(target);
+const novelPerRound = [0, 1, 1, 1, 1];
+const observedPerRound = [0, 3, 4, 5, 6];
+runs.forEach((run, i) =>
+{
+    const observed = observedPerRound[i]!;
+    const f1 = Math.max(0, observed - 1);
+    const undiscovered = (f1 * (f1 - 1)) / 2;
+    const stored = store.getRun(run)!;
+    store.appendCampaignRound(campaign, {
+        round: i + 1,
+        runId: run,
+        findings: stored.review?.findings.length ?? 0,
+        turns: stored.turns,
+        costUsd: stored.costUsd,
+        novelClusters: novelPerRound[i]!,
+        ...(i > 0
+            ? {
+                consolidationId: consolidation,
+                coverage: { observed, f1, f2: 0, undiscovered, estimatedTotal: observed + undiscovered },
+            }
+            : {}),
+    });
+});
+store.finishCampaign(campaign, 'max-runs');
+
+// A CLI-shaped campaign: a running record with no job carrying it (round 1
+// still in flight, nothing appended yet). This is what the sheet's
+// campaign-record liveness path renders — pulses and gates without any job.
+// Marked leased, the normal healthy shape (unproven rows render the
+// force-fail hint instead).
+store.markCampaignLeased(store.createCampaign({ owner: 'acme', repo: 'gadgets', head: 'feature/uploads', base: 'develop' }));
+
+// ── a queue in every state ──────────────────────────────
 const done = jobs.enqueue({ kind: 'campaign', ...target, params: { maxRuns: 5, verify: true } });
 jobs.claimNext();
+jobs.recordCampaign(done, campaign);
 for (const run of runs)
 {
     jobs.recordRun(done, run);

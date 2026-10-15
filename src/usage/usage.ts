@@ -31,6 +31,17 @@ export interface TurnUsage
     usage: TokenUsage;
 }
 
+// Frozen because it is handed out as a value (empty accumulators, the
+// empty-diff short-circuit's stats — twice in one result there): a caller
+// mutating "its" TokenUsage must fail loudly, not corrupt every other
+// holder of the constant process-wide.
+export const ZERO_USAGE: Readonly<TokenUsage> = Object.freeze({
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+});
+
 export function fromWireUsage(usage: WireUsage): TokenUsage
 {
     return {

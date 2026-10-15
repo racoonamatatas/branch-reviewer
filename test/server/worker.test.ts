@@ -7,7 +7,7 @@ import { JobStore } from '../../src/server/jobs.js';
 import type { NewJob } from '../../src/server/jobs.js';
 import { Worker } from '../../src/server/worker.js';
 import type { WorkerDeps } from '../../src/server/worker.js';
-import { consolidationId, runId } from '../../src/types/ids.js';
+import { campaignId, consolidationId, runId } from '../../src/types/ids.js';
 
 class FakeRepoClient implements RepoClient
 {
@@ -263,6 +263,24 @@ describe('campaign jobs', () =>
         });
     });
 
+    it('should link the campaign record the loop opens, as provenance on the job', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(campaignJob());
+
+        // Act
+        await worker({
+            campaign: async (_store, _client, _target, opts) =>
+            {
+                opts.onCampaign?.(campaignId(7));
+                return { rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' };
+            },
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)?.campaignId).toBe(7);
+    });
+
     it('should abort when the campaign stops with no usable runs', async () =>
     {
         // Arrange
@@ -493,6 +511,56 @@ describe('verify jobs', () =>
         expect(verify).toMatchObject({ state: 'held', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main' });
     });
 
+    it('should keep the review succeeded when proposing the verify job fails', async () =>
+    {
+        // Arrange: the review's own writes work; the follow-up proposal hits
+        // a broken store. Persistence never changes an outcome — a run that
+        // ran, billed, and saved must stay succeeded.
+        const id = jobs.enqueue(reviewJob());
+        const events: string[] = [];
+        jobs.enqueue = () =>
+        {
+            throw new Error('disk full');
+        };
+
+        // Act
+        await worker({
+            review: async () => submittedWithFindings(),
+            onEvent: (jobId, event) => events.push(`#${jobId}: ${event}`),
+        }).notify();
+
+        // Assert
+        expect(jobs.get(id)?.state).toBe('succeeded');
+        expect(events).toContain(`#${id}: could not propose a verify job: disk full`);
+    });
+
+    it('should cost one drain, not the queue, when a listener throws after succeed()', async () =>
+    {
+        // Arrange: an onEvent that always throws. After succeed() the job has
+        // left `running`, so the throw escapes execute() and rejects the drain.
+        let review = submittedWithFindings();
+        const resilient = worker({
+            review: async () => review,
+            onEvent: () =>
+            {
+                throw new Error('listener bug');
+            },
+        });
+        const first = jobs.enqueue(reviewJob());
+
+        // Act + Assert: the rejection reaches this drain's caller (serve's
+        // crash log), but the job itself stayed succeeded.
+        await expect(resilient.notify()).rejects.toThrow('listener bug');
+        expect(jobs.get(first)?.state).toBe('succeeded');
+
+        // The chain healed: the next notify drains the next job instead of
+        // short-circuiting on the dead tail forever.
+        review = submitted();
+        const second = jobs.enqueue(reviewJob({ head: 'feature/y' }));
+        await expect(resilient.notify()).resolves.toBe(1);
+        expect(jobs.get(second)?.state).toBe('succeeded');
+    });
+
     it('should not propose verification when the review found nothing', async () =>
     {
         // Arrange: the default submitted() carries zero findings.
@@ -537,6 +605,26 @@ describe('verify jobs', () =>
         fragile.close();
     });
 
+    it('should succeed an empty-diff review with an empty run and no verify proposal', async () =>
+    {
+        // Arrange
+        const id = jobs.enqueue(reviewJob());
+
+        // Act
+        await worker({
+            review: async () => ({ status: 'empty', filesChanged: 0, stats: stats() }),
+        }).notify();
+
+        // Assert: a completed job over a run that reviewed nothing — stored
+        // as 'empty', so nothing downstream can read it as a clean review.
+        const job = jobs.get(id);
+        expect(job?.state).toBe('succeeded');
+        const run = store.getRun(job!.runIds[0]!);
+        expect(run?.status).toBe('empty');
+        expect(run?.review).toBeUndefined();
+        expect(jobs.list().some(j => j.kind === 'verify')).toBe(false);
+    });
+
     it('should not stack a second verify job while one is already open', async () =>
     {
         // Arrange
@@ -559,7 +647,7 @@ describe('verify jobs', () =>
 
         // Act
         await worker({
-            verify: async () => ({ consolidationId: cid, summary: { queued: 2, attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
+            verify: async () => ({ consolidationId: cid, reused: false, summary: { queued: 2, attempted: 2, verified: 2, failures: 0, costUsd: 1.2 } }),
         }).notify();
 
         // Assert
@@ -578,7 +666,7 @@ describe('verify jobs', () =>
             verify: async (_store, _client, _target, opts) =>
             {
                 received = opts?.model;
-                return { summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+                return { reused: false, summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
             },
         }).notify();
 
@@ -621,7 +709,7 @@ describe('verify jobs', () =>
             verify: async (_store, _client, _target, opts) =>
             {
                 sawStopSignal = typeof opts?.shouldStop === 'function';
-                return { consolidationId: cid, summary: { queued: 3, attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true } };
+                return { consolidationId: cid, reused: false, summary: { queued: 3, attempted: 1, verified: 1, failures: 0, costUsd: 0.5, stopped: true } };
             },
         }).notify();
 

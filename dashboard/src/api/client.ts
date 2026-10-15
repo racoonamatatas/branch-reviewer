@@ -5,10 +5,11 @@
 import { z } from 'zod';
 import type { humanVerdictRequestSchema, newJobRequestSchema, newWatchRequestSchema } from '@server/server/server';
 import type { TargetFilter } from '@server/store/store';
-import type { ClusterId, ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
+import type { CampaignId, ClusterId, ConsolidationId, JobId, RunId, WatchId } from '@server/types/ids';
 import {
-    activityEventSchema, consolidationDetailSchema, consolidationSummarySchema, coverageSchema, findingSchema,
-    jobSchema, jobSummarySchema, pollStatusSchema, runSummarySchema, targetSummarySchema, verificationSchema, watchSchema,
+    activityEventSchema, campaignSchema, campaignSummarySchema, consolidationDetailSchema, consolidationSummarySchema,
+    coverageSchema, findingSchema, jobSchema, jobSummarySchema, pollStatusSchema, runSummarySchema, targetSummarySchema,
+    verificationSchema, watchSchema,
 } from './schemas';
 
 // The request types are the server's own schemas, imported as types: what the
@@ -29,7 +30,12 @@ const errorBodySchema = z.object({ error: z.string() });
 
 async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T>
 {
-    const res = await fetch(path, init);
+    // Every request must settle: usePolling's in-flight guard clears in a
+    // finally(), so one fetch that never resolves (stalled connection,
+    // server wedged mid-response) would latch the guard and kill the poll
+    // loop for the life of the tab. 10s is more than three poll intervals.
+    // Signal last, so a future init cannot silently spread the timeout away.
+    const res = await fetch(path, { ...init, signal: init?.signal ?? AbortSignal.timeout(10_000) });
     const body: unknown = await res.json().catch(() =>
     {
         throw new ApiError(res.status, `${res.status} with a non-JSON body.`);
@@ -58,6 +64,12 @@ function targetQuery(filter?: TargetFilter): string
         return '';
     }
     const params = new URLSearchParams({ owner: filter.owner, repo: filter.repo, head: filter.head });
+    // base is the filter's one optional field — dropping it here would make
+    // the type lie (a caller that pins base would get unfiltered results).
+    if (filter.base !== undefined)
+    {
+        params.set('base', filter.base);
+    }
     return `?${params.toString()}`;
 }
 
@@ -98,6 +110,19 @@ export const api = {
 
     listConsolidations: async (filter?: TargetFilter) =>
         (await request(`/consolidations${targetQuery(filter)}`, z.object({ consolidations: z.array(consolidationSummarySchema) }))).consolidations,
+
+    // liveOnly bounds the server's aggregate to running/verifying rows —
+    // the right shape for a poll that only wants "what is billing now".
+    listCampaigns: async (filter?: TargetFilter, opts: { liveOnly?: boolean } = {}) =>
+    {
+        const query = targetQuery(filter);
+        const live = opts.liveOnly === true ? `${query === '' ? '?' : '&'}live=1` : '';
+        return (await request(`/campaigns${query}${live}`, z.object({ campaigns: z.array(campaignSummarySchema) }))).campaigns;
+    },
+
+    // The whole record, as-it-happened rounds included.
+    getCampaign: async (id: CampaignId) =>
+        (await request(`/campaigns/${id}`, z.object({ campaign: campaignSchema }))).campaign,
 
     stampVerdict: async (id: ClusterId, verdict: HumanVerdictRequest) =>
         (await request(`/clusters/${id}/verdict`, z.object({ verifications: z.array(verificationSchema) }), post(verdict))).verifications,

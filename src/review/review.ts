@@ -12,7 +12,7 @@ import { reviewJsonSchema, reviewSchema } from '../schema/schema.js';
 import type { Review } from '../schema/schema.js';
 import { createReviewTools, SERVER_NAME } from '../tools/tools.js';
 import type { ReviewTarget } from '../tools/tools.js';
-import { UsageAccumulator, fromWireUsage } from '../usage/usage.js';
+import { UsageAccumulator, ZERO_USAGE, fromWireUsage } from '../usage/usage.js';
 import type { TokenUsage, TurnUsage } from '../usage/usage.js';
 
 // A review of the reference target streams ~30 tool calls, and `num_turns`
@@ -81,12 +81,20 @@ export interface ReviewRunStats
     compactions: number;
 }
 
-// filesChanged rides on both outcomes: a 0-findings run against a 0-file
+// filesChanged rides on every outcome: a 0-findings run against a 0-file
 // diff is a review of nothing, and downstream displays must be able to say
 // so instead of presenting it as a clean bill of health.
+// 'empty' is its own member, not a submitted review with zero findings: no
+// model ran, so there is no review to carry, and readers must be able to
+// discriminate "the model found nothing" from "there was nothing to look
+// at" on the status instead of reconstructing it from filesChanged === 0.
+// 'empty' means GitHub enumerated zero changed files: compare() throws when
+// the `files` key is omitted (oversized comparisons), so a truncated payload
+// fails the run instead of masquerading as an empty branch here.
 export type ReviewResult =
     | { status: 'submitted'; review: Review; filesChanged: number; stats: ReviewRunStats }
-    | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats };
+    | { status: 'aborted'; reason: string; filesChanged: number; stats: ReviewRunStats }
+    | { status: 'empty'; filesChanged: 0; stats: ReviewRunStats };
 
 // Exported for its tests: the prompt is the one part of the paid call whose
 // assembly can be checked without spending anything.
@@ -112,23 +120,23 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
 {
     assertSubscriptionCredit();
 
-    // The diff's size is measured before any credit moves — through the
-    // tools' own memoized comparison, so the agent's snapshot is the one
-    // that was measured and the paginated compare is bought exactly once.
+    // The diff's size is measured before any credit moves, so the stored run
+    // can distinguish "found nothing" from "had nothing to look at" — a
+    // merged or stale head produces an empty compare. The count reads the
+    // same memoized comparison the tools serve, so it costs no extra request.
     const tools = createReviewTools(client, target);
     const filesChanged = (await tools.changedFiles()).length;
 
-    // The empty diff is a cost fuse, not just a label: a merged or stale
-    // head produces an empty compare, and a full agent run over nothing
-    // would bill real credit to report that nothing was there.
+    // The empty-diff tell doubles as a cost fuse: with nothing to review, the
+    // model would only be paid to confirm an empty file list, so the run is
+    // answered here instead — zero turns, zero credit, and no fabricated
+    // review (see the ReviewResult comment for why 'empty' is its own case).
     if (filesChanged === 0)
     {
-        const zero = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
         return {
-            status: 'aborted',
-            reason: 'empty-diff',
-            filesChanged,
-            stats: { turns: 0, costUsd: 0, usage: zero, perModel: {}, turnUsage: [], compactions: 0 },
+            status: 'empty',
+            filesChanged: 0,
+            stats: { turns: 0, costUsd: 0, usage: ZERO_USAGE, perModel: {}, turnUsage: [], compactions: 0 },
         };
     }
 

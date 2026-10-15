@@ -269,6 +269,20 @@ describe('createReviewTools', () =>
         expect(client.listFilesCalls).toBe(oneFreshFetchOnRetry);
     });
 
+    it('should serve the exposed changedFiles from the same memoized comparison', async () =>
+    {
+        // Arrange
+        const { client, tools } = setup();
+
+        // Act: the runner's pre-flight count, then a tool call.
+        const preflight = await tools.changedFiles();
+        await execute(tools, 'list_changed_files');
+
+        // Assert
+        expect(preflight).toBe(changedFiles);
+        expect(client.compareCalls).toBe(1);
+    });
+
     it('should truncate oversized results with an explicit marker', async () =>
     {
         // Arrange

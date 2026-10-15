@@ -8,7 +8,7 @@ import { useRouter } from 'vue-router';
 import type { ActivityEvent, PollStatus } from '@server/server/events';
 import type { JobSummary } from '@server/server/jobs';
 import type { Watch } from '@server/server/trigger';
-import type { TargetSummary } from '@server/store/store';
+import type { CampaignSummary, TargetSummary } from '@server/store/store';
 import type { JobId, WatchId } from '@server/types/ids';
 import { api, ApiError } from '../api/client';
 import type { NewJobRequest, NewWatchRequest } from '../api/client';
@@ -54,6 +54,7 @@ watch(selectedTarget, async (target, previous) =>
 const jobs = ref<JobSummary[]>([]);
 const watches = ref<Watch[]>([]);
 const targets = ref<TargetSummary[]>([]);
+const campaigns = ref<CampaignSummary[]>([]);
 const connectionError = ref<string>();
 const actionError = ref<string>();
 
@@ -100,16 +101,26 @@ async function refresh(): Promise<void>
     const feedPromise = api.listEvents(cursor.value).catch(() => undefined);
     try
     {
-        const [freshJobs, freshWatches, freshTargets] = await Promise.all([
+        // The campaign read rides with its own catch, like the sheet's: it
+        // is secondary, and one bad campaign row 500-ing /campaigns must not
+        // blank the queue, watches, and targets it shares a Promise.all
+        // with. Live rows only: this poll asks "what is billing now" every
+        // 3s, and must not make the server aggregate all campaign history.
+        const [freshJobs, freshWatches, freshTargets, freshCampaigns] = await Promise.all([
             api.listJobs(),
             api.listWatches(),
             api.listTargets(),
+            api.listCampaigns(undefined, { liveOnly: true }).catch(() => undefined),
         ]);
         if (generation !== refreshGeneration)
         {
             return;
         }
         [jobs.value, watches.value, targets.value] = [freshJobs, freshWatches, freshTargets];
+        if (freshCampaigns !== undefined)
+        {
+            campaigns.value = freshCampaigns;
+        }
         refreshedAtMs.value = Date.now();
         connectionError.value = undefined;
     }
@@ -205,6 +216,12 @@ const promote = (job: JobSummary): Promise<void> => act(async () =>
 const running = computed(() => jobs.value.find(j => j.state === 'running'));
 const queuedCount = computed(() => jobs.value.filter(j => j.state === 'queued').length);
 const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').length);
+
+// Campaign records are process-independent liveness: a CLI campaign holds
+// no job, so the worker can read idle while credit burns — this count and
+// the target-row markers are how mission control tells the truth about it.
+// 'verifying' counts: the loop is over but the adversarial passes still bill.
+const liveCampaigns = computed(() => campaigns.value.filter(c => c.status === 'running' || c.status === 'verifying'));
 </script>
 
 <template>
@@ -221,6 +238,10 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
                     <span class="kv caps">queued <b class="mono">{{ queuedCount }}</b></span>
                     <!-- Held is the count that wants a human — it earns the chalk. -->
                     <span v-if="heldCount > 0" class="kv caps">held <b class="mono busy">{{ heldCount }}</b></span>
+                    <!-- Live campaign records (running or verifying), jobs or
+                         not — a CLI loop billing shows here even while the
+                         worker idles. -->
+                    <span v-if="liveCampaigns.length > 0" class="kv caps">campaigns <b class="mono busy">{{ liveCampaigns.length }} in flight</b></span>
                     <span class="kv caps">poll <b class="mono">{{ pollLabel }}</b></span>
                     <span class="kv caps">updated <b class="mono">{{ updatedLabel }}</b></span>
                 </template>
@@ -236,13 +257,13 @@ const heldCount = computed(() => jobs.value.filter(j => j.state === 'held').leng
              instead of stretching the page when they overpopulate. -->
         <main>
             <div class="col">
-                <QueuePanel class="pin" :jobs="jobs" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
+                <QueuePanel class="pin" :jobs="jobs" :live-campaigns="liveCampaigns" :selected="selectedTarget" @cancel="cancel" @promote="promote" @release="release" />
                 <NewJobForm class="pin" @enqueue="enqueue" />
                 <ActivityPanel class="fill" :events="events" />
             </div>
             <div class="col side">
                 <WatchesPanel class="pin" :watches="watches" @add="addWatch" @remove="removeWatch" />
-                <TargetsPanel class="fill" :targets="targets" :selected="selectedTarget" />
+                <TargetsPanel class="fill" :targets="targets" :live-campaigns="liveCampaigns" :selected="selectedTarget" />
             </div>
         </main>
 

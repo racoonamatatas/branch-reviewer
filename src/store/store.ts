@@ -3,12 +3,13 @@
 // cross-run comparison needs to query them; a JSON blob would wall that off.
 
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { Coverage } from '../coverage/coverage.js';
 import type { Confidence, NewFinding, Review, Severity } from '../schema/schema.js';
 import type { Created, Identified, New } from '../types/common.js';
-import { clusterId, consolidationId, findingId, runId, verificationId } from '../types/ids.js';
-import type { ClusterId, ConsolidationId, FindingId, RunId, VerificationId } from '../types/ids.js';
+import { campaignId, clusterId, consolidationId, findingId, runId, verificationId } from '../types/ids.js';
+import type { CampaignId, ClusterId, ConsolidationId, FindingId, RunId, VerificationId } from '../types/ids.js';
 import type { TokenUsage } from '../usage/usage.js';
 
 export const DEFAULT_DB_PATH = 'data/reviews.db';
@@ -24,7 +25,11 @@ export interface Run extends Identified<'Run'>, Created
     head: string;
     base: string;
     model: string;
-    status: 'submitted' | 'aborted';
+    // 'empty' mirrors ReviewResult's third member: the compare listed no
+    // files, no model ran, there is no review and no abort reason. Readers
+    // discriminate on the status — never on filesChanged === 0, which on
+    // legacy rows means "unknown", not "empty".
+    status: 'submitted' | 'aborted' | 'empty';
     reason?: string;
     review?: Review;
     turns: number;
@@ -145,6 +150,135 @@ export type Verification = AgentVerification | HumanVerification;
 
 export type NewVerification = New<AgentVerification> | New<HumanVerification>;
 
+// Why a campaign stops. 'empty-diff' is a stop, not a failure: the compare
+// listed no files, and every later round would compare the same base/head —
+// but it is also not saturation, so it must never masquerade as 'dry'.
+// 'no-consolidation' is the judge's counterpart to 'no-usable-runs': the
+// union is unusable without a judge, so a persistently failing one must not
+// keep billing review credit for rounds nothing can consolidate. Defined
+// 'stopped' is a shutdown cutting the plan short (only the server's worker
+// can raise it; Ctrl-C kills the CLI outright): completed rounds and verdicts
+// stay saved, but the plan did not complete. Defined here rather than in the
+// campaign module because it is persisted vocabulary (like JobState) and the
+// campaign already imports the store.
+export type StoppedBy = 'dry' | 'max-runs' | 'no-usable-runs' | 'empty-diff' | 'no-consolidation' | 'stopped';
+
+// One campaign round as the loop saw it when it happened. Deliberately a
+// snapshot, not a derivation: a later judge call can merge away a round's
+// novel cluster and a later refutation changes the coverage input, so
+// re-deriving from the consolidation would answer a different question than
+// "what did the campaign see when it decided to stop". The coverage numbers
+// are stored whole (including the derivable tail) for the same reason — a
+// future estimator tweak must not rewrite history.
+export interface CampaignRound
+{
+    round: number;
+    runId?: RunId;      // absent when the review threw before anything could be stored
+    lens?: string;      // the rotation's focus this round; absent = generalist
+    model?: string;     // resolved review model, when the caller chose one
+    findings: number;
+    turns: number;
+    costUsd: number;
+    aborted?: string;   // the SDK ended the run early (max turns)
+    failed?: string;    // the round threw — network, API, or a save that did not land
+    consolidationFailed?: string;   // the run saved but the judge call threw — no consolidation this round
+    consolidationId?: ConsolidationId;
+    coverage?: Coverage;    // present exactly when consolidationId is — enforced by CHECK
+    novelClusters: number;  // clusters only this run reported — the round's marginal yield
+}
+
+// Status is a discriminated union, not optional fields: a finished campaign
+// always knows why it stopped, a failed one always carries its error, and a
+// running one may claim neither. The CHECKs restate the same rule in SQL.
+// 'verifying' is the loop's tail made visible: the sampling is over (so
+// stoppedBy is already durable — a verification failure can never lose why
+// the loop stopped) but credit is still burning on adversarial passes, and
+// campaign #1's verification phase proved that span must stay covered by
+// liveness and billing gates — the record read 'finished' while the CLI
+// process billed five more dollars, and every gate reopened.
+interface CampaignBase extends Identified<'Campaign'>, Created
+{
+    owner: string;
+    repo: string;
+    head: string;
+    base: string;
+    // The consolidation of runs already stored before round 1 — the yardstick
+    // this campaign's own contribution is measured against. Absent when the
+    // target had fewer than two prior runs.
+    baselineConsolidationId?: ConsolidationId;
+    // Whether the loop proved it holds this row's liveness lease. Starts
+    // false and is marked true only on successful acquisition — so a crash
+    // in the gap fails safe (unprovable, unsweepable) instead of unsafe
+    // (sweepable while possibly alive). A live row with leased false is the
+    // degraded mode the UI must be able to explain, because nothing but an
+    // operator's force-fail can ever retire it.
+    leased: boolean;
+    rounds: CampaignRound[];
+}
+
+export interface RunningCampaign extends CampaignBase
+{
+    status: 'running';
+}
+
+export interface VerifyingCampaign extends CampaignBase
+{
+    status: 'verifying';
+    stoppedBy: StoppedBy;
+}
+
+export interface FinishedCampaign extends CampaignBase
+{
+    status: 'finished';
+    stoppedBy: StoppedBy;
+    finishedAt: string;
+}
+
+export interface FailedCampaign extends CampaignBase
+{
+    status: 'failed';
+    error: string;
+    // Present exactly when the failure hit during verification: the loop's
+    // outcome was already durable and must not be lost to a verify crash.
+    stoppedBy?: StoppedBy;
+    finishedAt: string;
+}
+
+export type Campaign = RunningCampaign | VerifyingCampaign | FinishedCampaign | FailedCampaign;
+
+// Everything beyond New<T>'s subtraction is lifecycle, assigned as the
+// campaign progresses; a create call supplies only the target.
+type CampaignLifecycle = 'status' | 'baselineConsolidationId' | 'rounds' | 'leased';
+export type NewCampaign = Omit<New<RunningCampaign>, CampaignLifecycle>;
+
+export interface CampaignSummary extends Pick<CampaignBase, 'id' | 'createdAt' | 'owner' | 'repo' | 'head' | 'base' | 'leased'>
+{
+    target: string;  // "owner/repo head → base"
+    status: Campaign['status'];
+    stoppedBy?: StoppedBy;
+    roundCount: number;
+    reviewCostUsd: number;  // sum of round costs; verification bills to the consolidation's clusters, not here
+}
+
+// The duplicate gate's refusal, typed so the campaign recorder can tell
+// policy from persistence: this one error must escape the observational
+// write-guard and stop the loop before credit moves — a swallowed gate
+// would run the duplicate loop it exists to prevent, just unrecorded.
+export class DuplicateCampaignError extends Error
+{
+    constructor(
+        public readonly campaignId: CampaignId,
+        status: Campaign['status'],
+        leased: boolean,
+    )
+    {
+        super(`Campaign #${campaignId} is already ${status} for this target — a second loop would double-bill it. `
+            + (leased
+                ? 'Wait for it to finish, or investigate why it is stuck.'
+                : `Its liveness is unprovable (never leased); if it is dead, retire it with: npm run campaign -- --force-fail ${campaignId}`));
+    }
+}
+
 // A defect's stable identity across consolidations. Cluster rows are one
 // judge call's opinion and get new ids every time the same runs are
 // re-clustered; the set of findings they group does not. Sorted so two
@@ -171,6 +305,31 @@ export interface ConsolidationSummary extends Pick<Consolidation, 'id' | 'create
 {
     target: string;
     clusterCount: number;
+}
+
+// Shared with migrateCampaignVerifying's rebuild: CHECKs live in the table
+// definition, so changing them means recreating the table, and two copies of
+// this DDL would drift apart.
+function campaignsTable(name: string): string
+{
+    return `
+CREATE TABLE IF NOT EXISTS ${name} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    head TEXT NOT NULL,
+    base TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'verifying', 'finished', 'failed')),
+    stopped_by TEXT,
+    error TEXT,
+    finished_at TEXT,
+    baseline_consolidation_id INTEGER REFERENCES consolidations(id),
+    leased INTEGER NOT NULL DEFAULT 0,
+    CHECK ((status IN ('verifying', 'finished')) = (stopped_by IS NOT NULL) OR (status = 'failed')),
+    CHECK ((status = 'failed') = (error IS NOT NULL)),
+    CHECK ((status IN ('running', 'verifying')) = (finished_at IS NULL))
+);`;
 }
 
 const SCHEMA = `
@@ -243,6 +402,32 @@ CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id);
 CREATE INDEX IF NOT EXISTS idx_clusters_consolidation ON clusters(consolidation_id);
 CREATE INDEX IF NOT EXISTS idx_cluster_members_cluster ON cluster_members(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_cluster ON verifications(cluster_id);
+${campaignsTable('campaigns')}
+CREATE TABLE IF NOT EXISTS campaign_rounds (
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id),
+    round INTEGER NOT NULL,
+    run_id INTEGER REFERENCES runs(id),
+    findings INTEGER NOT NULL,
+    turns INTEGER NOT NULL,
+    cost_usd REAL NOT NULL,
+    lens TEXT,
+    model TEXT,
+    aborted TEXT,
+    failed TEXT,
+    consolidation_failed TEXT,
+    consolidation_id INTEGER REFERENCES consolidations(id),
+    novel_clusters INTEGER NOT NULL,
+    observed INTEGER,
+    f1 INTEGER,
+    f2 INTEGER,
+    undiscovered INTEGER,
+    estimated_total INTEGER,
+    PRIMARY KEY (campaign_id, round),
+    CHECK ((consolidation_id IS NULL) = (observed IS NULL)),
+    CHECK ((observed IS NULL) = (f1 IS NULL) AND (f1 IS NULL) = (f2 IS NULL)
+       AND (f2 IS NULL) = (undiscovered IS NULL) AND (undiscovered IS NULL) = (estimated_total IS NULL)),
+    CHECK (consolidation_id IS NULL OR consolidation_failed IS NULL)
+);
 `;
 
 interface RunRow
@@ -290,12 +475,57 @@ interface VerificationRow
     cost_usd: number | null;
 }
 
+interface CampaignRow
+{
+    id: number;
+    created_at: string;
+    owner: string;
+    repo: string;
+    head: string;
+    base: string;
+    status: string;
+    stopped_by: string | null;
+    error: string | null;
+    finished_at: string | null;
+    baseline_consolidation_id: number | null;
+    leased: number;
+}
+
+interface CampaignRoundRow
+{
+    round: number;
+    run_id: number | null;
+    lens: string | null;
+    model: string | null;
+    findings: number;
+    turns: number;
+    cost_usd: number;
+    aborted: string | null;
+    failed: string | null;
+    consolidation_failed: string | null;
+    consolidation_id: number | null;
+    novel_clusters: number;
+    observed: number | null;
+    f1: number | null;
+    f2: number | null;
+    undiscovered: number | null;
+    estimated_total: number | null;
+}
+
 export class ReviewStore
 {
     private readonly db: DatabaseSync;
 
+    // Where campaign liveness leases live — beside the database file,
+    // because they make claims about rows in it and must travel with it
+    // (an age-moved copy arrives with no live leases, which is the truth).
+    // undefined for :memory:: a store that dies with the process has no
+    // cross-process liveness to prove.
+    readonly leaseDir: string | undefined;
+
     constructor(path: string)
     {
+        this.leaseDir = path === ':memory:' ? undefined : join(dirname(path), 'leases');
         if (path !== ':memory:')
         {
             mkdirSync(dirname(path), { recursive: true });
@@ -321,6 +551,23 @@ export class ReviewStore
         this.migrateFindingConfidence();
         this.migrateClusterLapsedVerdict();
         this.migrateConsolidationCost();
+        this.migrateEmptyRuns();
+        this.migrateCampaignVerifying();
+        this.migrateCampaignLeased();
+        this.migrateCampaignRoundRotation();
+    }
+
+    // Rounds recorded before the diversity knobs (lens rotation, model
+    // cycling) carry neither; NULL is the truth about them — the rotation
+    // did not exist — and reads as the generalist, caller-default round.
+    private migrateCampaignRoundRotation(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('campaign_rounds') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'lens'))
+        {
+            this.db.exec('ALTER TABLE campaign_rounds ADD COLUMN lens TEXT');
+            this.db.exec('ALTER TABLE campaign_rounds ADD COLUMN model TEXT');
+        }
     }
 
     // Databases from before the recall-first prompt lack the column; old
@@ -354,6 +601,96 @@ export class ReviewStore
         {
             this.db.exec('ALTER TABLE consolidations ADD COLUMN cost_usd REAL');
         }
+    }
+
+    // Databases rebuilt for 'verifying' before the leased column existed
+    // lack it; the defaulted ADD COLUMN is the whole migration. Old rows
+    // read unproven — for terminal rows the flag is inert, and any live row
+    // from before the column cannot testify anyway.
+    private migrateCampaignLeased(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('campaigns') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'leased'))
+        {
+            this.db.exec('ALTER TABLE campaigns ADD COLUMN leased INTEGER NOT NULL DEFAULT 0');
+        }
+    }
+
+    // Databases from before the 'verifying' phase carry CHECKs that reject
+    // it; CHECKs live in the table definition, so the fix is a rebuild in
+    // place — same columns, rows copied verbatim (every old row already
+    // satisfies the new constraints). Detected from the stored DDL: the old
+    // shape is the one whose status CHECK does not name 'verifying'.
+    // campaign_rounds is not rebuilt: its CHECKs have never changed, and
+    // its only later columns (lens, model) arrive by ADD COLUMN — the day
+    // its CHECKs change, it gets its own rebuild.
+    private migrateCampaignVerifying(): void
+    {
+        const table = this.db.prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'campaigns'",
+        ).get() as unknown as { sql: string } | undefined;
+        if (table === undefined || table.sql.includes("'verifying'"))
+        {
+            return;
+        }
+        // New-table-first, unlike the verifications rebuild: renaming the
+        // old table aside would drag campaign_rounds' REFERENCES along with
+        // it (RENAME rewrites dependents since SQLite 3.25) and then drop
+        // the name they point at. Dropping and re-creating under the
+        // original name leaves that reference text untouched and true.
+        // FK enforcement is suspended for the dance (node:sqlite enables it
+        // by default, unlike raw SQLite): dropping a parent whose rounds
+        // still reference it would otherwise refuse — the rows all point at
+        // the same ids the re-created table holds again two statements
+        // later. The pragma is a no-op inside a transaction, so it brackets
+        // one rather than joining it. Columns are named on both sides of
+        // the copy: a legacy shape that no longer matches must fail loudly,
+        // never shuffle TEXT values into the wrong TEXT columns. A mid-dance
+        // failure rolls back, so it cannot leave an open transaction behind
+        // the restored pragma.
+        const columns = 'id, created_at, owner, repo, head, base, status, stopped_by, error, finished_at, baseline_consolidation_id';
+        this.db.exec('PRAGMA foreign_keys = OFF');
+        try
+        {
+            this.db.exec(`
+                BEGIN;
+                ${campaignsTable('campaigns_new')}
+                INSERT INTO campaigns_new (${columns}) SELECT ${columns} FROM campaigns;
+                DROP TABLE campaigns;
+                ALTER TABLE campaigns_new RENAME TO campaigns;
+                COMMIT;
+            `);
+        }
+        catch (error)
+        {
+            try
+            {
+                this.db.exec('ROLLBACK');
+            }
+            catch
+            {
+                // No transaction to roll back — the BEGIN itself failed.
+            }
+            throw error;
+        }
+        finally
+        {
+            this.db.exec('PRAGMA foreign_keys = ON');
+        }
+    }
+
+    // Rows written while the empty-diff short-circuit fabricated a submitted
+    // review (briefly, on the slice-11 branch): the status now carries what
+    // those rows encoded as submitted + files_changed = 0. The predicate is
+    // pinned to the short-circuit's full signature — zero turns, zero cost —
+    // because pre-branch code measured filesChanged and ran the model
+    // anyway, so a genuine (billed, turns ≥ 2) review of an empty compare
+    // can exist and must stay submitted: this UPDATE is irreversible and a
+    // relabeled run's findings would silently leave every future union.
+    // Idempotent; legacy NULLs stay submitted — "unknown", not "empty".
+    private migrateEmptyRuns(): void
+    {
+        this.db.exec("UPDATE runs SET status = 'empty' WHERE status = 'submitted' AND files_changed = 0 AND turns = 0 AND cost_usd = 0");
     }
 
     // Databases from before the empty-diff tell existed lack the column; the
@@ -461,12 +798,7 @@ export class ReviewStore
 
     listRuns(filter?: TargetFilter): RunSummary[]
     {
-        const where = filter === undefined
-            ? ''
-            : `WHERE r.owner = ? AND r.repo = ? AND r.head = ?${filter.base !== undefined ? ' AND r.base = ?' : ''}`;
-        const params = filter === undefined
-            ? []
-            : [filter.owner, filter.repo, filter.head, ...(filter.base !== undefined ? [filter.base] : [])];
+        const [where, params] = filterClause(filter, 'r');
         const rows = this.db.prepare(
             `SELECT r.id, r.created_at, r.owner, r.repo, r.head, r.base, r.status, r.turns, r.cost_usd, r.files_changed,
                     COUNT(f.id) AS findings_count
@@ -660,12 +992,7 @@ export class ReviewStore
 
     listConsolidations(filter?: TargetFilter): ConsolidationSummary[]
     {
-        const where = filter === undefined
-            ? ''
-            : `WHERE m.owner = ? AND m.repo = ? AND m.head = ?${filter.base !== undefined ? ' AND m.base = ?' : ''}`;
-        const params = filter === undefined
-            ? []
-            : [filter.owner, filter.repo, filter.head, ...(filter.base !== undefined ? [filter.base] : [])];
+        const [where, params] = filterClause(filter, 'm');
         const rows = this.db.prepare(
             `SELECT m.id, m.created_at, m.owner, m.repo, m.head, m.base, m.run_ids,
                     COUNT(c.id) AS cluster_count
@@ -826,10 +1153,338 @@ export class ReviewStore
         });
     }
 
+    // A campaign row exists before its first round: the loop is visible as a
+    // campaign from the moment it starts, not once it has something to show —
+    // CLI campaigns rendered as "no campaign yet" mid-loop until this landed.
+    // Creation IS the duplicate gate, and it is atomic: BEGIN IMMEDIATE
+    // takes SQLite's single writer lock across processes, so two loops
+    // entering the same millisecond serialize here — the second sees the
+    // first's row and gets the typed refusal, never a duplicate billing
+    // loop (a bare pre-check in the caller was check-then-act, run-60
+    // finding). leased is written explicitly, never left to the column
+    // default: a row born claiming a provable lease it does not hold yet
+    // would make a crash in the create→acquire gap sweepable while
+    // possibly alive — the unsafe direction.
+    createCampaign(campaign: NewCampaign): CampaignId
+    {
+        this.db.exec('BEGIN IMMEDIATE');
+        try
+        {
+            const live = this.db.prepare(
+                `SELECT id, status, leased FROM campaigns
+                 WHERE owner = ? AND repo = ? AND head = ? AND base = ? AND status IN ('running', 'verifying')
+                 LIMIT 1`,
+            ).get(campaign.owner, campaign.repo, campaign.head, campaign.base) as unknown as { id: number; status: string; leased: number } | undefined;
+            if (live !== undefined)
+            {
+                throw new DuplicateCampaignError(campaignId(live.id), campaignStatus(live.id, live.status), live.leased === 1);
+            }
+            const result = this.db.prepare(
+                'INSERT INTO campaigns (created_at, owner, repo, head, base, leased) VALUES (?, ?, ?, ?, ?, 0)',
+            ).run(new Date().toISOString(), campaign.owner, campaign.repo, campaign.head, campaign.base);
+            this.db.exec('COMMIT');
+            return campaignId(Number(result.lastInsertRowid));
+        }
+        catch (error)
+        {
+            try
+            {
+                this.db.exec('ROLLBACK');
+            }
+            catch
+            {
+                // No transaction to roll back — the BEGIN itself failed.
+            }
+            throw error;
+        }
+    }
+
+    recordCampaignBaseline(id: CampaignId, consolidation: ConsolidationId): void
+    {
+        this.transition(id, ['running'], 'record a baseline on',
+            "UPDATE campaigns SET baseline_consolidation_id = ? WHERE id = ? AND status = 'running'",
+            consolidation, id);
+    }
+
+    // Rounds append as they happen, so an interrupted campaign keeps every
+    // round it paid for. The composite primary key rejects a duplicate round
+    // number — the loop is the only writer, so a collision is a bug, not a
+    // race. The INSERT carries its own running-status guard (the rounds
+    // table has no status column to guard on), so a sweep racing the append
+    // is a named error, never a round quietly attached to a terminal row.
+    appendCampaignRound(id: CampaignId, round: CampaignRound): void
+    {
+        this.requireRunningCampaign(id, 'append a round to');
+        const result = this.db.prepare(
+            `INSERT INTO campaign_rounds (campaign_id, round, run_id, lens, model, findings, turns, cost_usd,
+                                          aborted, failed, consolidation_failed, consolidation_id, novel_clusters,
+                                          observed, f1, f2, undiscovered, estimated_total)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM campaigns WHERE id = ? AND status = 'running')`,
+        ).run(
+            id, round.round, round.runId ?? null, round.lens ?? null, round.model ?? null, round.findings, round.turns, round.costUsd,
+            round.aborted ?? null, round.failed ?? null, round.consolidationFailed ?? null,
+            round.consolidationId ?? null, round.novelClusters,
+            round.coverage?.observed ?? null, round.coverage?.f1 ?? null, round.coverage?.f2 ?? null,
+            round.coverage?.undiscovered ?? null, round.coverage?.estimatedTotal ?? null,
+            id,
+        );
+        if (result.changes === 0)
+        {
+            throw new Error(`Cannot append a round to campaign #${id}: it changed state concurrently.`);
+        }
+    }
+
+    finishCampaign(id: CampaignId, stoppedBy: StoppedBy): void
+    {
+        this.transition(id, ['running'], 'finish',
+            "UPDATE campaigns SET status = 'finished', stopped_by = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+            stoppedBy, new Date().toISOString(), id);
+    }
+
+    // The loop is over and knows why — stoppedBy becomes durable HERE, before
+    // any verification credit is spent, so a verify crash can never lose it.
+    beginCampaignVerification(id: CampaignId, stoppedBy: StoppedBy): void
+    {
+        this.transition(id, ['running'], 'begin verification on',
+            "UPDATE campaigns SET status = 'verifying', stopped_by = ? WHERE id = ? AND status = 'running'",
+            stoppedBy, id);
+    }
+
+    // stoppedBy is re-stated only when verification itself changed the
+    // answer: a shutdown that cut the pass short turns a completed plan into
+    // 'stopped', and the row must agree with the result the caller is handed.
+    finishVerifiedCampaign(id: CampaignId, stoppedBy?: StoppedBy): void
+    {
+        this.transition(id, ['verifying'], 'finish verification on',
+            "UPDATE campaigns SET status = 'finished', finished_at = ?, stopped_by = COALESCE(?, stopped_by) WHERE id = ? AND status = 'verifying'",
+            new Date().toISOString(), stoppedBy ?? null, id);
+    }
+
+    // Fails from either live phase; a stopped_by already recorded (the loop
+    // completed, verification died) survives the transition.
+    failCampaign(id: CampaignId, error: string): void
+    {
+        this.transition(id, ['running', 'verifying'], 'fail',
+            "UPDATE campaigns SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status IN ('running', 'verifying')",
+            error, new Date().toISOString(), id);
+    }
+
+    // The loop's proof of protection: recorded only after the lease is
+    // actually held, so "lease acquirable" testifies about exactly the rows
+    // that once held one. Rows that never mark stay unprovable and the
+    // sweep refuses to judge them.
+    markCampaignLeased(id: CampaignId): void
+    {
+        this.transition(id, ['running'], 'mark leased',
+            "UPDATE campaigns SET leased = 1 WHERE id = ? AND status = 'running'", id);
+    }
+
+    // The sweep's question and nothing more: which campaigns claim to be
+    // alive, since when, and whether their lease can testify. listCampaigns
+    // aggregates rounds and costs over the whole table — history-sized work
+    // a per-poll maintenance task must not do.
+    openCampaigns(): Array<{ id: CampaignId; createdAt: string; leased: boolean }>
+    {
+        const rows = this.db.prepare(
+            "SELECT id, created_at, leased FROM campaigns WHERE status IN ('running', 'verifying') ORDER BY id",
+        ).all() as unknown as Array<{ id: number; created_at: string; leased: number }>;
+        return rows.map(row => ({ id: campaignId(row.id), createdAt: row.created_at, leased: row.leased === 1 }));
+    }
+
+    // Check-then-act made honest: the UPDATE's own status guard is the act,
+    // and zero changed rows means another process transitioned the row in
+    // the race window — reported as the same named error the check throws,
+    // never a silent no-op the caller reads as success.
+    private transition(id: CampaignId, expected: Array<Campaign['status']>, action: string, sql: string, ...params: Array<string | number | null>): void
+    {
+        this.requireCampaignState(id, expected, action);
+        const result = this.db.prepare(sql).run(...params);
+        if (result.changes === 0)
+        {
+            throw new Error(`Cannot ${action} campaign #${id}: it changed state concurrently.`);
+        }
+    }
+
+    getCampaign(id: CampaignId): Campaign | undefined
+    {
+        const row = this.db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id) as unknown as CampaignRow | undefined;
+        if (row === undefined)
+        {
+            return undefined;
+        }
+        const rounds = (this.db.prepare(
+            'SELECT * FROM campaign_rounds WHERE campaign_id = ? ORDER BY round',
+        ).all(id) as unknown as CampaignRoundRow[]).map(toCampaignRound);
+        return toCampaign(row, rounds);
+    }
+
+    // liveOnly bounds the aggregate to running/verifying rows — the
+    // dashboard's per-poll question — instead of joining every campaign
+    // ever stored to answer it.
+    listCampaigns(filter?: TargetFilter, opts: { liveOnly?: boolean } = {}): CampaignSummary[]
+    {
+        const [where, params] = filterClause(filter, 'c');
+        const live = "c.status IN ('running', 'verifying')";
+        const clause = opts.liveOnly !== true ? where
+            : where === '' ? `WHERE ${live}` : `${where} AND ${live}`;
+        // The row type names exactly what the SELECT fetches — a CampaignRow
+        // cast would claim columns this query never reads.
+        interface SummaryRow
+        {
+            id: number;
+            created_at: string;
+            owner: string;
+            repo: string;
+            head: string;
+            base: string;
+            status: string;
+            stopped_by: string | null;
+            leased: number;
+            round_count: number;
+            review_cost_usd: number;
+        }
+        const rows = this.db.prepare(
+            `SELECT c.id, c.created_at, c.owner, c.repo, c.head, c.base, c.status, c.stopped_by, c.leased,
+                    COUNT(r.round) AS round_count, COALESCE(SUM(r.cost_usd), 0) AS review_cost_usd
+             FROM campaigns c LEFT JOIN campaign_rounds r ON r.campaign_id = c.id
+             ${clause}
+             GROUP BY c.id
+             ORDER BY c.id DESC`,
+        ).all(...params) as unknown as SummaryRow[];
+
+        return rows.map(row => ({
+            id: campaignId(row.id),
+            createdAt: row.created_at,
+            owner: row.owner,
+            repo: row.repo,
+            head: row.head,
+            base: row.base,
+            target: `${row.owner}/${row.repo} ${row.head} → ${row.base}`,
+            status: campaignStatus(row.id, row.status),
+            ...(row.stopped_by !== null ? { stoppedBy: row.stopped_by as StoppedBy } : {}),
+            leased: row.leased === 1,
+            roundCount: row.round_count,
+            reviewCostUsd: row.review_cost_usd,
+        }));
+    }
+
+    private requireRunningCampaign(id: CampaignId, action: string): void
+    {
+        this.requireCampaignState(id, ['running'], action);
+    }
+
+    private requireCampaignState(id: CampaignId, expected: Array<Campaign['status']>, action: string): void
+    {
+        const row = this.db.prepare('SELECT status FROM campaigns WHERE id = ?').get(id) as unknown as { status: string } | undefined;
+        if (row === undefined)
+        {
+            throw new Error(`No campaign #${id}.`);
+        }
+        if (!expected.includes(row.status as Campaign['status']))
+        {
+            throw new Error(`Cannot ${action} campaign #${id}: it is ${row.status}, not ${expected.join(' or ')}.`);
+        }
+    }
+
     close(): void
     {
         this.db.close();
     }
+}
+
+// The CHECK constraints guarantee each status's fields are present; the casts
+// restate what the row's status already proved.
+function toCampaign(row: CampaignRow, rounds: CampaignRound[]): Campaign
+{
+    const common = {
+        id: campaignId(row.id),
+        createdAt: row.created_at,
+        owner: row.owner,
+        repo: row.repo,
+        head: row.head,
+        base: row.base,
+        ...(row.baseline_consolidation_id !== null
+            ? { baselineConsolidationId: consolidationId(row.baseline_consolidation_id) }
+            : {}),
+        leased: row.leased === 1,
+        rounds,
+    };
+    switch (campaignStatus(row.id, row.status))
+    {
+        case 'running':
+            return { ...common, status: 'running' };
+        case 'verifying':
+            return { ...common, status: 'verifying', stoppedBy: row.stopped_by as StoppedBy };
+        case 'finished':
+            return { ...common, status: 'finished', stoppedBy: row.stopped_by as StoppedBy, finishedAt: row.finished_at as string };
+        case 'failed':
+            return {
+                ...common, status: 'failed', error: row.error as string, finishedAt: row.finished_at as string,
+                ...(row.stopped_by !== null ? { stoppedBy: row.stopped_by as StoppedBy } : {}),
+            };
+    }
+}
+
+// One trust posture for the status column, wherever it is read: the CHECK
+// makes an unknown value unreachable today, and this keeps a future value or
+// a hand-edited row a named error at the boundary instead of a Zod surprise
+// on the dashboard.
+const CAMPAIGN_STATUSES: ReadonlyArray<Campaign['status']> = ['running', 'verifying', 'finished', 'failed'];
+
+function campaignStatus(id: number, status: string): Campaign['status']
+{
+    if (!CAMPAIGN_STATUSES.includes(status as Campaign['status']))
+    {
+        throw new Error(`Campaign #${id} has unknown status '${status}'.`);
+    }
+    return status as Campaign['status'];
+}
+
+function toCampaignRound(row: CampaignRoundRow): CampaignRound
+{
+    return {
+        round: row.round,
+        ...(row.run_id !== null ? { runId: runId(row.run_id) } : {}),
+        ...(row.lens !== null ? { lens: row.lens } : {}),
+        ...(row.model !== null ? { model: row.model } : {}),
+        findings: row.findings,
+        turns: row.turns,
+        costUsd: row.cost_usd,
+        ...(row.aborted !== null ? { aborted: row.aborted } : {}),
+        ...(row.failed !== null ? { failed: row.failed } : {}),
+        ...(row.consolidation_failed !== null ? { consolidationFailed: row.consolidation_failed } : {}),
+        // The all-or-nothing CHECK ties the coverage columns to
+        // consolidation_id, so one null test speaks for all six.
+        ...(row.consolidation_id !== null
+            ? {
+                consolidationId: consolidationId(row.consolidation_id),
+                coverage: {
+                    observed: row.observed as number,
+                    f1: row.f1 as number,
+                    f2: row.f2 as number,
+                    undiscovered: row.undiscovered as number,
+                    estimatedTotal: row.estimated_total as number,
+                },
+            }
+            : {}),
+        novelClusters: row.novel_clusters,
+    };
+}
+
+// The list methods' shared WHERE builder: the triple always binds together,
+// base joins only when the caller pinned it.
+function filterClause(filter: TargetFilter | undefined, alias: string): [string, string[]]
+{
+    if (filter === undefined)
+    {
+        return ['', []];
+    }
+    const base = filter.base !== undefined ? [filter.base] : [];
+    return [
+        `WHERE ${alias}.owner = ? AND ${alias}.repo = ? AND ${alias}.head = ?${base.length > 0 ? ` AND ${alias}.base = ?` : ''}`,
+        [filter.owner, filter.repo, filter.head, ...base],
+    ];
 }
 
 function toFinding(row: FindingRow): NewFinding

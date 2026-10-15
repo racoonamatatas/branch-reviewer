@@ -184,6 +184,72 @@ describe('ReviewStore', () =>
         expect(triple).toHaveLength(2);
     });
 
+    it('should round-trip an empty run: no review, no reason, its own status', () =>
+    {
+        // Arrange
+        const empty: NewRun = {
+            owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main',
+            model: 'claude-opus-5',
+            status: 'empty',
+            turns: 0,
+            costUsd: 0,
+            usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            filesChanged: 0,
+        };
+        const id = store.saveRun(empty);
+
+        // Act
+        const stored = store.getRun(id);
+
+        // Assert
+        expect(stored).toEqual({ id, createdAt: expect.any(String) as unknown, ...empty });
+        expect(stored?.review).toBeUndefined();
+        expect(stored?.reason).toBeUndefined();
+    });
+
+    it('should migrate fabricated submitted empty-diff rows to the empty status on open', () =>
+    {
+        // Arrange: a row written while the short-circuit briefly returned a
+        // submitted review for an empty compare (slice-11 branch, pre-fix).
+        const dir = mkdtempSync(join(tmpdir(), 'store-empty-migration-'));
+        const path = join(dir, 'reviews.db');
+        try
+        {
+            const before = new ReviewStore(path);
+            const fabricated = before.saveRun({
+                ...submittedRun,
+                review: { summary: 'Empty diff: nothing was reviewed.', findings: [] },
+                filesChanged: 0,
+                turns: 0,
+                costUsd: 0,
+            });
+            const legacy = before.saveRun(submittedRun);  // no filesChanged: "unknown" must stay submitted
+            // Pre-branch code measured filesChanged and ran the model anyway:
+            // a billed (turns > 0) review of an empty compare is genuine and
+            // must survive — relabeling it would drop its review from every
+            // future union, irreversibly.
+            const genuine = before.saveRun({
+                ...submittedRun,
+                review: { summary: 'Nothing changed on this branch.', findings: [] },
+                filesChanged: 0,
+            });
+            before.close();
+
+            // Act
+            const migrated = new ReviewStore(path);
+
+            // Assert
+            expect(migrated.getRun(fabricated)?.status).toBe('empty');
+            expect(migrated.getRun(legacy)?.status).toBe('submitted');
+            expect(migrated.getRun(genuine)?.status).toBe('submitted');
+            migrated.close();
+        }
+        finally
+        {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('should return undefined for an unknown run id', () =>
     {
         // Act
@@ -271,6 +337,29 @@ describe('ReviewStore', () =>
             // Assert
             expect(summaries).toHaveLength(1);
             expect(summaries[0]).toMatchObject({ id: consolidationId, runIds: [runA, runB], clusterCount: 2 });
+        });
+
+        it('should pin listConsolidations to a base when the filter carries one', () =>
+        {
+            // Arrange: a second rev of the same head against another base.
+            const { consolidationId: onMain, runA, a1 } = savedConsolidation();
+            const onDevelop = store.saveConsolidation({
+                owner: 'acme',
+                repo: 'widgets',
+                head: 'feature-x',
+                base: 'develop',
+                runIds: [runA],
+                clusters: [{ memberIds: [a1.id], representativeId: a1.id, severity: 'warning', occurrence: 1 }],
+            });
+
+            // Act
+            const filter = { owner: 'acme', repo: 'widgets', head: 'feature-x' };
+            const triple = store.listConsolidations(filter);
+            const pinned = store.listConsolidations({ ...filter, base: 'main' });
+
+            // Assert
+            expect(triple.map(c => c.id)).toEqual([onDevelop, onMain]);
+            expect(pinned.map(c => c.id)).toEqual([onMain]);
         });
 
         it('should return undefined for an unknown consolidation id', () =>

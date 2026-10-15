@@ -6,9 +6,12 @@
 // deliberate departure: the verifier is asked for evidence in files the diff
 // never touched (CI, deploy manifests, env templates), and a read tool that
 // can only fetch exact paths forces it to guess — a capability gap the port
-// inherited and the predecessor never fixed. PullSource is likewise this
-// project's own addition (the trigger slice needs to see PRs, the review
-// path never does).
+// inherited and the predecessor never fixed. The second departure is a
+// wire-shape fix: compare() throws when GitHub omits the `files` key instead
+// of reading it as an empty diff (see below) — no behavior change for any
+// compare GitHub can fully enumerate. PullSource is likewise this project's
+// own addition (the trigger slice needs to see PRs, the review path never
+// does); a separate interface so the review-tool contract stays the port.
 
 export interface ChangedFile
 {
@@ -100,7 +103,17 @@ export class GitHubClient implements RepoClient, PullSource
             const data = await this.request(
                 `${this.repoPath()}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=${PAGE_SIZE}&page=${page}`,
             ) as { files?: RawChangedFile[] };
-            const batch = data.files ?? [];
+            // GitHub omits `files` entirely when the comparison is too large
+            // to enumerate. Collapsing that into [] would read as an empty
+            // diff — which downstream is now a terminal success (status
+            // 'empty', job succeeded, head SHA never re-enqueued), so an
+            // unreviewed branch would vanish without a failure signal.
+            // Throwing fails the run/job loudly and leaves it retryable.
+            if (data.files === undefined)
+            {
+                throw new Error(`GitHub omitted the files list for ${base}...${head} (comparison too large to enumerate?) — cannot distinguish this from an empty diff, refusing to report one.`);
+            }
+            const batch = data.files;
             for (const f of batch)
             {
                 files.push({

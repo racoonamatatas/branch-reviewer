@@ -62,6 +62,30 @@ describe('submittedRunsFor', () =>
         // Assert
         expect(runs.map(r => r.id)).toEqual([first, second]);
     });
+
+    it('should exclude empty runs from the union', () =>
+    {
+        // Arrange: a real sample and an empty-diff short-circuit.
+        const sample = store.saveRun(newRun([someFinding], { filesChanged: 3 }));
+        store.saveRun(newRun([], { status: 'empty', review: undefined, filesChanged: 0 }));
+
+        // Act
+        const runs = submittedRunsFor(store, target);
+
+        // Assert: an empty run reviewed nothing — it is not a sample, and
+        // must not inflate the verifier's 1-of-N denominator or churn
+        // verifyTarget's reuse check.
+        expect(runs.map(r => r.id)).toEqual([sample]);
+    });
+
+    it('should keep legacy rows that predate the filesChanged column', () =>
+    {
+        // Arrange: no filesChanged at all — "unknown" stays submitted.
+        const legacy = store.saveRun(newRun([someFinding]));
+
+        // Act + Assert
+        expect(submittedRunsFor(store, target).map(r => r.id)).toEqual([legacy]);
+    });
 });
 
 describe('consolidateRuns', () =>
