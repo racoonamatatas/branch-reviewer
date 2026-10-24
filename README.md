@@ -282,7 +282,9 @@ CLAUDE_CODE_OAUTH_TOKEN=...
 Optional `.env` vars:
 
 - `GITHUB_TOKEN` — raises GitHub's rate limit; required for private repos.
-- `REVIEW_MODEL` — reviewer model, default `claude-opus-5`.
+- `REVIEW_MODEL` — reviewer model, default `claude-opus-5`. Any model id
+  works; the 5.5 ids (`claude-opus-5-5`, `claude-sonnet-5-5`) need Agent SDK
+  ≥ 0.3.280, which the pinned 0.3.310 satisfies.
 - `REVIEW_MODELS` — comma list; campaigns rotate the review model per round.
 - `JUDGE_MODEL` — clustering judge, default `claude-sonnet-5`.
 - `VERIFY_MODEL` — verifier, defaults to the reviewer's model.

@@ -34,7 +34,7 @@ npm run eval:freeze -- <consolidation-id>   # freeze a consolidation as the judg
 npm run eval:judge [-- --trials N]          # stochastic judge eval (pass rate + pair precision/recall) — run on demand, NOT part of the unit suite; every trial bills a judge call
 ```
 
-Model policy lives in `src/sdk/models.ts`, one knob per role: reviewer `REVIEW_MODEL` (default `claude-opus-5`), clustering judge `JUDGE_MODEL` (default `claude-sonnet-5` — a matching problem doesn't need Opus), verifier `VERIFY_MODEL` (defaults to the reviewer's model). `REVIEW_MODELS` (comma list) opts campaigns into per-round model rotation. Every `query()` resolves its own default; nothing falls through to the SDK's. Everything that calls the model burns real subscription credit — never run review/consolidate/verify/campaign/eval:judge as a casual check.
+Model policy lives in `src/sdk/models.ts`, one knob per role: reviewer `REVIEW_MODEL` (default `claude-opus-5`), clustering judge `JUDGE_MODEL` (default `claude-sonnet-5` — a matching problem doesn't need Opus), verifier `VERIFY_MODEL` (defaults to the reviewer's model). `REVIEW_MODELS` (comma list) opts campaigns into per-round model rotation. Every `query()` resolves its own default; nothing falls through to the SDK's. The SDK is pinned exactly: its version tracks the bundled Claude Code build, which gates which model ids run (the 5.5 ids need ≥ 0.3.280 — 0.3.222 rejected `claude-opus-5-5` with a 400). Everything that calls the model burns real subscription credit — never run review/consolidate/verify/campaign/eval:judge as a casual check.
 
 ## Architecture
 
