@@ -25,8 +25,8 @@ export function assertSubscriptionCredit(): void
 }
 
 // An unauthenticated run surfaces as a zero-cost result with subtype
-// 'success' but is_error set (observed on SDK 0.3.222: "Not logged in ·
-// Please run /login") — the success/error split in `subtype` does not cover
+// 'success' but is_error set (observed on SDK 0.3.222 and re-confirmed on
+// 0.3.310: "Not logged in · Please run /login") — the success/error split in `subtype` does not cover
 // it, and left alone it dies later as an opaque Zod parse of an absent
 // structured_output. Translate it here; the SDK's own advice (/login)
 // presumes an interactive terminal, so point headless machines at the token.
