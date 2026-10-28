@@ -513,6 +513,16 @@ Shipped so far:
   already-adjudicated findings); `--reverify` re-tests deliberately.
 - **Judge stability is good:** independent re-clusterings of the same four runs
   produced identical partitions — which is what makes f1/f2 trustworthy.
+- **Cross-model corroboration can be wrong too** (2026-10-28, campaign #25 /
+  consolidation #91): a [warning] seen in 3/4 rounds by both Opus 5.5 and
+  Sonnet 5.5 ("concurrent duplicate insert → 500, comment over-claims") skipped
+  verification as corroborated, and was false: the unique-violation → 422
+  mapping lived in an action class the diff didn't touch, and no reviewer
+  opened it. The PR author refuted it with two race tests. The other four
+  findings, all singletons, were verified and all confirmed. Agreement across
+  models proves the diff reads that way, not that the code behaves that way;
+  findings that need code outside the diff need the verifier. Evidence for
+  making `--verify-all` the default before findings reach a human.
 - **The well was still not dry after 6 reviews** of the reference target: the
   estimator put ~11 findings undiscovered of ~26 total, with marginal yield
   steady at ~1 novel finding per run.
