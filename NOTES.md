@@ -513,6 +513,18 @@ Shipped so far:
   already-adjudicated findings); `--reverify` re-tests deliberately.
 - **Judge stability is good:** independent re-clusterings of the same four runs
   produced identical partitions — which is what makes f1/f2 trustworthy.
+- **Cross-model corroboration can be wrong too** (2026-10-28, campaign #25 /
+  consolidation #91): a [warning] seen in 3/4 rounds by both Opus 5.5 and
+  Sonnet 5.5 ("concurrent duplicate insert → 500, comment over-claims") skipped
+  verification as corroborated, and was false: the unique-violation → 422
+  mapping lived in an action class the diff didn't touch, and no reviewer
+  opened it. The PR author refuted it with two race tests. The other
+  cross-model nit was skipped too (true; the PR listed it); the remaining
+  four (three singletons, one same-model repeat) were verified and all
+  confirmed. Agreement across
+  models proves the diff reads that way, not that the code behaves that way;
+  findings that need code outside the diff need the verifier. Evidence for
+  making `--verify-all` the default before findings reach a human.
 - **The well was still not dry after 6 reviews** of the reference target: the
   estimator put ~11 findings undiscovered of ~26 total, with marginal yield
   steady at ~1 novel finding per run.
@@ -1006,6 +1018,18 @@ base rules. Still open (deliberately deferred):
   `GitHubClient`. Wins: unpushed branches become reviewable, and no
   300-file compare cap. Open question: how a job names a local target
   (path vs owner/repo) without breaking target identity in the store.
+- **Runs don't record the reviewed head SHA (todo, user-requested
+  2026-10-28):** `Target` is owner/repo/head-branch/base, so a re-review
+  after fixes lands in the same target as the pre-fix runs.
+  `submittedRunsFor` unions them, fixed findings keep inflating occurrence,
+  and member-set verdict inheritance can carry a `confirmed` onto code that
+  no longer has the defect. Surfaced when a re-review was requested on a PR
+  that had already had a campaign. Fix direction: store the compared head
+  SHA on each run (resolve the branch ref once at review start, so the
+  tools and the record agree on the commit), and scope
+  consolidation/inheritance to runs of the current SHA, or flag stale-SHA
+  members. Until then: re-review with a single `review` and check fixes by
+  hand, or campaign with `--reverify`.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
