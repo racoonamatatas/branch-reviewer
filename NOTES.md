@@ -136,7 +136,7 @@ target is exactly when a campaign is most wanted. The consolidate CLI now
 accepts a single run (`< 2` guard relaxed): verification hangs off clusters,
 so clustering one run is how its findings become verifiable — campaign
 already produced single-run consolidations after round 1. The path is
-proven: run #14 (target-org/target-repo PR 1909) consolidated alone and
+proven: run #14 (a real PR on the target repo) consolidated alone and
 verified 5/5 clusters — 4 confirmed, 1 undetermined ($3.26).
 
 Chunk-7 (human verdicts — the first write endpoint, deliberately decided):
@@ -999,6 +999,13 @@ base rules. Still open (deliberately deferred):
     Exchange-style code formatting) instead of one undifferentiated blob.
   - Numbered points each on their own line, indented, rather than run
     together in a paragraph.
+- **Local-git `RepoClient` (todo, user-requested 2026-10-09):** review a
+  clone on disk instead of through the GitHub API — `compare()` via
+  `git diff --merge-base`, `readFile` via `git show <ref>:<path>`. The tools
+  already depend only on the `RepoClient` interface, so it slots in beside
+  `GitHubClient`. Wins: unpushed branches become reviewable, and no
+  300-file compare cap. Open question: how a job names a local target
+  (path vs owner/repo) without breaking target identity in the store.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
