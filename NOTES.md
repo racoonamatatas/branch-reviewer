@@ -518,8 +518,10 @@ Shipped so far:
   Sonnet 5.5 ("concurrent duplicate insert → 500, comment over-claims") skipped
   verification as corroborated, and was false: the unique-violation → 422
   mapping lived in an action class the diff didn't touch, and no reviewer
-  opened it. The PR author refuted it with two race tests. The other four
-  findings, all singletons, were verified and all confirmed. Agreement across
+  opened it. The PR author refuted it with two race tests. The other
+  cross-model nit was skipped too (true; the PR listed it); the remaining
+  four (three singletons, one same-model repeat) were verified and all
+  confirmed. Agreement across
   models proves the diff reads that way, not that the code behaves that way;
   findings that need code outside the diff need the verifier. Evidence for
   making `--verify-all` the default before findings reach a human.
