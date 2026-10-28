@@ -999,6 +999,13 @@ base rules. Still open (deliberately deferred):
     Exchange-style code formatting) instead of one undifferentiated blob.
   - Numbered points each on their own line, indented, rather than run
     together in a paragraph.
+- **Local-git `RepoClient` (todo, user-requested 2026-10-09):** review a
+  clone on disk instead of through the GitHub API — `compare()` via
+  `git diff --merge-base`, `readFile` via `git show <ref>:<path>`. The tools
+  already depend only on the `RepoClient` interface, so it slots in beside
+  `GitHubClient`. Wins: unpushed branches become reviewable, and no
+  300-file compare cap. Open question: how a job names a local target
+  (path vs owner/repo) without breaking target identity in the store.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
