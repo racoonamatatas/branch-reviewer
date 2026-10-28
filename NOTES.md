@@ -1006,6 +1006,18 @@ base rules. Still open (deliberately deferred):
   `GitHubClient`. Wins: unpushed branches become reviewable, and no
   300-file compare cap. Open question: how a job names a local target
   (path vs owner/repo) without breaking target identity in the store.
+- **Runs don't record the reviewed head SHA (todo, user-requested
+  2026-10-28):** `Target` is owner/repo/head-branch/base, so a re-review
+  after fixes lands in the same target as the pre-fix runs.
+  `submittedRunsFor` unions them, fixed findings keep inflating occurrence,
+  and member-set verdict inheritance can carry a `confirmed` onto code that
+  no longer has the defect. Surfaced when a re-review was requested on a PR
+  that had already had a campaign. Fix direction: store the compared head
+  SHA on each run (resolve the branch ref once at review start, so the
+  tools and the record agree on the commit), and scope
+  consolidation/inheritance to runs of the current SHA, or flag stale-SHA
+  members. Until then: re-review with a single `review` and check fixes by
+  hand, or campaign with `--reverify`.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
