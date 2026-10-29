@@ -285,6 +285,39 @@ describe('runCampaign', () =>
         expect(campaign.rounds.map(r => r.lens)).toEqual([undefined, LENSES[0]?.name, LENSES[1]?.name]);
     });
 
+    it('should resume the rotation from the target\'s stored runs instead of restarting it', async () =>
+    {
+        // Arrange: every slot but the last lens already sampled once, each by
+        // 'model-a' — the follow-up campaign should start where they stopped.
+        for (const lens of [undefined, ...LENSES.slice(0, -1).map(l => l.name)])
+        {
+            store.saveRun({
+                ...target, model: 'model-a', status: 'submitted', ...(lens !== undefined ? { lens } : {}),
+                review: { summary: 't', findings: [finding(`stored-${lens ?? 'generalist'}`)] },
+                turns: 5, costUsd: 1, usage: ZERO,
+            });
+        }
+        const seen: ReviewRunOptions[] = [];
+        const review = async (_c: RepoClient, _t: unknown, reviewOpts: ReviewRunOptions = {}): Promise<ReviewResult> =>
+        {
+            seen.push(reviewOpts);
+            return submittedResult([finding(`round-${seen.length}`)]);
+        };
+
+        // Act
+        await runCampaign(store, fakeClient, target, {
+            maxRuns: 2,
+            models: ['model-a', 'model-b'],
+            verify: false,
+            runners: { review, consolidate: identityConsolidate() },
+        });
+
+        // Assert: the starved lens first, under the model that has never
+        // reviewed at all; then the slot order restarts from the generalist.
+        expect(seen.map(o => o.lens?.name)).toEqual([LENSES.at(-1)?.name, undefined]);
+        expect(seen.map(o => o.model)).toEqual(['model-b', 'model-b']);
+    });
+
     it('should report a baseline consolidation failure instead of swallowing it', async () =>
     {
         // Arrange: two stored runs make the baseline eligible, and the judge

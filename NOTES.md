@@ -30,9 +30,10 @@ converting Chao1's broken independence assumption into a designed ensemble —
 occurrence becomes readable as cross-model agreement. The lens rides the
 user prompt so the system prompt stays the shared cache prefix; lens and
 resolved model are recorded on the run (nullable `lens` column, resolved
-model never saved as 'default' when rotating). Round 1 is deliberately
-lens-free so the baseline stays comparable with stored runs; rotation is a
-function of round number alone (an aborted round consumes its slot). Model
+model never saved as 'default' when rotating). Rotation picks the
+least-sampled slot from the target's stored runs (see "Rotation resumes"
+below; it was originally a function of round number alone); an aborted round
+still consumes its slot. Model
 rotation forfeits cross-model cache sharing on purpose — purely a cost, not
 a statistical loss: the sameness of the inputs is the correlation, and a
 cache hit only certifies that sameness (identical prefixes compute
@@ -656,6 +657,23 @@ $0.32) → the following cycle skipped the SHA (no duplicate). The finding
 was a defensible nit on the PR's own refactor — an unconstrained generic
 that would let unbranded ids past the checking-constructor convention —
 citing toTypedId as the standard to match.
+
+**Rotation resumes from the target's history (2026-10-29).** The lens and
+model cycle was a function of the round number, so every campaign restarted
+it: a follow-up campaign re-spent round 1 on a generalist pass the stored
+runs already held, and with a four-round cap against five slots (generalist +
+four lenses) the `tests` lens never ran — two live campaigns on one target,
+eight rounds, zero `tests` rounds. Now `nextRound` (`src/campaign/rotation.ts`)
+tallies the target's submitted runs plus this campaign's own picks and takes
+the least-sampled lens slot (unlensed runs count as generalist; ties go to
+slot order, so a fresh target plays out exactly as before). With a roster,
+the model is the one least paired with that lens, then least used overall —
+so cross-model agreement can accrue per lens instead of each lens settling on
+one model. A starved slot catches up before the cycle resumes: after the two
+campaigns above, the next one runs `tests` twice. Caveat on the evidence: the
+repeated generalist round in the second campaign still yielded 2 novel
+clusters, so "wasted round" was overstated — the real cost was the starved
+lens.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked

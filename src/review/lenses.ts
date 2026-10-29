@@ -39,13 +39,3 @@ export const LENSES: readonly Lens[] = [
             + 'and fixtures or mocks that have drifted from the code they stand in for.',
     },
 ];
-
-// Round 1 is deliberately lens-free: the generalist pass samples the whole
-// surface the way every stored run did, keeping the campaign's baseline
-// comparable with its own history. Later rounds cycle the lenses, and the
-// cycle re-enters the generalist slot so long campaigns keep sampling it.
-export function lensFor(round: number): Lens | undefined
-{
-    const slot = (round - 1) % (LENSES.length + 1);
-    return slot === 0 ? undefined : LENSES[slot - 1];
-}

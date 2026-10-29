@@ -13,7 +13,6 @@ import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
 import { coverageOf, novelClusters, shouldContinue, verifiableClusters } from '../coverage/coverage.js';
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
-import { lensFor } from '../review/lenses.js';
 import { runReview } from '../review/review.js';
 import { acquireCampaignLease } from '../store/lease.js';
 import type { Lease } from '../store/lease.js';
@@ -23,6 +22,8 @@ import type { CampaignId, ConsolidationId, RunId } from '../types/ids.js';
 import type { Target } from '../types/target.js';
 import { verifyPending } from '../verify/verify.js';
 import type { VerifyPendingOptions, VerifyPendingSummary } from '../verify/verify.js';
+import { nextRound } from './rotation.js';
+import type { RotationSample } from './rotation.js';
 
 // Two aborts in a row is the SDK telling us something structural; burning the
 // rest of the run cap on it is waste, not diligence.
@@ -214,6 +215,11 @@ export async function runCampaign(
             opts.onBaseline?.(latest.id, coverageOf(verifiableClusters(latest.clusters)));
         }
 
+        // The rotation resumes from the target's stored evidence, so a
+        // follow-up campaign spends its rounds where earlier ones did not look.
+        const rotation: RotationSample[] = submittedRunsFor(store, target)
+            .map(run => ({ ...(run.lens !== undefined ? { lens: run.lens } : {}), model: run.model }));
+
         for (let round = 1; round <= opts.maxRuns; round++)
         {
             if (opts.shouldStop?.() === true)
@@ -222,14 +228,21 @@ export async function runCampaign(
                 break;
             }
 
-            // The round's slice of the rotation. Lenses cycle unless switched
-            // off; models cycle only when a list was given. Both are functions
-            // of the round number alone, so an unusable round still consumes
-            // its slot — determinism over backfilling.
-            const lens = (opts.rotateLenses ?? true) ? lensFor(round) : undefined;
-            const model = opts.models !== undefined && opts.models.length > 0
-                ? opts.models[(round - 1) % opts.models.length]!
-                : opts.model;
+            // The round's slice of the rotation: least-sampled lens (unless
+            // switched off) and, when a roster was given, model. The pick
+            // joins the tally whether or not the round turns out usable, so
+            // an unusable round still consumes its slot — determinism over
+            // backfilling.
+            const pick = nextRound(rotation, {
+                rotateLenses: opts.rotateLenses ?? true,
+                ...(opts.models !== undefined ? { models: opts.models } : {}),
+            });
+            rotation.push({
+                ...(pick.lens !== undefined ? { lens: pick.lens.name } : {}),
+                ...(pick.model !== undefined ? { model: pick.model } : {}),
+            });
+            const lens = pick.lens;
+            const model = pick.model ?? opts.model;
             opts.onRoundStart?.(round, opts.maxRuns, lens?.name, model);
 
             const outcome: RoundOutcome = {
