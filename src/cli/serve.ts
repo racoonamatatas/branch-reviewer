@@ -76,6 +76,8 @@ function main(): void
     assertSubscriptionCredit();
     const args = parseArgs(process.argv.slice(2));
     const model = reviewModel();
+    const models = reviewModels();
+    const campaignModels = models.length > 1 ? `campaigns rotate ${models.join(' / ')}` : `campaigns single-model ${models[0]}`;
 
     const jobs = new JobStore(DEFAULT_DB_PATH);
     const store = new ReviewStore(DEFAULT_DB_PATH);
@@ -134,7 +136,7 @@ function main(): void
         clientFor: (owner, repo) => new GitHubClient(owner, repo, process.env.GITHUB_TOKEN),
         defaultModel: model,
         defaultVerifyModel: verifyModel(),
-        defaultModels: reviewModels(),
+        defaultModels: models,
         onEvent: (id, event) =>
         {
             console.log(`  job #${id}: ${event}`);
@@ -225,11 +227,11 @@ function main(): void
     server.listen(args.port, HOST, () =>
     {
         console.log(`branch-reviewer serving on http://${HOST}:${args.port} `
-            + `(model ${model}, db ${DEFAULT_DB_PATH}, polling ${watches.list().length} watch(es) every ${args.pollIntervalMs / 1000}s)`);
+            + `(model ${model}, ${campaignModels}, db ${DEFAULT_DB_PATH}, polling ${watches.list().length} watch(es) every ${args.pollIntervalMs / 1000}s)`);
         console.log(staticRoot !== undefined
             ? `  dashboard: http://${HOST}:${args.port}/`
             : '  dashboard: not built — API only (npm run dashboard:build to add it)');
-        activityLog.push('server', `server started — model ${model}, polling every ${args.pollIntervalMs / 1000}s`);
+        activityLog.push('server', `server started — model ${model}, ${campaignModels}, polling every ${args.pollIntervalMs / 1000}s`);
     });
 
     // The overlap guard lives HERE, not only inside poll(): poll's own
