@@ -148,7 +148,7 @@ export interface HumanVerification extends VerificationBase
 
 export type Verification = AgentVerification | HumanVerification;
 
-export type NewVerification = New<AgentVerification> | New<HumanVerification>;
+export type NewVerification = New<Verification>;
 
 // Why a campaign stops. 'empty-diff' is a stop, not a failure: the compare
 // listed no files, and every later round would compare the same base/head —

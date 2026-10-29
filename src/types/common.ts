@@ -18,8 +18,20 @@ export interface Created
     createdAt: string;  // ISO 8601
 }
 
-// The one derivation rule: strip everything server-assigned.
-export type New<T> = Omit<T, keyof Identified<string> | keyof Created>;
+// The one derivation rule: strip everything server-assigned. Written as a
+// conditional so it applies to each member of a union separately. Given
+//
+//     type Dutch   = Identified<'Address'> & { country: 'NL'; region: null; postcode: string };
+//     type Foreign = Identified<'Address'> & { country: 'DE'; region: string | null };
+//
+// a plain Omit<Dutch | Foreign, 'id'> does not work: keyof a union is only
+// the keys every member shares, so the result is one merged object,
+// { country: 'NL' | 'DE'; region: string | null }. Dutch's postcode is gone,
+// and { country: 'NL', region: 'Bayern' } compiles. The conditional form
+// works: `T extends unknown` distributes over the union, so New<Dutch |
+// Foreign> is New<Dutch> | New<Foreign>, each member keeps its own fields,
+// and a Dutch address with a region is rejected.
+export type New<T> = T extends unknown ? Omit<T, keyof Identified<string> | keyof Created> : never;
 
 export function idConstructor<T extends string>(name: string): (n: number) => Id<T>
 {

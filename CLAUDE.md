@@ -61,7 +61,7 @@ Key facts that shape the code:
 
 Defined in `src/types/common.ts` and `src/types/ids.ts`; follow them for any new entity:
 
-- Entities are bare nouns (`Run`, `Finding`) mixing in `Identified<T>`/`Created`; create-shapes derive **down** by subtraction (`New<T> = Omit<...>`), never up by extension. `id`/`createdAt` are store-assigned; callers never pass them.
+- Entities are bare nouns (`Run`, `Finding`) mixing in `Identified<T>`/`Created`; create-shapes derive **down** by subtraction (`New<T>`, a distributive `Omit` so union entities keep their halves apart), never up by extension. `id`/`createdAt` are store-assigned; callers never pass them.
 - Ids are branded numbers; the only way in is a checking constructor (`runId(n)`), the only `as Id` cast in the project lives in `idConstructor`. Model-authored ids (the least-trusted numbers in the system) gain their brand during Zod parse via `toTypedId`.
 - Zod is the runtime source of truth for wire shapes; TS types are inferred and JSON Schema for the SDK's `outputFormat` is generated (`z.toJSONSchema`, `io: 'input'` when the schema contains transforms).
 
