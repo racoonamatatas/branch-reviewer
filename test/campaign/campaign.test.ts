@@ -202,6 +202,72 @@ describe('runCampaign', () =>
         expect(verify).not.toHaveBeenCalled();
     });
 
+    it('should stop when one rotated model fails twice even though rounds alternate', async () =>
+    {
+        // Arrange: model-b aborts every time, model-a always works, so the
+        // campaign-wide streak never passes one.
+        let n = 0;
+        const review = async (_c: RepoClient, _t: unknown, reviewOpts: ReviewRunOptions = {}): Promise<ReviewResult> =>
+        {
+            n++;
+            if (reviewOpts.model === 'model-b')
+            {
+                return {
+                    status: 'aborted', reason: 'error_max_turns', filesChanged: 2,
+                    stats: { turns: 40, costUsd: 1.0, usage: ZERO, perModel: {}, turnUsage: [], compactions: 0 },
+                };
+            }
+            return submittedResult([finding(`round-${n}`)]);
+        };
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns: 6,
+            models: ['model-a', 'model-b'],
+            rotateLenses: false,
+            verify: false,
+            runners: { review, consolidate: identityConsolidate() },
+        });
+
+        // Assert: model-b's second abort ends it, two rounds short of the cap.
+        expect(campaign.stoppedBy).toBe('no-usable-runs');
+        expect(campaign.rounds.map(r => r.model)).toEqual(['model-a', 'model-b', 'model-a', 'model-b']);
+        expect(campaign.rounds.at(-1)).toMatchObject({ aborted: 'error_max_turns' });
+    });
+
+    it('should keep going when a rotated model fails once and then succeeds', async () =>
+    {
+        // Arrange: model-b aborts only on its first round.
+        let n = 0;
+        let modelBRounds = 0;
+        const review = async (_c: RepoClient, _t: unknown, reviewOpts: ReviewRunOptions = {}): Promise<ReviewResult> =>
+        {
+            n++;
+            if (reviewOpts.model === 'model-b' && ++modelBRounds === 1)
+            {
+                return {
+                    status: 'aborted', reason: 'error_max_turns', filesChanged: 2,
+                    stats: { turns: 40, costUsd: 1.0, usage: ZERO, perModel: {}, turnUsage: [], compactions: 0 },
+                };
+            }
+            return submittedResult([finding(`round-${n}`)]);
+        };
+        const maxRuns = 6;
+
+        // Act
+        const campaign = await runCampaign(store, fakeClient, target, {
+            maxRuns,
+            models: ['model-a', 'model-b'],
+            rotateLenses: false,
+            verify: false,
+            runners: { review, consolidate: identityConsolidate() },
+        });
+
+        // Assert: the one abort reset on model-b's next usable round.
+        expect(campaign.stoppedBy).toBe('max-runs');
+        expect(campaign.rounds).toHaveLength(maxRuns);
+    });
+
     it('should salvage the campaign when the judge fails mid-round: paid rounds keep their product', async () =>
     {
         // Arrange: every round finds something; the judge works for round 2's

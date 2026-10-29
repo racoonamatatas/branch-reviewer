@@ -336,7 +336,7 @@ export class Worker
         // of the sampling plan.
         if (result.stoppedBy === 'no-usable-runs')
         {
-            this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed', {
+            this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds, or one model\'s two in a row, aborted or failed', {
                 ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
             });
             return;

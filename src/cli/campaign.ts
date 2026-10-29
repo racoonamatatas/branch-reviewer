@@ -124,7 +124,7 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
     const reason = {
         'dry': 'discovery dried up',
         'max-runs': `run cap reached (${args.maxRuns})`,
-        'no-usable-runs': 'consecutive runs aborted',
+        'no-usable-runs': 'consecutive runs aborted (overall or for one model)',
         'empty-diff': 'the compare listed no files — nothing to sample',
         'no-consolidation': 'consecutive judge calls failed — union unusable',
         // The CLI wires no stop signal (Ctrl-C kills the process outright);

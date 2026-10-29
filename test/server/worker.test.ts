@@ -334,7 +334,7 @@ describe('campaign jobs', () =>
         // Assert
         expect(jobs.get(id)).toMatchObject({
             state: 'aborted',
-            error: 'no-usable-runs: two consecutive rounds aborted or failed',
+            error: 'no-usable-runs: two consecutive rounds, or one model\'s two in a row, aborted or failed',
         });
     });
 
