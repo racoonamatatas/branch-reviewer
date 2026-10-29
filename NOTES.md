@@ -1040,7 +1040,12 @@ base rules. Still open (deliberately deferred):
   `model` columns already record the coordinates; coverage could then
   stratify by cell. Cost scales linearly with cells, so this waits for
   evidence from the two-model roster experiment first.
-- **Areas to explore (finding presentation, unscheduled):**
+- **Areas to explore (finding presentation, unscheduled):** the dashboard
+  is where this bites — the user flagged how text is presented there as
+  future work (2026-10-29). `BlueprintCallout.vue` interpolates finding
+  detail and verdict rationale as plain text, so the verifier's numbered
+  evidence lists and backticked code arrive as one blob; the items below are
+  the candidate fixes.
   - Simplified Technical English (STE) — could the reviewer's prose
     (finding detail/rationale text) be constrained to it, or checked
     against it?
