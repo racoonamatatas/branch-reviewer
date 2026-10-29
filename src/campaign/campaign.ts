@@ -47,10 +47,10 @@ export interface CampaignOptions
     // rounds are anything but — same model, same prompt, same walk through
     // the same files. Rotating a lens into each round's prompt (on by
     // default: it redistributes attention, not budget) and cycling the
-    // review model (opt-in: it changes what bills) are how the campaign
-    // manufactures the independence the estimator wants, and cross-model
-    // agreement is a stronger confirmation signal than one model repeating
-    // itself. `models` is a roster balanced per lens against the target's
+    // review model (the callers' default roster, src/sdk/models.ts) are how
+    // the campaign manufactures the independence the estimator wants, and
+    // cross-model agreement is a stronger confirmation signal than one model
+    // repeating itself. `models` is a roster balanced per lens against the target's
     // stored runs (src/campaign/rotation.ts) and overrides `model`; rotation
     // forfeits cross-round cache sharing between different models — purely a
     // cost, not a statistical loss: identical inputs are the correlation,
@@ -157,6 +157,10 @@ export async function runCampaign(
     let reviewCostUsd = 0;
     let judgeCostUsd = 0;
     let consecutiveAborts = 0;
+    // Per model too: under rotation a model that always fails alternates with
+    // one that works, the campaign-wide count resets every other round, and
+    // the campaign silently degrades to single-model (found live, job #17).
+    const modelAborts = new Map<string | undefined, number>();
     let consecutiveJudgeFailures = 0;
     let stoppedBy: StoppedBy = 'max-runs';
     let latest: Consolidation | undefined;
@@ -315,7 +319,9 @@ export async function runCampaign(
             {
                 record(outcome);
                 consecutiveAborts++;
-                if (consecutiveAborts >= ABORT_TOLERANCE)
+                const modelStreak = (modelAborts.get(model) ?? 0) + 1;
+                modelAborts.set(model, modelStreak);
+                if (consecutiveAborts >= ABORT_TOLERANCE || modelStreak >= ABORT_TOLERANCE)
                 {
                     stoppedBy = 'no-usable-runs';
                     break;
@@ -323,6 +329,7 @@ export async function runCampaign(
                 continue;
             }
             consecutiveAborts = 0;
+            modelAborts.set(model, 0);
 
             // The judge is its own paid call, and its failure says nothing about
             // this round's review: the run is already saved, and the next round's

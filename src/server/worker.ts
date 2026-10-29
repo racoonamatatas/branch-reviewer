@@ -28,6 +28,9 @@ export interface WorkerDeps
     // (smoke rev 14, confirmed).
     defaultModel: string;
     defaultVerifyModel: string;
+    // A campaign job naming neither `models` nor `model` rotates this roster;
+    // a job that names one `model` asked for single-model rounds and gets them.
+    defaultModels: string[];
     onEvent?: (id: JobId, event: string) => void;
     // The stage runners, injectable so the state machine is testable without
     // burning credit. Production callers omit them.
@@ -43,6 +46,7 @@ export class Worker
     private readonly clientFor: (owner: string, repo: string) => RepoClient;
     private readonly defaultModel: string;
     private readonly defaultVerifyModel: string;
+    private readonly defaultModels: string[];
     private readonly onEvent: ((id: JobId, event: string) => void) | undefined;
     private readonly review: typeof runReview;
     private readonly campaign: typeof runCampaign;
@@ -57,6 +61,7 @@ export class Worker
         this.clientFor = deps.clientFor;
         this.defaultModel = deps.defaultModel;
         this.defaultVerifyModel = deps.defaultVerifyModel;
+        this.defaultModels = deps.defaultModels;
         this.onEvent = deps.onEvent;
         this.review = deps.review ?? runReview;
         this.campaign = deps.campaign ?? runCampaign;
@@ -244,7 +249,9 @@ export class Worker
                 // the review model and VERIFY_MODEL never applies on the
                 // server path — the CLI passes it, so the worker must too.
                 verifyModel: this.defaultVerifyModel,
-                ...(job.params.models !== undefined ? { models: job.params.models } : {}),
+                ...(job.params.models !== undefined
+                    ? { models: job.params.models }
+                    : job.params.model === undefined ? { models: this.defaultModels } : {}),
                 ...(job.params.rotateLenses !== undefined ? { rotateLenses: job.params.rotateLenses } : {}),
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.patience !== undefined ? { patience: job.params.patience } : {}),
@@ -329,7 +336,7 @@ export class Worker
         // of the sampling plan.
         if (result.stoppedBy === 'no-usable-runs')
         {
-            this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds aborted or failed', {
+            this.jobs.abort(job.id, 'no-usable-runs: two consecutive rounds, or one model\'s two in a row, aborted or failed', {
                 ...(result.consolidationId !== undefined ? { consolidationId: result.consolidationId } : {}),
             });
             return;

@@ -124,7 +124,7 @@ function printSummary(campaign: CampaignResult, args: CampaignArgs): void
     const reason = {
         'dry': 'discovery dried up',
         'max-runs': `run cap reached (${args.maxRuns})`,
-        'no-usable-runs': 'consecutive runs aborted',
+        'no-usable-runs': 'consecutive runs aborted (overall or for one model)',
         'empty-diff': 'the compare listed no files — nothing to sample',
         'no-consolidation': 'consecutive judge calls failed — union unusable',
         // The CLI wires no stop signal (Ctrl-C kills the process outright);
@@ -184,8 +184,8 @@ async function main(): Promise<number>
         return forceFail(argv[1]);
     }
     const args = parseArgs(argv);
-    // --models wins; otherwise REVIEW_MODELS (or the single reviewer model).
-    // One entry means every round bills the same model, exactly as before.
+    // --models wins; otherwise REVIEW_MODELS, a set REVIEW_MODEL, or the
+    // default rotation roster. One entry means every round bills one model.
     const models = args.models ?? reviewModels();
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);

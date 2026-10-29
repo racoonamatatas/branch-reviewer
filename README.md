@@ -142,9 +142,10 @@ pipeline treats money as a first-class output:
 - **One model per role.** The reviewer and verifier do evidence work and
   default to Opus; the clustering judge solves a matching problem over short
   texts and defaults to Sonnet. `REVIEW_MODEL` / `JUDGE_MODEL` /
-  `VERIFY_MODEL` override each independently (`REVIEW_MODELS` opts campaigns
-  into per-round rotation), and no call ever falls through to an SDK
-  default.
+  `VERIFY_MODEL` override each independently, and no call ever falls
+  through to an SDK default. Campaigns rotate the review model per round by
+  default (`claude-opus-5` / `claude-sonnet-5-5`), so a recurring finding
+  reads as cross-model agreement rather than one model repeating itself.
 - **Automation proposes, humans dispose.** PR-label triggers and
   post-review verification proposals enqueue jobs *held* — releasing one is
   the explicit billing click. An empty diff aborts a review before any
@@ -286,6 +287,8 @@ Optional `.env` vars:
   works; the 5.5 ids (`claude-opus-5-5`, `claude-sonnet-5-5`) need Agent SDK
   ≥ 0.3.280, which the pinned 0.3.310 satisfies.
 - `REVIEW_MODELS` — comma list; campaigns rotate the review model per round.
+  Default `claude-opus-5,claude-sonnet-5-5`; setting only `REVIEW_MODEL`
+  makes campaigns single-model.
 - `JUDGE_MODEL` — clustering judge, default `claude-sonnet-5`.
 - `VERIFY_MODEL` — verifier, defaults to the reviewer's model.
 
