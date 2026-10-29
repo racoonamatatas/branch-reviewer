@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubClient } from '../github/github.js';
-import { reviewModel, verifyModel } from '../sdk/models.js';
+import { reviewModel, reviewModels, verifyModel } from '../sdk/models.js';
 import { assertSubscriptionCredit } from '../sdk/sdk.js';
 import { EventLog } from '../server/events.js';
 import { JobStore } from '../server/jobs.js';
@@ -134,6 +134,7 @@ function main(): void
         clientFor: (owner, repo) => new GitHubClient(owner, repo, process.env.GITHUB_TOKEN),
         defaultModel: model,
         defaultVerifyModel: verifyModel(),
+        defaultModels: reviewModels(),
         onEvent: (id, event) =>
         {
             console.log(`  job #${id}: ${event}`);

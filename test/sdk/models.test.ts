@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_MODEL, reviewModels } from '../../src/sdk/models.js';
+import { DEFAULT_MODEL, DEFAULT_REVIEW_MODELS, reviewModels } from '../../src/sdk/models.js';
 
 // The roster functions read the shell env directly; isolate the suite from
 // whatever the developer's shell happens to export.
@@ -34,10 +34,18 @@ afterEach(() =>
 
 describe('reviewModels', () =>
 {
-    it('should fall back to the single reviewer model, keeping rotation opt-in', () =>
+    it('should fall back to the default rotation roster when no knob is set', () =>
     {
         // Assert
-        expect(reviewModels()).toEqual([DEFAULT_MODEL]);
+        expect(reviewModels()).toEqual(DEFAULT_REVIEW_MODELS);
+    });
+
+    it('should lead the default roster with the default reviewer model', () =>
+    {
+        // Assert: verification falls back to DEFAULT_MODEL, so the roster
+        // must include it for the verifier to be one of the reviewers.
+        expect(DEFAULT_REVIEW_MODELS[0]).toBe(DEFAULT_MODEL);
+        expect(DEFAULT_REVIEW_MODELS.length).toBeGreaterThan(1);
     });
 
     it('should follow REVIEW_MODEL when only the single knob is set', () =>
@@ -65,6 +73,6 @@ describe('reviewModels', () =>
         process.env.REVIEW_MODELS = ' , ';
 
         // Assert
-        expect(reviewModels()).toEqual([DEFAULT_MODEL]);
+        expect(reviewModels()).toEqual(DEFAULT_REVIEW_MODELS);
     });
 });

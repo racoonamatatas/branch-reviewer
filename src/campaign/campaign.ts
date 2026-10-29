@@ -47,10 +47,10 @@ export interface CampaignOptions
     // rounds are anything but — same model, same prompt, same walk through
     // the same files. Rotating a lens into each round's prompt (on by
     // default: it redistributes attention, not budget) and cycling the
-    // review model (opt-in: it changes what bills) are how the campaign
-    // manufactures the independence the estimator wants, and cross-model
-    // agreement is a stronger confirmation signal than one model repeating
-    // itself. `models` is a roster balanced per lens against the target's
+    // review model (the callers' default roster, src/sdk/models.ts) are how
+    // the campaign manufactures the independence the estimator wants, and
+    // cross-model agreement is a stronger confirmation signal than one model
+    // repeating itself. `models` is a roster balanced per lens against the target's
     // stored runs (src/campaign/rotation.ts) and overrides `model`; rotation
     // forfeits cross-round cache sharing between different models — purely a
     // cost, not a statistical loss: identical inputs are the correlation,

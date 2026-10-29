@@ -184,8 +184,8 @@ async function main(): Promise<number>
         return forceFail(argv[1]);
     }
     const args = parseArgs(argv);
-    // --models wins; otherwise REVIEW_MODELS (or the single reviewer model).
-    // One entry means every round bills the same model, exactly as before.
+    // --models wins; otherwise REVIEW_MODELS, a set REVIEW_MODEL, or the
+    // default rotation roster. One entry means every round bills one model.
     const models = args.models ?? reviewModels();
     const github = new GitHubClient(args.owner, args.repo, process.env.GITHUB_TOKEN);
     const store = new ReviewStore(DEFAULT_DB_PATH);

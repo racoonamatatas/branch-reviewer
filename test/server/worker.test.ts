@@ -74,6 +74,7 @@ function worker(overrides: Partial<WorkerDeps> = {}): Worker
         clientFor: () => new FakeRepoClient(),
         defaultModel: 'claude-opus-5',
         defaultVerifyModel: 'verify-model-default',
+        defaultModels: ['roster-a', 'roster-b'],
         review: async () => submitted(),
         campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' }),
         ...overrides,
@@ -261,6 +262,45 @@ describe('campaign jobs', () =>
             maxRuns: 5, patience: 2, verify: false, maxTurns: 24, model: 'claude-opus-5',
             models: ['model-a', 'model-b'], rotateLenses: false,
         });
+    });
+
+    it('should rotate the default roster when the job names no model', async () =>
+    {
+        // Arrange
+        let received: CampaignOptions | undefined;
+        jobs.enqueue(campaignJob());
+
+        // Act
+        await worker({
+            campaign: async (_store, _client, _target, opts) =>
+            {
+                received = opts;
+                return { rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' };
+            },
+        }).notify();
+
+        // Assert
+        expect(received?.models).toEqual(['roster-a', 'roster-b']);
+    });
+
+    it('should keep a job that names one model single-model', async () =>
+    {
+        // Arrange
+        let received: CampaignOptions | undefined;
+        jobs.enqueue(campaignJob({ params: { maxRuns: 3, verify: true, model: 'model-a' } }));
+
+        // Act
+        await worker({
+            campaign: async (_store, _client, _target, opts) =>
+            {
+                received = opts;
+                return { rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' };
+            },
+        }).notify();
+
+        // Assert: no roster, so every round falls to the job's model.
+        expect(received?.models).toBeUndefined();
+        expect(received?.model).toBe('model-a');
     });
 
     it('should link the campaign record the loop opens, as provenance on the job', async () =>

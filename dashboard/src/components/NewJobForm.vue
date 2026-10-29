@@ -12,7 +12,7 @@ const repo = ref('');
 const head = ref('');
 const base = ref('');
 // Campaign-only: comma list rotated across rounds. Empty means the server's
-// single default model, exactly as before.
+// default roster (src/sdk/models.ts), itself a rotation.
 const models = ref('');
 
 // Two doors, one form: enqueue parks the job as held, start makes it
