@@ -447,6 +447,14 @@ Shipped so far:
 
 ## Standing design decisions (don't re-derive)
 
+- **`New<T>` is distributive (2026-10-29).** A plain `Omit` on a union keeps
+  only the shared keys and unions their types, so a discriminated entity's
+  create-shape merged its halves and dropped each half's own fields.
+  `NewVerification` had been spelled out per member by hand to dodge this;
+  it is now `New<Verification>`, and reverting `New<T>` to the plain `Omit`
+  breaks 20 call sites (the agent-only `confidence`/`costUsd` vanish) plus
+  the type tests in `test/types/common.test.ts`. Surfaced by another
+  project porting the convention to a union entity.
 - **Recurrence and importance are independent axes.** Union everything,
   adversarially verify occurrence-1 findings, recurrence counts are confidence
   badges — never a filter. (Proven: the project's best finding was a
