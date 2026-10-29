@@ -689,7 +689,10 @@ excluded (they reviewed nothing). Known and accepted: single reviews and
 label-triggered PR jobs are unlensed, so they count as generalist samples and
 can push the generalist slot to the back of later campaigns on that target.
 That retires the old "round 1 stays comparable with stored runs" property;
-revisit if a campaign's baseline comparability turns out to matter.
+revisit if a campaign's baseline comparability turns out to matter. The tally
+lives in `data/reviews.db`, so "resumes" holds per machine: carry the db over
+(the age-encrypted copy) before a follow-up campaign on the other machine, or
+it restarts from the generalist slot.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked

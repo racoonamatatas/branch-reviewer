@@ -210,7 +210,7 @@ async function main(): Promise<number>
     console.log(`models: review ${models.length > 1 ? `${models.join(' / ')} (balanced per lens against stored runs)` : models[0]}, `
         + `judge ${judgeModel()}, verify ${verifyModel()}`);
     console.log(`up to ${args.maxRuns} run(s), stopping early after ${args.patience ?? 2} round(s) without a new finding`
-        + `${args.lenses ? '; lens rotates per round' : '; lenses off'}`
+        + `${args.lenses ? '; lens resumes from stored runs' : '; lenses off'}`
         + `${args.verify ? '; occurrence-1 findings verified at the end' : '; verification skipped'}\n`);
 
     try

@@ -21,12 +21,14 @@ function play(stored: RotationSample[], rounds: number, models?: string[]): Rota
 
 const names = LENSES.map(l => l.name);
 
-// Two four-round campaigns' worth of history: the live shape that never got
-// to the last lens.
-function twoFourRoundCampaigns(): RotationSample[]
+const starved = names.at(-1)!;
+
+// Two campaigns that each stopped one slot short: the live shape that never
+// got to the last lens.
+function twoShortCampaigns(): RotationSample[]
 {
-    const firstFour = [undefined, ...names.slice(0, 3)];
-    return [...firstFour, ...firstFour].map(lens => (lens !== undefined ? { lens } : {}));
+    const reached = [undefined, ...names.slice(0, -1)];
+    return [...reached, ...reached].map(lens => (lens !== undefined ? { lens } : {}));
 }
 
 describe('nextRound', () =>
@@ -49,23 +51,23 @@ describe('nextRound', () =>
     it('should resume a follow-up campaign at the slot earlier campaigns never reached', () =>
     {
         // Act
-        const picks = play(twoFourRoundCampaigns(), LENSES.length + 1);
+        const picks = play(twoShortCampaigns(), LENSES.length + 1);
 
         // Assert: the starved slot leads, once; the rest follow in slot order
         // and nothing repeats until every slot has had a round.
-        expect(picks.map(p => p.lens)).toEqual([names[3], undefined, ...names.slice(0, 3)]);
+        expect(picks.map(p => p.lens)).toEqual([starved, undefined, ...names.slice(0, -1)]);
     });
 
     it('should lead each later campaign with a still-starved slot until it catches up', () =>
     {
         // Arrange: the follow-up campaign got only one round in.
-        const stored = [...twoFourRoundCampaigns(), { lens: names[3]! }];
+        const stored = [...twoShortCampaigns(), { lens: starved }];
 
         // Act
         const picks = play(stored, 1);
 
         // Assert
-        expect(picks.map(p => p.lens)).toEqual([names[3]]);
+        expect(picks.map(p => p.lens)).toEqual([starved]);
     });
 
     it('should count unlensed runs as generalist samples', () =>

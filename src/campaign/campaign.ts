@@ -50,7 +50,8 @@ export interface CampaignOptions
     // review model (opt-in: it changes what bills) are how the campaign
     // manufactures the independence the estimator wants, and cross-model
     // agreement is a stronger confirmation signal than one model repeating
-    // itself. `models` cycles per round and overrides `model`; rotation
+    // itself. `models` is a roster balanced per lens against the target's
+    // stored runs (src/campaign/rotation.ts) and overrides `model`; rotation
     // forfeits cross-round cache sharing between different models — purely a
     // cost, not a statistical loss: identical inputs are the correlation,
     // and the cache only ever certified that rounds were identical.
