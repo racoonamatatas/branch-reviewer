@@ -30,9 +30,10 @@ converting Chao1's broken independence assumption into a designed ensemble —
 occurrence becomes readable as cross-model agreement. The lens rides the
 user prompt so the system prompt stays the shared cache prefix; lens and
 resolved model are recorded on the run (nullable `lens` column, resolved
-model never saved as 'default' when rotating). Round 1 is deliberately
-lens-free so the baseline stays comparable with stored runs; rotation is a
-function of round number alone (an aborted round consumes its slot). Model
+model never saved as 'default' when rotating). Rotation picks the
+least-sampled slot from the target's stored runs (see "Rotation resumes"
+below; it was originally a function of round number alone); an aborted round
+still consumes its slot. Model
 rotation forfeits cross-model cache sharing on purpose — purely a cost, not
 a statistical loss: the sameness of the inputs is the correlation, and a
 cache hit only certifies that sameness (identical prefixes compute
@@ -656,6 +657,42 @@ $0.32) → the following cycle skipped the SHA (no duplicate). The finding
 was a defensible nit on the PR's own refactor — an unconstrained generic
 that would let unbranded ids past the checking-constructor convention —
 citing toTypedId as the standard to match.
+
+**Rotation resumes from the target's history (2026-10-29).** The lens and
+model cycle was a function of the round number, so every campaign restarted
+it: a follow-up campaign re-spent round 1 on a generalist pass the stored
+runs already held, and with a four-round cap against five slots (generalist +
+four lenses) the `tests` lens never ran — two live campaigns on one target,
+eight rounds, zero `tests` rounds. Now `nextRound` (`src/campaign/rotation.ts`)
+picks the lens slot this campaign has used least, breaking ties by the
+target's stored runs (`ReviewStore.rotationSamples`), then by slot order — so
+a fresh target plays out exactly as before, a campaign visits every slot once
+before repeating any, and a starved slot leads each campaign until it has
+caught up. Unlensed runs count as generalist. With a roster, the model is the
+one least paired with that lens, then least used overall — so cross-model
+agreement can accrue per lens instead of each lens settling on one model; a
+campaign's own rounds may therefore all land on one model (the CLI banner
+says "balanced per lens", no longer "rotating per round"). Caveat on the
+evidence: the repeated generalist round in the second campaign still yielded
+2 novel clusters, so "wasted round" was overstated — the real cost was the
+starved lens.
+
+The PR's own review (run #132, single opus run) shaped two rules. (1) Catch-up
+by raw count — the first cut — handed a starved slot several rounds in a row:
+under one model those are identical prompts riding each other's cache,
+correlated samples that inflate occurrence and, finding nothing new after the
+first, trip patience into a false `dry`. Hence once-per-slot per campaign.
+(2) The tally counts aborted runs, not just submitted ones: they billed, and
+left out, a lens that reliably aborts reads as unsampled forever and opens
+every later campaign only to die at the abort tolerance. Empty runs are
+excluded (they reviewed nothing). Known and accepted: single reviews and
+label-triggered PR jobs are unlensed, so they count as generalist samples and
+can push the generalist slot to the back of later campaigns on that target.
+That retires the old "round 1 stays comparable with stored runs" property;
+revisit if a campaign's baseline comparability turns out to matter. The tally
+lives in `data/reviews.db`, so "resumes" holds per machine: carry the db over
+(the age-encrypted copy) before a follow-up campaign on the other machine, or
+it restarts from the generalist slot.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked

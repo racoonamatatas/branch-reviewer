@@ -820,6 +820,20 @@ export class ReviewStore
         }));
     }
 
+    // The campaign rotation's tally (src/campaign/rotation.ts): every run of
+    // the target that spent a slot. Aborted runs count — they billed, and
+    // left out, a lens that reliably aborts reads as unsampled forever and
+    // opens every later campaign only to die at the abort tolerance (run-132
+    // finding). Empty runs never reviewed anything, so they spent no slot.
+    rotationSamples(filter: TargetFilter): Array<Pick<Run, 'model' | 'lens'>>
+    {
+        const [where, params] = filterClause(filter, 'r');
+        const rows = this.db.prepare(
+            `SELECT r.model, r.lens FROM runs r ${where} AND r.status IN ('submitted', 'aborted') ORDER BY r.id`,
+        ).all(...params) as unknown as Array<Pick<RunRow, 'model' | 'lens'>>;
+        return rows.map(row => ({ model: row.model, ...(row.lens !== null ? { lens: row.lens } : {}) }));
+    }
+
     // Grouped by the full quad (base included) so two review series of one
     // branch against different bases stay separate rows; the filter methods
     // key on the triple because that is what callers navigate by.

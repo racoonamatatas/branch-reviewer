@@ -184,6 +184,28 @@ describe('ReviewStore', () =>
         expect(triple).toHaveLength(2);
     });
 
+    it('should tally every run that spent a rotation slot: submitted and aborted, not empty or other targets', () =>
+    {
+        // Arrange
+        const target = { owner: 'acme', repo: 'widgets', head: 'feature-x', base: 'main' };
+        store.saveRun({ ...submittedRun, lens: 'security' });
+        store.saveRun({ ...abortedRun, head: 'feature-x', lens: 'tests', model: 'claude-sonnet-5' });
+        store.saveRun({
+            ...target, model: 'claude-opus-5', status: 'empty', lens: 'concurrency',
+            turns: 0, costUsd: 0, usage: submittedRun.usage, filesChanged: 0,
+        });
+        store.saveRun({ ...submittedRun, head: 'feature-y', lens: 'concurrency' });
+
+        // Act
+        const samples = store.rotationSamples(target);
+
+        // Assert
+        expect(samples).toEqual([
+            { model: 'claude-opus-5', lens: 'security' },
+            { model: 'claude-sonnet-5', lens: 'tests' },
+        ]);
+    });
+
     it('should round-trip an empty run: no review, no reason, its own status', () =>
     {
         // Arrange
