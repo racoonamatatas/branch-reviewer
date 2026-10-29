@@ -3,29 +3,40 @@ import { nextRound } from '../../src/campaign/rotation.js';
 import type { RotationSample } from '../../src/campaign/rotation.js';
 import { LENSES } from '../../src/review/lenses.js';
 
-// Plays a campaign of `rounds` picks forward from `history`, feeding each
-// pick back into the tally the way the campaign loop does.
-function play(history: RotationSample[], rounds: number, models?: string[]): RotationSample[]
+// Plays a campaign of `rounds` picks over `stored`, feeding each pick back
+// into the campaign's own tally the way the campaign loop does.
+function play(stored: RotationSample[], rounds: number, models?: string[]): RotationSample[]
 {
-    const tally = [...history];
-    const picks: RotationSample[] = [];
+    const campaign: RotationSample[] = [];
     for (let i = 0; i < rounds; i++)
     {
-        const pick = nextRound(tally, { rotateLenses: true, ...(models !== undefined ? { models } : {}) });
-        const sample = {
+        const pick = nextRound({ stored, campaign }, { rotateLenses: true, ...(models !== undefined ? { models } : {}) });
+        campaign.push({
             ...(pick.lens !== undefined ? { lens: pick.lens.name } : {}),
             ...(pick.model !== undefined ? { model: pick.model } : {}),
-        };
-        tally.push(sample);
-        picks.push(sample);
+        });
     }
-    return picks;
+    return campaign;
 }
 
 const names = LENSES.map(l => l.name);
 
+// Two four-round campaigns' worth of history: the live shape that never got
+// to the last lens.
+function twoFourRoundCampaigns(): RotationSample[]
+{
+    const firstFour = [undefined, ...names.slice(0, 3)];
+    return [...firstFour, ...firstFour].map(lens => (lens !== undefined ? { lens } : {}));
+}
+
 describe('nextRound', () =>
 {
+    it('should keep lens names unique, since slots are tallied by name', () =>
+    {
+        // Assert: a duplicate would always tie and the later one never run.
+        expect(new Set(names).size).toBe(LENSES.length);
+    });
+
     it('should open a fresh target with the generalist slot, then each lens in order', () =>
     {
         // Act: one full cycle plus the wrap-around round.
@@ -37,26 +48,33 @@ describe('nextRound', () =>
 
     it('should resume a follow-up campaign at the slot earlier campaigns never reached', () =>
     {
-        // Arrange: two four-round campaigns' worth of history — the live
-        // shape that never got to the last lens.
-        const firstFour = [undefined, ...names.slice(0, 3)];
-        const history = [...firstFour, ...firstFour].map(lens => (lens !== undefined ? { lens } : {}));
+        // Act
+        const picks = play(twoFourRoundCampaigns(), LENSES.length + 1);
+
+        // Assert: the starved slot leads, once; the rest follow in slot order
+        // and nothing repeats until every slot has had a round.
+        expect(picks.map(p => p.lens)).toEqual([names[3], undefined, ...names.slice(0, 3)]);
+    });
+
+    it('should lead each later campaign with a still-starved slot until it catches up', () =>
+    {
+        // Arrange: the follow-up campaign got only one round in.
+        const stored = [...twoFourRoundCampaigns(), { lens: names[3]! }];
 
         // Act
-        const picks = play(history, 4);
+        const picks = play(stored, 1);
 
-        // Assert: the starved slot catches up to the others' count before
-        // the ties resume in slot order.
-        expect(picks.map(p => p.lens)).toEqual([names[3], names[3], undefined, names[0]]);
+        // Assert
+        expect(picks.map(p => p.lens)).toEqual([names[3]]);
     });
 
     it('should count unlensed runs as generalist samples', () =>
     {
         // Arrange: runs from before rotation (or with it off) carry no lens.
-        const history: RotationSample[] = [{ model: 'm' }, { model: 'm' }];
+        const stored: RotationSample[] = [{ model: 'm' }, { model: 'm' }];
 
         // Act
-        const pick = nextRound(history, { rotateLenses: true });
+        const pick = nextRound({ stored, campaign: [] }, { rotateLenses: true });
 
         // Assert
         expect(pick.lens?.name).toBe(names[0]);
@@ -71,29 +89,28 @@ describe('nextRound', () =>
         expect(picks.map(p => p.model)).toEqual(['a', 'b', 'a', 'b']);
     });
 
-    it('should hand a lens to the model that has not reviewed under it yet', () =>
+    it('should hand the picked lens to the model that has not reviewed under it, over the less-used model', () =>
     {
-        // Arrange: 'a' already took the generalist slot twice, 'b' never did,
-        // though 'b' is the busier model overall.
-        const history: RotationSample[] = [
-            { model: 'a' }, { model: 'a' },
-            { lens: names[0]!, model: 'b' }, { lens: names[1]!, model: 'b' }, { lens: names[2]!, model: 'b' },
-            ...names.map(lens => ({ lens, model: 'a' })),
+        // Arrange: the generalist slot is least sampled, and only 'b' has
+        // reviewed under it — though 'a' is far busier overall.
+        const stored: RotationSample[] = [
+            { model: 'b' },
             ...names.map(lens => ({ lens, model: 'b' })),
+            ...names.flatMap(lens => [{ lens, model: 'a' }, { lens, model: 'a' }]),
         ];
 
         // Act
-        const pick = nextRound(history, { rotateLenses: false, models: ['a', 'b'] });
+        const pick = nextRound({ stored, campaign: [] }, { rotateLenses: true, models: ['a', 'b'] });
 
         // Assert: the pair count wins over the overall count.
         expect(pick.lens).toBeUndefined();
-        expect(pick.model).toBe('b');
+        expect(pick.model).toBe('a');
     });
 
     it('should leave the model to the caller when no roster is given', () =>
     {
         // Act
-        const pick = nextRound([], { rotateLenses: false, models: [] });
+        const pick = nextRound({ stored: [], campaign: [] }, { rotateLenses: false, models: [] });
 
         // Assert
         expect(pick).toEqual({});

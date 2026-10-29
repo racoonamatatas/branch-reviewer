@@ -664,16 +664,32 @@ it: a follow-up campaign re-spent round 1 on a generalist pass the stored
 runs already held, and with a four-round cap against five slots (generalist +
 four lenses) the `tests` lens never ran — two live campaigns on one target,
 eight rounds, zero `tests` rounds. Now `nextRound` (`src/campaign/rotation.ts`)
-tallies the target's submitted runs plus this campaign's own picks and takes
-the least-sampled lens slot (unlensed runs count as generalist; ties go to
-slot order, so a fresh target plays out exactly as before). With a roster,
-the model is the one least paired with that lens, then least used overall —
-so cross-model agreement can accrue per lens instead of each lens settling on
-one model. A starved slot catches up before the cycle resumes: after the two
-campaigns above, the next one runs `tests` twice. Caveat on the evidence: the
-repeated generalist round in the second campaign still yielded 2 novel
-clusters, so "wasted round" was overstated — the real cost was the starved
-lens.
+picks the lens slot this campaign has used least, breaking ties by the
+target's stored runs (`ReviewStore.rotationSamples`), then by slot order — so
+a fresh target plays out exactly as before, a campaign visits every slot once
+before repeating any, and a starved slot leads each campaign until it has
+caught up. Unlensed runs count as generalist. With a roster, the model is the
+one least paired with that lens, then least used overall — so cross-model
+agreement can accrue per lens instead of each lens settling on one model; a
+campaign's own rounds may therefore all land on one model (the CLI banner
+says "balanced per lens", no longer "rotating per round"). Caveat on the
+evidence: the repeated generalist round in the second campaign still yielded
+2 novel clusters, so "wasted round" was overstated — the real cost was the
+starved lens.
+
+The PR's own review (run #132, single opus run) shaped two rules. (1) Catch-up
+by raw count — the first cut — handed a starved slot several rounds in a row:
+under one model those are identical prompts riding each other's cache,
+correlated samples that inflate occurrence and, finding nothing new after the
+first, trip patience into a false `dry`. Hence once-per-slot per campaign.
+(2) The tally counts aborted runs, not just submitted ones: they billed, and
+left out, a lens that reliably aborts reads as unsampled forever and opens
+every later campaign only to die at the abort tolerance. Empty runs are
+excluded (they reviewed nothing). Known and accepted: single reviews and
+label-triggered PR jobs are unlensed, so they count as generalist samples and
+can push the generalist slot to the back of later campaigns on that target.
+That retires the old "round 1 stays comparable with stored runs" property;
+revisit if a campaign's baseline comparability turns out to matter.
 
 **Standards to hold, not regress.** (1) The judge has a golden fixture and
 `npm run eval:judge` replays it — every clustering-prompt edit gets checked

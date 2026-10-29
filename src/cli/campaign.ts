@@ -207,7 +207,7 @@ async function main(): Promise<number>
     }
 
     console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}"`);
-    console.log(`models: review ${models.length > 1 ? `${models.join(' / ')} (rotating per round)` : models[0]}, `
+    console.log(`models: review ${models.length > 1 ? `${models.join(' / ')} (balanced per lens against stored runs)` : models[0]}, `
         + `judge ${judgeModel()}, verify ${verifyModel()}`);
     console.log(`up to ${args.maxRuns} run(s), stopping early after ${args.patience ?? 2} round(s) without a new finding`
         + `${args.lenses ? '; lens rotates per round' : '; lenses off'}`

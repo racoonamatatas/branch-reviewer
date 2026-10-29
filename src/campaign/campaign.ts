@@ -217,8 +217,8 @@ export async function runCampaign(
 
         // The rotation resumes from the target's stored evidence, so a
         // follow-up campaign spends its rounds where earlier ones did not look.
-        const rotation: RotationSample[] = submittedRunsFor(store, target)
-            .map(run => ({ ...(run.lens !== undefined ? { lens: run.lens } : {}), model: run.model }));
+        const stored = store.rotationSamples(target);
+        const picked: RotationSample[] = [];
 
         for (let round = 1; round <= opts.maxRuns; round++)
         {
@@ -233,11 +233,11 @@ export async function runCampaign(
             // joins the tally whether or not the round turns out usable, so
             // an unusable round still consumes its slot — determinism over
             // backfilling.
-            const pick = nextRound(rotation, {
+            const pick = nextRound({ stored, campaign: picked }, {
                 rotateLenses: opts.rotateLenses ?? true,
                 ...(opts.models !== undefined ? { models: opts.models } : {}),
             });
-            rotation.push({
+            picked.push({
                 ...(pick.lens !== undefined ? { lens: pick.lens.name } : {}),
                 ...(pick.model !== undefined ? { model: pick.model } : {}),
             });
