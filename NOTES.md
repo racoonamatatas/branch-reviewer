@@ -7,6 +7,33 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
+## In progress (2026-10-30): merge the two machines' databases for analysis
+
+Branch `merge-db`. Goal: fold this machine's `data/reviews.db` into the home
+machine's and run the full analysis on the union (both are dev-server
+databases, not precious; the merged one becomes home's live db).
+
+- Done: `src/store/merge.ts` (`mergeDatabases(target, source)`: per-table id
+  remapping incl. JSON run-id lists; natural-key match on target +
+  millisecond `created_at` so a shared ancestor copy is recognised, not
+  duplicated; diverged shared row → refuse + rollback; imported live jobs
+  arrive `cancelled`). Tests in `test/store/merge.test.ts`, each
+  mutation-checked. `scripts/analyse.mjs` (read-only SQL report).
+- Decided: no per-row machine tag (would need a column on every table;
+  no analysis splits by machine). Watches are not merged.
+- Next (~30 min): `npm run db -- snapshot <out>` (`VACUUM INTO`, then
+  `age -p`) and `npm run db -- merge <source>` (backs up the target first,
+  prints the report). Then export here → drive → merge at home → analyse.
+- First-pass findings on this machine's data (291 agent verdicts, **0
+  human**): low reviewer confidence is refuted ~24% vs ~10–12% for
+  medium/high (keep verifying low; it is the cheapest refutation per $).
+  opus-5-5 yields ~2.0 exclusive confirmed clusters/run at $0.91 vs opus-5
+  1.2 at $1.96 and sonnet-5-5 0.36 at $0.38 (sonnet averages 7 turns).
+  Lens effects are confounded with model: `rotation.ts` picks lens and
+  model independently, so security lands on sonnet-5-5 14/17 times.
+  Candidate slices: human-label ~30 verdicts; roster → opus-5-5; rotate
+  lens×model as a pair.
+
 ## Status (2026-08-20)
 
 Slices 1–13 shipped. **Slice 12 (persist campaigns)** — campaigns are
