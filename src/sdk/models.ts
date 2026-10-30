@@ -1,3 +1,5 @@
+import type { Severity } from '../schema/schema.js';
+
 // Model policy for the three roles, in one place. The reviewer and verifier
 // read whole diffs and hunt evidence — they get the strong default. The
 // clustering judge solves a matching problem over short texts; Sonnet handles
@@ -47,4 +49,27 @@ export function judgeModel(): string
 export function verifyModel(): string
 {
     return process.env.VERIFY_MODEL ?? process.env.REVIEW_MODEL ?? DEFAULT_MODEL;
+}
+
+// Nits are verified too (no finding reaches a human unverified) but don't
+// earn the strong model's price: a single-model campaign sends every cluster
+// to the verifier, and one such campaign's 11 nits of 17 clusters were
+// most of a $17.79 pass.
+export const DEFAULT_NIT_VERIFY_MODEL = 'claude-sonnet-5-5';
+
+// A record over every severity rather than a default plus exceptions, so a
+// new severity fails to compile until someone decides who verifies it.
+export type VerifyModels = Readonly<Record<Severity, string>>;
+
+export function verifyModels(): VerifyModels
+{
+    const strong = verifyModel();
+    return { critical: strong, warning: strong, nit: process.env.VERIFY_NIT_MODEL ?? DEFAULT_NIT_VERIFY_MODEL };
+}
+
+// A requester who names one verify model (a job's `model`) asked for that
+// model on every cluster; the nit tier must not override a deliberate choice.
+export function uniformVerifyModels(model: string): VerifyModels
+{
+    return { critical: model, warning: model, nit: model };
 }

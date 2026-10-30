@@ -15,7 +15,8 @@ import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { consolidateRuns, submittedRunsFor } from '../consolidate/persist.js';
 import type { RepoClient } from '../github/github.js';
-import { verifyModel } from '../sdk/models.js';
+import { verifyModel, verifyModels } from '../sdk/models.js';
+import type { VerifyModels } from '../sdk/models.js';
 import { assertSubscriptionCredit, previewArgs, rethrowUnlessResultExplains, requireResult } from '../sdk/sdk.js';
 import { ReviewStore } from '../store/store.js';
 import type { Cluster, Consolidation } from '../store/store.js';
@@ -228,8 +229,11 @@ export async function verifyCluster(
 // the two entry points that need it. The store is a value import for that
 // reason; the prompt and selection functions above stay pure. Reporting is by
 // callback, not console: stdout belongs to the CLI layer.
-export interface VerifyPendingOptions extends VerifyRunOptions
+export interface VerifyPendingOptions extends Omit<VerifyRunOptions, 'model'>
 {
+    // Picked per cluster by its severity; unset, the policy in
+    // src/sdk/models.ts. One model for all is uniformVerifyModels().
+    models?: VerifyModels;
     reverify?: boolean;
     verifyAll?: boolean;
     // Polled before each cluster fires. Every cluster is its own paid call,
@@ -295,6 +299,7 @@ export async function verifyPending(
     const totalRuns = consolidation.runIds.length;
 
     const run = opts.runner ?? verifyCluster;
+    const models = opts.models ?? verifyModels();
     const summary: VerifyPendingSummary = { queued: pending.length, attempted: 0, verified: 0, failures: 0, costUsd: 0 };
     for (const cluster of pending)
     {
@@ -307,7 +312,8 @@ export async function verifyPending(
         opts.onCluster?.(cluster);
         try
         {
-            const result = await run(client, target, cluster, totalRuns, opts);
+            const model = models[cluster.severity];
+            const result = await run(client, target, cluster, totalRuns, { ...opts, model });
             summary.costUsd += result.stats.costUsd;
 
             if (result.status === 'aborted')
@@ -318,7 +324,7 @@ export async function verifyPending(
             }
 
             const { verdict, rationale, confidence } = result.response;
-            store.saveVerification({ source: 'agent', clusterId: cluster.id, verdict, rationale, confidence, costUsd: result.stats.costUsd });
+            store.saveVerification({ source: 'agent', clusterId: cluster.id, verdict, rationale, confidence, costUsd: result.stats.costUsd, model });
             summary.verified++;
             opts.onVerdict?.(cluster, result.response, result.stats);
         }
@@ -331,8 +337,10 @@ export async function verifyPending(
     return summary;
 }
 
-export interface VerifyTargetOptions extends VerifyRunOptions
+export interface VerifyTargetOptions extends Omit<VerifyRunOptions, 'model'>
 {
+    // Forwarded to the per-cluster loop; see VerifyPendingOptions.
+    models?: VerifyModels;
     reverify?: boolean;
     verifyAll?: boolean;
     // Forwarded to the per-cluster loop; see VerifyPendingOptions.
@@ -427,7 +435,7 @@ export async function verifyTarget(
     }
 
     const summary = await verifyPending(store, client, consolidation, {
-        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.models !== undefined ? { models: opts.models } : {}),
         ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
         ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
         ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),

@@ -14,6 +14,8 @@ import { coverageOf, novelClusters, shouldContinue, verifiableClusters } from '.
 import type { Coverage } from '../coverage/coverage.js';
 import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
+import { uniformVerifyModels, verifyModels } from '../sdk/models.js';
+import type { VerifyModels } from '../sdk/models.js';
 import { acquireCampaignLease } from '../store/lease.js';
 import type { Lease } from '../store/lease.js';
 import { DuplicateCampaignError, ReviewStore } from '../store/store.js';
@@ -60,7 +62,7 @@ export interface CampaignOptions
     // Role overrides; unset, the judge and verifier fall to their own
     // defaults (src/sdk/models.ts) rather than inheriting the reviewer's.
     judgeModel?: string;
-    verifyModel?: string;
+    verifyModels?: VerifyModels;
     maxTurns?: number;
     patience?: number;
     verify: boolean;
@@ -417,7 +419,7 @@ export async function runCampaign(
             // `latest` is already the read-back entity consolidateRuns
             // returned — fresh rows, inherited statuses and all. No re-read.
             verification = await verify(store, client, latest, {
-                model: opts.verifyModel ?? opts.model,
+                models: opts.verifyModels ?? (opts.model !== undefined ? uniformVerifyModels(opts.model) : verifyModels()),
                 ...(opts.reverify !== undefined ? { reverify: opts.reverify } : {}),
                 ...(opts.verifyAll !== undefined ? { verifyAll: opts.verifyAll } : {}),
                 ...(opts.shouldStop !== undefined ? { shouldStop: opts.shouldStop } : {}),

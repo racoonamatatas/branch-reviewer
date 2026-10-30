@@ -138,6 +138,10 @@ export interface AgentVerification extends VerificationBase
     source: 'agent';
     confidence: string;
     costUsd: number;
+    // The verifier model is chosen per severity (src/sdk/models.ts), so a
+    // verdict's weight depends on who gave it. Absent only on rows written
+    // before the column existed — the model was not recorded, not unknown.
+    model?: string;
 }
 
 export interface HumanVerification extends VerificationBase
@@ -396,6 +400,7 @@ CREATE TABLE IF NOT EXISTS verifications (
     rationale TEXT NOT NULL,
     confidence TEXT,
     cost_usd REAL,
+    model TEXT,
     CHECK ((source = 'agent') = (confidence IS NOT NULL AND cost_usd IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id);
@@ -473,6 +478,7 @@ interface VerificationRow
     rationale: string;
     confidence: string | null;
     cost_usd: number | null;
+    model: string | null;
 }
 
 interface CampaignRow
@@ -555,6 +561,19 @@ export class ReviewStore
         this.migrateCampaignVerifying();
         this.migrateCampaignLeased();
         this.migrateCampaignRoundRotation();
+        this.migrateVerificationModel();
+    }
+
+    // Verdicts from before per-severity verifier models never recorded the
+    // model; NULL is the truth about them. No CHECK ties model to source: that
+    // would cost a table rebuild, and the one agent writer always sets it.
+    private migrateVerificationModel(): void
+    {
+        const columns = this.db.prepare('SELECT name FROM pragma_table_info(?)').all('verifications') as unknown as Array<{ name: string }>;
+        if (!columns.some(c => c.name === 'model'))
+        {
+            this.db.exec('ALTER TABLE verifications ADD COLUMN model TEXT');
+        }
     }
 
     // Rounds recorded before the diversity knobs (lens rotation, model
@@ -1104,12 +1123,13 @@ export class ReviewStore
             }
 
             const result = this.db.prepare(
-                'INSERT INTO verifications (cluster_id, created_at, source, verdict, rationale, confidence, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO verifications (cluster_id, created_at, source, verdict, rationale, confidence, cost_usd, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             ).run(
                 verification.clusterId, new Date().toISOString(), verification.source, verification.verdict,
                 verification.rationale,
                 verification.source === 'agent' ? verification.confidence : null,
                 verification.source === 'agent' ? verification.costUsd : null,
+                verification.source === 'agent' ? verification.model ?? null : null,
             );
             const id = verificationId(Number(result.lastInsertRowid));
 
@@ -1148,7 +1168,7 @@ export class ReviewStore
     getVerifications(cluster: ClusterId): Verification[]
     {
         const rows = this.db.prepare(
-            'SELECT id, cluster_id, created_at, source, verdict, rationale, confidence, cost_usd FROM verifications WHERE cluster_id = ? ORDER BY id',
+            'SELECT id, cluster_id, created_at, source, verdict, rationale, confidence, cost_usd, model FROM verifications WHERE cluster_id = ? ORDER BY id',
         ).all(cluster) as unknown as VerificationRow[];
 
         return rows.map((row) =>
@@ -1163,7 +1183,10 @@ export class ReviewStore
             // restate what the row's source already proved.
             return row.source === 'human'
                 ? { ...base, source: 'human' as const, verdict: row.verdict as Exclude<Verdict, 'undetermined'> }
-                : { ...base, source: 'agent' as const, verdict: row.verdict as Verdict, confidence: row.confidence as string, costUsd: row.cost_usd as number };
+                : {
+                    ...base, source: 'agent' as const, verdict: row.verdict as Verdict, confidence: row.confidence as string, costUsd: row.cost_usd as number,
+                    ...(row.model !== null ? { model: row.model } : {}),
+                };
         });
     }
 
