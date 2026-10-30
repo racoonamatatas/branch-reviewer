@@ -11,6 +11,8 @@
 import { runCampaign } from '../campaign/campaign.js';
 import type { RepoClient } from '../github/github.js';
 import { runReview } from '../review/review.js';
+import { uniformVerifyModels } from '../sdk/models.js';
+import type { VerifyModels } from '../sdk/models.js';
 import type { ReviewStore } from '../store/store.js';
 import type { JobId } from '../types/ids.js';
 import { verifyTarget } from '../verify/verify.js';
@@ -27,7 +29,7 @@ export interface WorkerDeps
     // back to the reviewer's model was silently ignoring VERIFY_MODEL
     // (smoke rev 14, confirmed).
     defaultModel: string;
-    defaultVerifyModel: string;
+    defaultVerifyModels: VerifyModels;
     // A campaign job naming neither `models` nor `model` rotates this roster;
     // a job that names one `model` asked for single-model rounds and gets them.
     defaultModels: string[];
@@ -45,7 +47,7 @@ export class Worker
     private readonly store: ReviewStore;
     private readonly clientFor: (owner: string, repo: string) => RepoClient;
     private readonly defaultModel: string;
-    private readonly defaultVerifyModel: string;
+    private readonly defaultVerifyModels: VerifyModels;
     private readonly defaultModels: string[];
     private readonly onEvent: ((id: JobId, event: string) => void) | undefined;
     private readonly review: typeof runReview;
@@ -60,7 +62,7 @@ export class Worker
         this.store = deps.store;
         this.clientFor = deps.clientFor;
         this.defaultModel = deps.defaultModel;
-        this.defaultVerifyModel = deps.defaultVerifyModel;
+        this.defaultVerifyModels = deps.defaultVerifyModels;
         this.defaultModels = deps.defaultModels;
         this.onEvent = deps.onEvent;
         this.review = deps.review ?? runReview;
@@ -248,7 +250,7 @@ export class Worker
                 // Without this the campaign's closing verification inherits
                 // the review model and VERIFY_MODEL never applies on the
                 // server path — the CLI passes it, so the worker must too.
-                verifyModel: this.defaultVerifyModel,
+                verifyModels: this.defaultVerifyModels,
                 ...(job.params.models !== undefined
                     ? { models: job.params.models }
                     : job.params.model === undefined ? { models: this.defaultModels } : {}),
@@ -376,7 +378,7 @@ export class Worker
             this.clientFor(job.owner, job.repo),
             { owner: job.owner, repo: job.repo, head: job.head, base: job.base },
             {
-                model: job.params.model ?? this.defaultVerifyModel,
+                models: job.params.model !== undefined ? uniformVerifyModels(job.params.model) : this.defaultVerifyModels,
                 ...(job.params.maxTurns !== undefined ? { maxTurns: job.params.maxTurns } : {}),
                 ...(job.params.reverify !== undefined ? { reverify: job.params.reverify } : {}),
                 ...(job.params.verifyAll !== undefined ? { verifyAll: job.params.verifyAll } : {}),

@@ -7,6 +7,24 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
+## In progress (2026-10-30): per-severity verifier models
+
+Branch `verify-model-by-severity`. A single-model campaign sends every
+cluster to the verifier (no cross-model corroboration exists), and one such
+pass cost $17.79 for 17 clusters, 11 of them nits. Nits now verify on
+`VERIFY_NIT_MODEL` (default `claude-sonnet-5-5`); critical/warning stay on
+`verifyModel()`. Nothing is skipped: no finding reaches a human unverified.
+`verifications.model` (nullable; old rows honestly NULL) records who gave
+each agent verdict. Watch it: if Sonnet refutes nits Opus would confirm,
+flip `VERIFY_NIT_MODEL` back — but only on a **recorded miss** (target-repo's
+rule for model tiers): a nit Sonnet refuted or left undetermined that proved
+real (the author fixed it anyway, or an Opus re-verify confirmed it with
+evidence), cited by cluster id. "Sonnet is shallower" is a plausibility
+argument and doesn't count. First data point: the one Sonnet refutation
+(ETag/CORS) matched an earlier Opus refutation of the same claim — agreement,
+not a miss. Todo when `merge-db` lands: `mergeDatabases`
+must copy `verifications.model`.
+
 ## Status (2026-08-20)
 
 Slices 1–13 shipped. **Slice 12 (persist campaigns)** — campaigns are

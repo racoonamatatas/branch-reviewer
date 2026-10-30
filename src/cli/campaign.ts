@@ -7,7 +7,7 @@ import type { CampaignResult } from '../campaign/campaign.js';
 import type { Target } from '../types/target.js';
 import type { Coverage } from '../coverage/coverage.js';
 import { GitHubClient } from '../github/github.js';
-import { judgeModel, reviewModels, verifyModel } from '../sdk/models.js';
+import { judgeModel, reviewModels, verifyModels } from '../sdk/models.js';
 import { sweepInterruptedCampaigns } from '../store/lease.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { campaignId } from '../types/ids.js';
@@ -208,7 +208,7 @@ async function main(): Promise<number>
 
     console.log(`Campaign on ${args.owner}/${args.repo} "${args.head}" against "${args.base}"`);
     console.log(`models: review ${models.length > 1 ? `${models.join(' / ')} (balanced per lens against stored runs)` : models[0]}, `
-        + `judge ${judgeModel()}, verify ${verifyModel()}`);
+        + `judge ${judgeModel()}, verify ${verifyModels().warning} (nits ${verifyModels().nit})`);
     console.log(`up to ${args.maxRuns} run(s), stopping early after ${args.patience ?? 2} round(s) without a new finding`
         + `${args.lenses ? '; lens resumes from stored runs' : '; lenses off'}`
         + `${args.verify ? '; occurrence-1 findings verified at the end' : '; verification skipped'}\n`);
@@ -219,7 +219,7 @@ async function main(): Promise<number>
             models,
             rotateLenses: args.lenses,
             judgeModel: judgeModel(),
-            verifyModel: verifyModel(),
+            verifyModels: verifyModels(),
             maxRuns: args.maxRuns,
             verify: args.verify,
             reverify: args.reverify,
