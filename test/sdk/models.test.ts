@@ -40,12 +40,11 @@ describe('reviewModels', () =>
         expect(reviewModels()).toEqual(DEFAULT_REVIEW_MODELS);
     });
 
-    it('should lead the default roster with the default reviewer model', () =>
+    it('should make the default roster the default reviewer alone', () =>
     {
-        // Assert: verification falls back to DEFAULT_MODEL, so the roster
-        // must include it for the verifier to be one of the reviewers.
-        expect(DEFAULT_REVIEW_MODELS[0]).toBe(DEFAULT_MODEL);
-        expect(DEFAULT_REVIEW_MODELS.length).toBeGreaterThan(1);
+        // Assert: a campaign nobody configured reviews on the same model a
+        // single review would, and the strong verifier tier falls back to it.
+        expect(DEFAULT_REVIEW_MODELS).toEqual([DEFAULT_MODEL]);
     });
 
     it('should follow REVIEW_MODEL when only the single knob is set', () =>

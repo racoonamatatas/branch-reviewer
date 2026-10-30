@@ -8,15 +8,19 @@ import type { Severity } from '../schema/schema.js';
 // own default so no query() ever falls through to the SDK's — the model a
 // run used must always be the model somebody chose.
 
-export const DEFAULT_MODEL = 'claude-opus-5';
+export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_JUDGE_MODEL = 'claude-sonnet-5';
 
-// The campaign roster nobody narrowed. Same-model recurrence is self-
-// agreement, not evidence (an empirically false claim recurred 3× from one
-// model), so campaigns rotate unless told otherwise. The partner differs in
-// both family and generation from the default reviewer — the most
-// independent pairing on offer — and bills below it.
-export const DEFAULT_REVIEW_MODELS: readonly string[] = [DEFAULT_MODEL, 'claude-sonnet-5-5'];
+// The campaign roster nobody narrowed: the default reviewer alone. Rotation
+// was the plan (same-model recurrence is self-agreement, not evidence), but
+// the stored runs priced it: opus-5-5 found ~2.0 exclusive confirmed
+// clusters/run at $0.91, opus-5 1.2 at $1.96, sonnet-5-5 0.36 at $0.38 — and
+// cross-model agreement still passed a false claim (consolidation #91).
+// Single-model rounds lean on lens rotation for diversity and on the
+// verifier, which sees every cluster when nothing is cross-model. --models /
+// REVIEW_MODELS still build an ensemble; a recorded miss is what would
+// justify a second default member.
+export const DEFAULT_REVIEW_MODELS: readonly string[] = [DEFAULT_MODEL];
 
 export function reviewModel(): string
 {

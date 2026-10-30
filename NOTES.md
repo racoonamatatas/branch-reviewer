@@ -7,6 +7,19 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
+## In progress (2026-10-30): Opus 5.5 default, single-model roster
+
+Branch `opus-5-5-roster` (on top of `verify-model-by-severity`).
+`DEFAULT_MODEL` → `claude-opus-5-5`, `DEFAULT_REVIEW_MODELS` → that model
+alone. Evidence: opus-5-5 ~2.0 exclusive confirmed clusters/run at $0.91,
+opus-5 1.2 at $1.96, sonnet-5-5 0.36 at $0.38; cross-model agreement still
+passed a false claim (#91). Verification follows the default, which matters
+more than the nit tier: the first campaign verifying on opus-5-5 paid
+$0.38/verdict against $1.05 on opus-5. Open risk, unmeasured: correlated
+blind spots when Opus 5.5 both writes and reviews. Detection: a post-review
+catch (Crit, CI, author) no run reported — a recorded miss; the fix would be
+one `--models` round on another model, not full rotation.
+
 ## In progress (2026-10-30): per-severity verifier models
 
 Branch `verify-model-by-severity`. A single-model campaign sends every
