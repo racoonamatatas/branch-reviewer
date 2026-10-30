@@ -5,7 +5,7 @@ import { ReviewStore } from '../../src/store/store.js';
 import type { Cluster, Consolidation, Finding, NewRun, Run, VerificationStatus } from '../../src/store/store.js';
 import type { Target } from '../../src/types/target.js';
 import { clusterId, findingId, runId } from '../../src/types/ids.js';
-import { buildVerificationPrompt, verificationQueue, verificationResponseSchema, verifyPending, verifyTarget } from '../../src/verify/verify.js';
+import { buildVerificationPrompt, verificationQueue, verificationResponseSchema, verifyCluster, verifyPending, verifyTarget } from '../../src/verify/verify.js';
 import type { VerifyResult } from '../../src/verify/verify.js';
 
 // verifyTarget's consolidation path ends in a judge call; the mock is the
@@ -347,6 +347,38 @@ describe('verifyPending', () =>
         expect(summary).toEqual({ queued: 3, attempted: 3, verified: 1, failures: 2, costUsd: 0.8 });
         const reread = store.getConsolidation(consolidation.id)!;
         expect(reread.clusters.map(c => c.verificationStatus)).toEqual(['confirmed', 'pending', 'pending']);
+    });
+
+    it('should pick each cluster\'s verifier model by its severity', async () =>
+    {
+        // Arrange: a nit and a warning singleton, under a policy that
+        // tells the tiers apart.
+        const run = store.saveRun(newRun('feature-x', [
+            { ...someFinding, severity: 'nit', title: 'minor' },
+            { ...someFinding, severity: 'warning', title: 'risky' },
+        ]));
+        const consolidation = savedIdentityConsolidation([run]);
+        const seen: [string, string | undefined][] = [];
+        const runner: typeof verifyCluster = async (_client, _target, cluster, _total, opts) =>
+        {
+            seen.push([cluster.representative.title, opts?.model]);
+            return verified('confirmed');
+        };
+
+        // Act
+        await verifyPending(store, fakeClient, consolidation, {
+            runner,
+            models: { critical: 'strong', warning: 'strong', nit: 'cheap' },
+        });
+
+        // Assert
+        expect(seen).toEqual(expect.arrayContaining([['minor', 'cheap'], ['risky', 'strong']]));
+        expect(seen).toHaveLength(2);
+        // The verdict rows say who gave them, so a cheap-tier verdict can be
+        // weighed (or re-tested) as one.
+        const recorded = store.getConsolidation(consolidation.id)!.clusters
+            .map(c => [c.representative.title, store.getVerifications(c.id).map(v => v.source === 'agent' ? v.model : undefined)]);
+        expect(recorded).toEqual(expect.arrayContaining([['minor', ['cheap']], ['risky', ['strong']]]));
     });
 
     it('should stop at the next cluster boundary when the stop signal flips, keeping verdicts already recorded', async () =>

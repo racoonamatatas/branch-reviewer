@@ -106,6 +106,59 @@ function heads(store: ReviewStore): string[]
 
 describe('mergeDatabases', () =>
 {
+    it('should carry each verdict\'s verifier model across', () =>
+    {
+        // Arrange: verdicts are weighed by who gave them (nits verify on a
+        // cheaper model), so a merge that dropped the model would quietly
+        // turn every imported cheap-tier verdict into an unattributed one.
+        seed(targetPath, 'target-branch');
+        const { consolidation } = seed(sourcePath, 'source-branch');
+        withStore(sourcePath, store =>
+        {
+            tick();
+            store.saveVerification({
+                source: 'agent', clusterId: store.getConsolidation(consolidation)!.clusters[0]!.id,
+                verdict: 'refuted', rationale: 'Same origin.', confidence: 'High.', costUsd: 0.19, model: 'claude-sonnet-5-5',
+            });
+        });
+
+        // Act
+        mergeDatabases(targetPath, sourcePath);
+
+        // Assert
+        withStore(targetPath, store =>
+        {
+            const merged = store.listConsolidations().find(c => c.target.includes(' source-branch '))!;
+            const cluster = store.getConsolidation(merged.id)!.clusters[0]!;
+            expect(store.getVerifications(cluster.id)).toEqual([expect.objectContaining({ verdict: 'refuted', model: 'claude-sonnet-5-5' })]);
+        });
+    });
+
+    it('should merge a source from before the verifier-model column, its verdicts unattributed', () =>
+    {
+        // Arrange: the other machine may still run older code. Dropping the
+        // column recreates that file; the merge's own store-open migrates it.
+        seed(targetPath, 'target-branch');
+        const { consolidation } = seed(sourcePath, 'source-branch');
+        verifyFirstCluster(sourcePath, consolidation);
+        const legacy = new DatabaseSync(sourcePath);
+        legacy.exec('ALTER TABLE verifications DROP COLUMN model');
+        legacy.close();
+
+        // Act
+        const report = mergeDatabases(targetPath, sourcePath);
+
+        // Assert
+        expect(report.verifications).toEqual({ added: 1, shared: 0 });
+        withStore(targetPath, store =>
+        {
+            const merged = store.listConsolidations().find(c => c.target.includes(' source-branch '))!;
+            const [verdict] = store.getVerifications(store.getConsolidation(merged.id)!.clusters[0]!.id);
+            expect(verdict).toMatchObject({ verdict: 'confirmed' });
+            expect(verdict).not.toHaveProperty('model');
+        });
+    });
+
     it('should append a disjoint source with every reference rewritten', () =>
     {
         // Arrange — both files number from 1, so every source id collides.

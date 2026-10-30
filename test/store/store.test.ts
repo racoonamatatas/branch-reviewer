@@ -474,6 +474,22 @@ describe('ReviewStore', () =>
                 }]);
             });
 
+            it('should round-trip the verifier model on an agent verdict', () =>
+            {
+                // Arrange
+                const { clusters } = savedClusters();
+                const cluster = clusters[0]!;
+
+                // Act
+                store.saveVerification({
+                    source: 'agent', clusterId: cluster.id, verdict: 'confirmed',
+                    rationale: 'Read it.', confidence: 'High.', costUsd: 0.2, model: 'claude-sonnet-5-5',
+                });
+
+                // Assert
+                expect(store.getVerifications(cluster.id)).toEqual([expect.objectContaining({ model: 'claude-sonnet-5-5' })]);
+            });
+
             it('should keep verifications append-only with the latest verdict winning', () =>
             {
                 // Arrange
@@ -778,6 +794,8 @@ describe('ReviewStore', () =>
                         confidence: 'High.',
                         costUsd: 0.5,
                     })]);
+                    // The model was never recorded on this row: absent, not guessed.
+                    expect(migrated.getVerifications(clusterId(1))[0]).not.toHaveProperty('model');
                     migrated.close();
                 }
                 finally

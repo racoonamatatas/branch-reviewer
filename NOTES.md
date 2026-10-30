@@ -34,6 +34,35 @@ databases, not precious; the merged one becomes home's live db).
   Candidate slices: human-label ~30 verdicts; roster → opus-5-5; rotate
   lens×model as a pair.
 
+## Shipped (2026-10-30, PR #16): Opus 5.5 default, single-model roster
+
+`DEFAULT_MODEL` → `claude-opus-5-5`, `DEFAULT_REVIEW_MODELS` → that model
+alone. Evidence: opus-5-5 ~2.0 exclusive confirmed clusters/run at $0.91,
+opus-5 1.2 at $1.96, sonnet-5-5 0.36 at $0.38; cross-model agreement still
+passed a false claim (#91). Verification follows the default, which matters
+more than the nit tier: the first campaign verifying on opus-5-5 paid
+$0.38/verdict against $1.05 on opus-5. Open risk, unmeasured: correlated
+blind spots when Opus 5.5 both writes and reviews. Detection: a post-review
+catch (Crit, CI, author) no run reported — a recorded miss; the fix would be
+one `--models` round on another model, not full rotation.
+
+## Shipped (2026-10-30, PR #15): per-severity verifier models
+ A single-model campaign sends every
+cluster to the verifier (no cross-model corroboration exists), and one such
+pass cost $17.79 for 17 clusters, 11 of them nits. Nits now verify on
+`VERIFY_NIT_MODEL` (default `claude-sonnet-5-5`); critical/warning stay on
+`verifyModel()`. Nothing is skipped: no finding reaches a human unverified.
+`verifications.model` (nullable; old rows honestly NULL) records who gave
+each agent verdict. Watch it: if Sonnet refutes nits Opus would confirm,
+flip `VERIFY_NIT_MODEL` back — but only on a **recorded miss** (target-repo's
+rule for model tiers): a nit Sonnet refuted or left undetermined that proved
+real (the author fixed it anyway, or an Opus re-verify confirmed it with
+evidence), cited by cluster id. "Sonnet is shallower" is a plausibility
+argument and doesn't count. First data point: the one Sonnet refutation
+(ETag/CORS) matched an earlier Opus refutation of the same claim — agreement,
+not a miss. `mergeDatabases` copies
+`verifications.model` (its column-generic insert; pinned by a merge test).
+
 ## Status (2026-08-20)
 
 Slices 1–13 shipped. **Slice 12 (persist campaigns)** — campaigns are

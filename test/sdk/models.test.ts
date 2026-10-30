@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_MODEL, DEFAULT_REVIEW_MODELS, reviewModels } from '../../src/sdk/models.js';
+import { DEFAULT_MODEL, DEFAULT_NIT_VERIFY_MODEL, DEFAULT_REVIEW_MODELS, reviewModels, verifyModels } from '../../src/sdk/models.js';
 
 // The roster functions read the shell env directly; isolate the suite from
 // whatever the developer's shell happens to export.
-const MODEL_VARS = ['REVIEW_MODEL', 'REVIEW_MODELS'] as const;
+const MODEL_VARS = ['REVIEW_MODEL', 'REVIEW_MODELS', 'VERIFY_MODEL', 'VERIFY_NIT_MODEL'] as const;
 
 let saved: Record<string, string | undefined>;
 
@@ -40,12 +40,11 @@ describe('reviewModels', () =>
         expect(reviewModels()).toEqual(DEFAULT_REVIEW_MODELS);
     });
 
-    it('should lead the default roster with the default reviewer model', () =>
+    it('should make the default roster the default reviewer alone', () =>
     {
-        // Assert: verification falls back to DEFAULT_MODEL, so the roster
-        // must include it for the verifier to be one of the reviewers.
-        expect(DEFAULT_REVIEW_MODELS[0]).toBe(DEFAULT_MODEL);
-        expect(DEFAULT_REVIEW_MODELS.length).toBeGreaterThan(1);
+        // Assert: a campaign nobody configured reviews on the same model a
+        // single review would, and the strong verifier tier falls back to it.
+        expect(DEFAULT_REVIEW_MODELS).toEqual([DEFAULT_MODEL]);
     });
 
     it('should follow REVIEW_MODEL when only the single knob is set', () =>
@@ -74,5 +73,34 @@ describe('reviewModels', () =>
 
         // Assert
         expect(reviewModels()).toEqual(DEFAULT_REVIEW_MODELS);
+    });
+});
+
+describe('verifyModels', () =>
+{
+    it('should verify nits with the cheap default and everything else with the strong one', () =>
+    {
+        // Assert
+        expect(verifyModels()).toEqual({ critical: DEFAULT_MODEL, warning: DEFAULT_MODEL, nit: DEFAULT_NIT_VERIFY_MODEL });
+    });
+
+    it('should move only the strong tier when VERIFY_MODEL is set', () =>
+    {
+        // Arrange
+        process.env.VERIFY_MODEL = 'claude-opus-5-5';
+
+        // Assert: the nit tier has its own knob, so retuning the strong
+        // verifier doesn't silently re-price every nit.
+        expect(verifyModels()).toEqual({ critical: 'claude-opus-5-5', warning: 'claude-opus-5-5', nit: DEFAULT_NIT_VERIFY_MODEL });
+    });
+
+    it('should follow VERIFY_NIT_MODEL for nits', () =>
+    {
+        // Arrange
+        process.env.VERIFY_NIT_MODEL = 'claude-opus-5-5';
+
+        // Assert
+        expect(verifyModels().nit).toBe('claude-opus-5-5');
+        expect(verifyModels().warning).toBe(DEFAULT_MODEL);
     });
 });

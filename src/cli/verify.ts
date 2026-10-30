@@ -5,7 +5,7 @@
 // the round-trip, never a parallel code path.
 
 import { GitHubClient } from '../github/github.js';
-import { verifyModel } from '../sdk/models.js';
+import { verifyModels } from '../sdk/models.js';
 import { DEFAULT_DB_PATH, ReviewStore } from '../store/store.js';
 import { consolidationId } from '../types/ids.js';
 import { verifyPending } from '../verify/verify.js';
@@ -59,11 +59,11 @@ async function main(): Promise<number>
             return 1;
         }
 
-        const model = verifyModel();
+        const models = verifyModels();
         const github = new GitHubClient(consolidation.owner, consolidation.repo, process.env.GITHUB_TOKEN);
 
         const summary = await verifyPending(store, github, consolidation, {
-            model,
+            models,
             reverify,
             verifyAll,
             ...(maxTurns !== undefined ? { maxTurns } : {}),

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CampaignOptions, CampaignResult } from '../../src/campaign/campaign.js';
 import type { ChangedFile, RepoClient } from '../../src/github/github.js';
 import type { ReviewResult, ReviewRunStats } from '../../src/review/review.js';
+import type { VerifyModels } from '../../src/sdk/models.js';
 import { ReviewStore } from '../../src/store/store.js';
 import { JobStore } from '../../src/server/jobs.js';
 import type { NewJob } from '../../src/server/jobs.js';
@@ -66,6 +67,9 @@ afterEach(() =>
     store.close();
 });
 
+// Distinct per tier, so a test can tell the policy arrived whole.
+const VERIFY_MODELS: VerifyModels = { critical: 'verify-strong', warning: 'verify-strong', nit: 'verify-nit' };
+
 function worker(overrides: Partial<WorkerDeps> = {}): Worker
 {
     return new Worker({
@@ -73,7 +77,7 @@ function worker(overrides: Partial<WorkerDeps> = {}): Worker
         store,
         clientFor: () => new FakeRepoClient(),
         defaultModel: 'claude-opus-5',
-        defaultVerifyModel: 'verify-model-default',
+        defaultVerifyModels: VERIFY_MODELS,
         defaultModels: ['roster-a', 'roster-b'],
         review: async () => submitted(),
         campaign: async () => ({ rounds: [], runIds: [], reviewCostUsd: 0, judgeCostUsd: 0, stoppedBy: 'max-runs' }),
@@ -699,19 +703,39 @@ describe('verify jobs', () =>
         // Arrange: params omit the model — the common case, and the one that
         // silently ignored VERIFY_MODEL on the server path (smoke rev 14).
         jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: {} });
-        let received: string | undefined;
+        let received: VerifyModels | undefined;
 
         // Act
         await worker({
             verify: async (_store, _client, _target, opts) =>
             {
-                received = opts?.model;
+                received = opts?.models;
                 return { reused: false, summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
             },
         }).notify();
 
         // Assert
-        expect(received).toBe('verify-model-default');
+        expect(received).toEqual(VERIFY_MODELS);
+    });
+
+    it('should verify every cluster of a verify job with the one model its params name', async () =>
+    {
+        // Arrange: a named model is a deliberate choice — the nit tier must
+        // not quietly route part of the queue elsewhere.
+        jobs.enqueue({ kind: 'verify', owner: 'acme', repo: 'widgets', head: 'feature/x', base: 'main', params: { model: 'chosen' } });
+        let received: VerifyModels | undefined;
+
+        // Act
+        await worker({
+            verify: async (_store, _client, _target, opts) =>
+            {
+                received = opts?.models;
+                return { reused: false, summary: { queued: 0, attempted: 0, verified: 0, failures: 0, costUsd: 0 } };
+            },
+        }).notify();
+
+        // Assert
+        expect(received).toEqual({ critical: 'chosen', warning: 'chosen', nit: 'chosen' });
     });
 
     it('should hand the campaign the verify-role model so its closing pass honors VERIFY_MODEL', async () =>
@@ -733,7 +757,7 @@ describe('verify jobs', () =>
         }).notify();
 
         // Assert
-        expect(received?.verifyModel).toBe('verify-model-default');
+        expect(received?.verifyModels).toEqual(VERIFY_MODELS);
     });
 
     it('should hand a verify job the worker\'s stop signal and abort it when the pass was cut short', async () =>

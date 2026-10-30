@@ -1,3 +1,5 @@
+import type { Severity } from '../schema/schema.js';
+
 // Model policy for the three roles, in one place. The reviewer and verifier
 // read whole diffs and hunt evidence — they get the strong default. The
 // clustering judge solves a matching problem over short texts; Sonnet handles
@@ -6,15 +8,19 @@
 // own default so no query() ever falls through to the SDK's — the model a
 // run used must always be the model somebody chose.
 
-export const DEFAULT_MODEL = 'claude-opus-5';
+export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_JUDGE_MODEL = 'claude-sonnet-5';
 
-// The campaign roster nobody narrowed. Same-model recurrence is self-
-// agreement, not evidence (an empirically false claim recurred 3× from one
-// model), so campaigns rotate unless told otherwise. The partner differs in
-// both family and generation from the default reviewer — the most
-// independent pairing on offer — and bills below it.
-export const DEFAULT_REVIEW_MODELS: readonly string[] = [DEFAULT_MODEL, 'claude-sonnet-5-5'];
+// The campaign roster nobody narrowed: the default reviewer alone. Rotation
+// was the plan (same-model recurrence is self-agreement, not evidence), but
+// the stored runs priced it: opus-5-5 found ~2.0 exclusive confirmed
+// clusters/run at $0.91, opus-5 1.2 at $1.96, sonnet-5-5 0.36 at $0.38 — and
+// cross-model agreement still passed a false claim (consolidation #91).
+// Single-model rounds lean on lens rotation for diversity and on the
+// verifier, which sees every cluster when nothing is cross-model. --models /
+// REVIEW_MODELS still build an ensemble; a recorded miss is what would
+// justify a second default member.
+export const DEFAULT_REVIEW_MODELS: readonly string[] = [DEFAULT_MODEL];
 
 export function reviewModel(): string
 {
@@ -47,4 +53,27 @@ export function judgeModel(): string
 export function verifyModel(): string
 {
     return process.env.VERIFY_MODEL ?? process.env.REVIEW_MODEL ?? DEFAULT_MODEL;
+}
+
+// Nits are verified too (no finding reaches a human unverified) but don't
+// earn the strong model's price: a single-model campaign sends every cluster
+// to the verifier, and one such campaign's 11 nits of 17 clusters were
+// most of a $17.79 pass.
+export const DEFAULT_NIT_VERIFY_MODEL = 'claude-sonnet-5-5';
+
+// A record over every severity rather than a default plus exceptions, so a
+// new severity fails to compile until someone decides who verifies it.
+export type VerifyModels = Readonly<Record<Severity, string>>;
+
+export function verifyModels(): VerifyModels
+{
+    const strong = verifyModel();
+    return { critical: strong, warning: strong, nit: process.env.VERIFY_NIT_MODEL ?? DEFAULT_NIT_VERIFY_MODEL };
+}
+
+// A requester who names one verify model (a job's `model`) asked for that
+// model on every cluster; the nit tier must not override a deliberate choice.
+export function uniformVerifyModels(model: string): VerifyModels
+{
+    return { critical: model, warning: model, nit: model };
 }

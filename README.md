@@ -140,12 +140,13 @@ pipeline treats money as a first-class output:
   summary itemizes reviews / judge / verification, and per-target totals
   aggregate all three.
 - **One model per role.** The reviewer and verifier do evidence work and
-  default to Opus; the clustering judge solves a matching problem over short
-  texts and defaults to Sonnet. `REVIEW_MODEL` / `JUDGE_MODEL` /
-  `VERIFY_MODEL` override each independently, and no call ever falls
-  through to an SDK default. Campaigns rotate the review model per round by
-  default (`claude-opus-5` / `claude-sonnet-5-5`), so a recurring finding
-  reads as cross-model agreement rather than one model repeating itself.
+  default to Opus 5.5; the clustering judge solves a matching problem over
+  short texts and defaults to Sonnet, and nits are verified on Sonnet 5.5.
+  `REVIEW_MODEL` / `JUDGE_MODEL` / `VERIFY_MODEL` / `VERIFY_NIT_MODEL`
+  override each independently, and no call ever falls through to an SDK
+  default. Campaigns are single-model by default — measured, a cheaper
+  rotation partner found a fraction of the confirmed findings — and
+  `--models` builds a rotating ensemble when cross-model agreement is wanted.
 - **Automation proposes, humans dispose.** PR-label triggers and
   post-review verification proposals enqueue jobs *held* — releasing one is
   the explicit billing click. An empty diff aborts a review before any
@@ -283,14 +284,15 @@ CLAUDE_CODE_OAUTH_TOKEN=...
 Optional `.env` vars:
 
 - `GITHUB_TOKEN` — raises GitHub's rate limit; required for private repos.
-- `REVIEW_MODEL` — reviewer model, default `claude-opus-5`. Any model id
+- `REVIEW_MODEL` — reviewer model, default `claude-opus-5-5`. Any model id
   works; the 5.5 ids (`claude-opus-5-5`, `claude-sonnet-5-5`) need Agent SDK
   ≥ 0.3.280, which the pinned 0.3.310 satisfies.
 - `REVIEW_MODELS` — comma list; campaigns rotate the review model per round.
-  Default `claude-opus-5,claude-sonnet-5-5`; setting only `REVIEW_MODEL`
-  makes campaigns single-model.
+  Unset, campaigns use the reviewer model alone.
 - `JUDGE_MODEL` — clustering judge, default `claude-sonnet-5`.
-- `VERIFY_MODEL` — verifier, defaults to the reviewer's model.
+- `VERIFY_MODEL` — verifier for critical and warning findings, defaults to
+  the reviewer's model.
+- `VERIFY_NIT_MODEL` — verifier for nits, default `claude-sonnet-5-5`.
 
 Every command below except `history` calls the model and burns real
 subscription credit — don't run them as casual checks. (`serve` is free to
