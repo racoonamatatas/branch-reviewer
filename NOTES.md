@@ -7,9 +7,70 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
-## In progress (2026-10-30): Opus 5.5 default, single-model roster
+## Done (2026-10-31): the two machines' databases are merged
 
-Branch `opus-5-5-roster` (on top of `verify-model-by-severity`).
+Home's `data/reviews.db` is now the union (284 runs, 593 agent verdicts).
+`npm run db -- merge <source>` backs up the target with `VACUUM INTO`
+(`data/reviews.backup-<iso>.db`, raw open so it is the pre-migration file;
+refuses to overwrite) and prints added/shared per table. The real merge had no
+refusals: 177 runs added, 8 shared (an ancestor copy both machines kept), 324
+verdicts added, 16 shared, 0 live jobs imported; integrity and FK checks clean.
+`snapshot` was not built: the work export used `VACUUM INTO` + `age -p` by
+hand, and that is enough until a second export is needed.
+
+Merged findings (593 agent verdicts, still **0 human**), against the first
+pass below:
+
+- **Low confidence still refutes most**: 21% refuted vs 7–8% for
+  medium/high (first pass 24% vs 10–12%; both rates fell, the gap held). Low
+  is still the cheapest refutation: $3.51 per refutation vs $7.37–8.75.
+  Keep verifying low.
+- **opus-5-5 holds up; opus-5 closes some of the gap**: exclusive confirmed
+  clusters/run opus-5-5 2.05 at $0.75/run, opus-5 1.76 at $1.78
+  (first pass 1.2), sonnet-5-5 0.39 at $0.27. Per exclusive confirmed
+  cluster: opus-5-5 ~$0.37, sonnet-5-5 ~$0.69, opus-5 ~$1.01. The PR #16
+  default stands; sonnet-5-5's exclusive clusters are also the most often
+  refuted (12 of 31).
+- **The lens×model confound is wider, not narrower**: security ran on
+  sonnet-5-5 27/48 times, config-and-deploy 16/25; tests ran on opus-5-5
+  7/10. The tests lens tops round novelty ($0.24/novel cluster vs $0.51–0.58
+  for the other lenses, $1.85 for no lens), but on 10 rounds mostly on the
+  best model, and no-lens rounds are early-campaign rounds — so this is not
+  yet a lens effect. Pairing lens×model in rotation is still the fix.
+- **Verifier model column**: only 16 verdicts carry `model` so far (7
+  opus-5-5 warnings, 0 refuted; 9 sonnet-5-5 nits, 1 refuted). Too few to
+  judge the nit tier; the recorded-miss rule stands.
+
+Candidate slices, unchanged in order: human-label ~30 verdicts (still the
+biggest gap — every rate above is agent-on-agent); rotate lens×model as a
+pair.
+
+## Earlier (2026-10-30): merge plan and first-pass findings
+
+Branch `merge-db`. Goal: fold this machine's `data/reviews.db` into the home
+machine's and run the full analysis on the union (both are dev-server
+databases, not precious; the merged one becomes home's live db).
+
+- Done: `src/store/merge.ts` (`mergeDatabases(target, source)`: per-table id
+  remapping incl. JSON run-id lists; natural-key match on target +
+  millisecond `created_at` so a shared ancestor copy is recognised, not
+  duplicated; diverged shared row → refuse + rollback; imported live jobs
+  arrive `cancelled`). Tests in `test/store/merge.test.ts`, each
+  mutation-checked. `scripts/analyse.mjs` (read-only SQL report).
+- Decided: no per-row machine tag (would need a column on every table;
+  no analysis splits by machine). Watches are not merged.
+- First-pass findings on this machine's data (291 agent verdicts, **0
+  human**): low reviewer confidence is refuted ~24% vs ~10–12% for
+  medium/high (keep verifying low; it is the cheapest refutation per $).
+  opus-5-5 yields ~2.0 exclusive confirmed clusters/run at $0.91 vs opus-5
+  1.2 at $1.96 and sonnet-5-5 0.36 at $0.38 (sonnet averages 7 turns).
+  Lens effects are confounded with model: `rotation.ts` picks lens and
+  model independently, so security lands on sonnet-5-5 14/17 times.
+  Candidate slices: human-label ~30 verdicts; roster → opus-5-5; rotate
+  lens×model as a pair.
+
+## Shipped (2026-10-30, PR #16): Opus 5.5 default, single-model roster
+
 `DEFAULT_MODEL` → `claude-opus-5-5`, `DEFAULT_REVIEW_MODELS` → that model
 alone. Evidence: opus-5-5 ~2.0 exclusive confirmed clusters/run at $0.91,
 opus-5 1.2 at $1.96, sonnet-5-5 0.36 at $0.38; cross-model agreement still
@@ -20,9 +81,8 @@ blind spots when Opus 5.5 both writes and reviews. Detection: a post-review
 catch (Crit, CI, author) no run reported — a recorded miss; the fix would be
 one `--models` round on another model, not full rotation.
 
-## In progress (2026-10-30): per-severity verifier models
-
-Branch `verify-model-by-severity`. A single-model campaign sends every
+## Shipped (2026-10-30, PR #15): per-severity verifier models
+ A single-model campaign sends every
 cluster to the verifier (no cross-model corroboration exists), and one such
 pass cost $17.79 for 17 clusters, 11 of them nits. Nits now verify on
 `VERIFY_NIT_MODEL` (default `claude-sonnet-5-5`); critical/warning stay on
@@ -35,8 +95,8 @@ real (the author fixed it anyway, or an Opus re-verify confirmed it with
 evidence), cited by cluster id. "Sonnet is shallower" is a plausibility
 argument and doesn't count. First data point: the one Sonnet refutation
 (ETag/CORS) matched an earlier Opus refutation of the same claim — agreement,
-not a miss. Todo when `merge-db` lands: `mergeDatabases`
-must copy `verifications.model`.
+not a miss. `mergeDatabases` copies
+`verifications.model` (its column-generic insert; pinned by a merge test).
 
 ## Status (2026-08-20)
 

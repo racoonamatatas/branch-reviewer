@@ -10,6 +10,7 @@
     "scripts": {
         "review": "tsx --env-file-if-exists=.env src/cli/cli.ts",
         "history": "tsx src/cli/history.ts",
+        "db": "tsx src/cli/db.ts",
         "consolidate": "tsx --env-file-if-exists=.env src/cli/consolidate.ts",
         "verify": "tsx --env-file-if-exists=.env src/cli/verify.ts",
         "campaign": "tsx --env-file-if-exists=.env src/cli/campaign.ts",
