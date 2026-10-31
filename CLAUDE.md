@@ -30,6 +30,7 @@ npm run verify -- <consolidation-id> [--max-turns N] [--reverify] [--verify-all]
 npm run campaign -- <owner>/<repo> <branch> [--base main] [--max-runs N] [--patience K] [--max-turns N] [--no-verify] [--reverify] [--verify-all] [--models a,b] [--no-lenses]
 npm run campaign -- --force-fail <campaign-id>   # retire a wedged live campaign record (liveness unprovable)
 npm run serve [-- --port N] [--poll-interval seconds]   # job server on 127.0.0.1:4780; enqueued jobs bill like the CLI commands; polls watches for labeled PRs; serves dashboard/dist when built
+npm run db -- merge <source.db>             # fold another machine's db into data/reviews.db (backs it up first; stop serve); no model calls
 npm run eval:freeze -- <consolidation-id>   # freeze a consolidation as the judge's golden fixture
 npm run eval:judge [-- --trials N]          # stochastic judge eval (pass rate + pair precision/recall) — run on demand, NOT part of the unit suite; every trial bills a judge call
 ```

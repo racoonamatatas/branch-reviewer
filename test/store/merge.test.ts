@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobStore } from '../../src/server/jobs.js';
-import { mergeDatabases } from '../../src/store/merge.js';
+import { backupDatabase, mergeDatabases, mergeReportLines } from '../../src/store/merge.js';
+import type { MergeReport } from '../../src/store/merge.js';
 import { ReviewStore } from '../../src/store/store.js';
 import type { ConsolidationId, RunId } from '../../src/types/ids.js';
 
@@ -299,5 +300,51 @@ describe('mergeDatabases', () =>
         expect(target.list().map(j => j.state)).toEqual(['cancelled', 'cancelled']);
         expect(target.claimNext()).toBeUndefined();
         target.close();
+    });
+});
+
+describe('backupDatabase', () =>
+{
+    it('should copy the committed rows beside the target without overwriting an earlier backup', () =>
+    {
+        seed(targetPath, 'feature');
+        const now = new Date('2026-10-31T12:00:00.000Z');
+
+        const backup = backupDatabase(targetPath, now);
+
+        expect(backup).toBe(join(dir, 'target.backup-2026-10-31T12-00-00-000Z.db'));
+        const original = new ReviewStore(targetPath);
+        const copy = new ReviewStore(backup);
+        expect(copy.listRuns()).toEqual(original.listRuns());
+        original.close();
+        copy.close();
+        expect(() => backupDatabase(targetPath, now)).toThrow();
+    });
+});
+
+describe('mergeReportLines', () =>
+{
+    const table = (added: number, shared: number): { added: number; shared: number } => ({ added, shared });
+    const report: MergeReport = {
+        runs: table(3, 1), findings: table(6, 2), consolidations: table(1, 0), clusters: table(2, 0),
+        verifications: table(2, 0), campaigns: table(0, 0), jobs: table(4, 0), jobsCancelled: 0,
+    };
+
+    it('should print one line per table with its added and shared counts', () =>
+    {
+        const lines = mergeReportLines(report);
+
+        expect(lines).toHaveLength(Object.keys(report).length - 1);
+        expect(lines[0]).toMatch(/runs\s+3 added\s+1 shared/);
+    });
+
+    it('should name cancelled source jobs only when there were any', () =>
+    {
+        const cancelled = 2;
+
+        const lines = mergeReportLines({ ...report, jobsCancelled: cancelled });
+
+        expect(lines.at(-1)).toContain(`${cancelled} live source job(s) imported as cancelled`);
+        expect(mergeReportLines(report).join('\n')).not.toContain('cancelled');
     });
 });

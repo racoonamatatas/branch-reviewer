@@ -7,7 +7,45 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
-## In progress (2026-10-30): merge the two machines' databases for analysis
+## Done (2026-10-31): the two machines' databases are merged
+
+Home's `data/reviews.db` is now the union (284 runs, 593 agent verdicts).
+`npm run db -- merge <source>` backs up the target with `VACUUM INTO`
+(`data/reviews.backup-<iso>.db`, raw open so it is the pre-migration file;
+refuses to overwrite) and prints added/shared per table. The real merge had no
+refusals: 177 runs added, 8 shared (an ancestor copy both machines kept), 324
+verdicts added, 16 shared, 0 live jobs imported; integrity and FK checks clean.
+`snapshot` was not built: the work export used `VACUUM INTO` + `age -p` by
+hand, and that is enough until a second export is needed.
+
+Merged findings (593 agent verdicts, still **0 human**), against the first
+pass below:
+
+- **Low confidence still refutes most**: 21% refuted vs 7–8% for
+  medium/high (first pass 24% vs 10–12%; both rates fell, the gap held). Low
+  is still the cheapest refutation: $3.51 per refutation vs $7.37–8.75.
+  Keep verifying low.
+- **opus-5-5 holds up; opus-5 closes some of the gap**: exclusive confirmed
+  clusters/run opus-5-5 2.05 at $0.75/run, opus-5 1.76 at $1.78
+  (first pass 1.2), sonnet-5-5 0.39 at $0.27. Per exclusive confirmed
+  cluster: opus-5-5 ~$0.37, sonnet-5-5 ~$0.69, opus-5 ~$1.01. The PR #16
+  default stands; sonnet-5-5's exclusive clusters are also the most often
+  refuted (12 of 31).
+- **The lens×model confound is wider, not narrower**: security ran on
+  sonnet-5-5 27/48 times, config-and-deploy 16/25; tests ran on opus-5-5
+  7/10. The tests lens tops round novelty ($0.24/novel cluster vs $0.51–0.58
+  for the other lenses, $1.85 for no lens), but on 10 rounds mostly on the
+  best model, and no-lens rounds are early-campaign rounds — so this is not
+  yet a lens effect. Pairing lens×model in rotation is still the fix.
+- **Verifier model column**: only 16 verdicts carry `model` so far (7
+  opus-5-5 warnings, 0 refuted; 9 sonnet-5-5 nits, 1 refuted). Too few to
+  judge the nit tier; the recorded-miss rule stands.
+
+Candidate slices, unchanged in order: human-label ~30 verdicts (still the
+biggest gap — every rate above is agent-on-agent); rotate lens×model as a
+pair.
+
+## Earlier (2026-10-30): merge plan and first-pass findings
 
 Branch `merge-db`. Goal: fold this machine's `data/reviews.db` into the home
 machine's and run the full analysis on the union (both are dev-server
@@ -21,9 +59,6 @@ databases, not precious; the merged one becomes home's live db).
   mutation-checked. `scripts/analyse.mjs` (read-only SQL report).
 - Decided: no per-row machine tag (would need a column on every table;
   no analysis splits by machine). Watches are not merged.
-- Next (~30 min): `npm run db -- snapshot <out>` (`VACUUM INTO`, then
-  `age -p`) and `npm run db -- merge <source>` (backs up the target first,
-  prints the report). Then export here → drive → merge at home → analyse.
 - First-pass findings on this machine's data (291 agent verdicts, **0
   human**): low reviewer confidence is refuted ~24% vs ~10–12% for
   medium/high (keep verifying low; it is the cheapest refutation per $).

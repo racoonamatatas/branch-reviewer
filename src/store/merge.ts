@@ -11,6 +11,7 @@
 // diverged inside one row's lifetime, which nothing here can reconcile, so
 // the merge refuses instead of guessing.
 
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { SQLInputValue, SQLOutputValue } from 'node:sqlite';
 import { JobStore } from '../server/jobs.js';
@@ -41,6 +42,40 @@ export interface MergeReport
 }
 
 const TARGET = ['owner', 'repo', 'head', 'base'] as const;
+
+// Copies the target aside before a merge touches it. VACUUM INTO rather than
+// a file copy: it reads inside a transaction, so a writer that is still alive
+// can't leave a torn copy. Opened raw, not through a store, so the backup is
+// the pre-migration file exactly. VACUUM INTO refuses an existing output
+// file, which is the no-overwrite guarantee.
+export function backupDatabase(path: string, now: Date = new Date()): string
+{
+    const stamp = now.toISOString().replace(/[:.]/g, '-');
+    const out = join(dirname(path), `${basename(path, '.db')}.backup-${stamp}.db`);
+    const db = new DatabaseSync(path, { readOnly: true });
+    try
+    {
+        db.prepare('VACUUM INTO ?').run(out);
+    }
+    finally
+    {
+        db.close();
+    }
+    return out;
+}
+
+export function mergeReportLines(report: MergeReport): string[]
+{
+    const tables = ['runs', 'findings', 'consolidations', 'clusters', 'verifications', 'campaigns', 'jobs'] as const;
+    const width = Math.max(...tables.map((table) => table.length));
+    const lines = tables.map((table) =>
+        `  ${table.padEnd(width)}  ${String(report[table].added).padStart(5)} added  ${String(report[table].shared).padStart(5)} shared`);
+    if (report.jobsCancelled > 0)
+    {
+        lines.push(`  ${report.jobsCancelled} live source job(s) imported as cancelled`);
+    }
+    return lines;
+}
 
 export function mergeDatabases(targetPath: string, sourcePath: string): MergeReport
 {
