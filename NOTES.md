@@ -7,6 +7,14 @@ as the source of truth. Keep raw finding text and target-repo code internals
 out of it (same rule as `data/` and `eval/fixtures/`, which stay local); the
 finding *labels* used below are fine.
 
+## Shipped (2026-11-04, PR #20): CI
+
+`.github/workflows/ci.yml`: job `core` (typecheck, lint, unit tests) and job
+`dashboard` (`vue-tsc`, vitest), Node 24, read-only token, no secrets — the
+suites make no network or model calls, so CI cannot bill credit. The dashboard
+job also runs the root `npm ci`: `@server/*` resolves into `../src`, whose
+imports (zod, ...) live in the root `node_modules`. README carries the badge.
+
 ## Done (2026-10-31): the two machines' databases are merged
 
 Home's `data/reviews.db` is now the union (284 runs, 593 agent verdicts).

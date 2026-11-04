@@ -8,7 +8,8 @@ sample, not a survey.** Six reviews of the same branch produced six
 overlapping-but-different finding sets — the fourth run contributed the best
 finding of the project. So this tool doesn't try to make one review better;
 it makes many reviews composable: sample repeatedly, merge what recurs,
-adversarially test what doesn't, and account for every dollar spent doing it.
+adversarially test what doesn't, estimate how much is still unfound, and
+account for every dollar spent doing it.
 
 Read-and-report only: it reviews a GitHub branch against its merge base and
 reports structured findings. No editing, no fixing.
