@@ -146,7 +146,7 @@ export async function runReview(client: RepoClient, target: ReviewTarget, opts: 
             systemPrompt: SYSTEM_PROMPT,
             model: opts.model ?? reviewModel(),
             maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
-            tools: [],  // no built-ins: the three GitHub tools are the whole world
+            tools: [],  // no built-ins: the four GitHub read tools are the whole world
             mcpServers: { [SERVER_NAME]: tools.server },
             allowedTools: [`mcp__${SERVER_NAME}__*`],
             permissionMode: 'dontAsk',
