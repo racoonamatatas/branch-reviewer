@@ -71,9 +71,9 @@ If runs are samples, three things follow, and each is a pipeline stage:
    assumption breaks, and recurrence inflates into false confidence (the
    errors a correlated ensemble repeats most consistently are its systematic
    ones). So campaign rounds are rotated apart: a reviewer *lens* cycles
-   per round (generalist first, then security → concurrency →
-   config-and-deploy → tests — each redirects where the round looks first,
-   never what it may report), and the review model can cycle too
+   per round (generalist, security, concurrency, config-and-deploy, tests,
+   least-sampled first across the target's history — each redirects where
+   the round looks first, never what it may report), and the review model can cycle too
    (`--models a,b`), which upgrades an occurrence count from "one model
    repeating itself" to **cross-model agreement**. Both are recorded on
    every run, so the union knows which lens and which model saw what.
@@ -214,7 +214,7 @@ prompt cache, so parallelism would cost more, not less.
 
 ## What the tests cover
 
-`npm test` (fast, no network, no model calls) runs ~260 tests: the store
+`npm test` (fast, no network, no model calls) runs ~390 tests: the store
 against real in-memory SQLite including migration tests on hand-built legacy
 databases, the HTTP surface over real sockets (including path-traversal and
 Host-spoofing attempts that `fetch` would normalize away), the job state
@@ -284,5 +284,5 @@ discovered later:
 ## Usage
 
 Setup, model configuration, the full command reference (`review`, `history`,
-`consolidate`, `verify`, `campaign`, `serve`), and the judge eval harness
+`consolidate`, `verify`, `campaign`, `serve`, `db`), and the judge eval harness
 live in [docs/usage.md](docs/usage.md).
