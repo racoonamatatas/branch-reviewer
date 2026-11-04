@@ -1,5 +1,7 @@
 # branch-reviewer-sdk
 
+[![CI](https://github.com/racoonamatatas/branch-reviewer-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/racoonamatatas/branch-reviewer-sdk/actions/workflows/ci.yml)
+
 An agentic code-review pipeline built on the Claude Agent SDK, designed
 around one empirical observation: **a single LLM review of a branch is a
 sample, not a survey.** Six reviews of the same branch produced six
