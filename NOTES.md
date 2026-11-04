@@ -1171,6 +1171,15 @@ base rules. Still open (deliberately deferred):
   consolidation/inheritance to runs of the current SHA, or flag stale-SHA
   members. Until then: re-review with a single `review` and check fixes by
   hand, or campaign with `--reverify`.
+- **Finished CLI campaigns vanish from the dashboard queue (todo,
+  user-requested 2026-11-04):** QueuePanel shows CLI campaigns only while
+  live (running/verifying); Recent lists server jobs alone. Every review
+  since job #43 was a CLI campaign, so Recent looked frozen 5 days back and
+  a just-finished campaign was findable only via its Targets row. Fix
+  direction: merge finished CLI campaigns (already returned by
+  `GET /campaigns`) into Recent by date, tagged "via cli", clicking through
+  to the target sheet. Dashboard-only; cover the merge order in the
+  dashboard suite.
 - Learning-surface backlog (piggyback on future slices): submit_review-parity
   experiment, hooks, compaction experiments, subagents, streaming input,
   session persistence.
